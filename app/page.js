@@ -22,6 +22,7 @@ import LineChart from "../components/LineChart";
 import MarketPanel from "../components/MarketPanel";
 import FilterSidebar from "../components/FilterSidebar";
 import TriggeredAlertsPanel from "../components/TriggeredAlertsPanel";
+import { SocketProvider } from "../contexts/SocketContext";
 
 export default function Dashboard() {
   const theme = useTheme();
@@ -182,7 +183,7 @@ export default function Dashboard() {
                 timeframe={selectedTimeframe}
                 onTimeframeChange={setSelectedTimeframe}
               />
-              <Box sx={{ height: "300px", mt: 1 }}>
+              <Box sx={{ height: "350px", mt: 1 }}>
                 <TriggeredAlertsPanel />
               </Box>
             </Box>
@@ -198,12 +199,14 @@ export default function Dashboard() {
           );
         case "market":
           return (
-            <MarketPanel
-              ref={marketPanelRef}
-              onSelectCoin={handleCoinSelect}
-              onCreateAlert={handleCreateAlert}
-              onAlertsCreated={handleAlertsCreated}
-            />
+            <Box sx={{ height: "calc(100vh - 200px)", minHeight: "500px" }}>
+              <MarketPanel
+                ref={marketPanelRef}
+                onSelectCoin={handleCoinSelect}
+                onCreateAlert={handleCreateAlert}
+                onAlertsCreated={handleAlertsCreated}
+              />
+            </Box>
           );
         default:
           return (
@@ -213,7 +216,7 @@ export default function Dashboard() {
                 timeframe={selectedTimeframe}
                 onTimeframeChange={setSelectedTimeframe}
               />
-              <Box sx={{ height: "300px", mt: 1 }}>
+              <Box sx={{ height: "350px", mt: 1 }}>
                 <TriggeredAlertsPanel />
               </Box>
             </Box>
@@ -262,8 +265,8 @@ export default function Dashboard() {
                 border: "1px solid #333",
                 borderRadius: 2,
                 overflow: "hidden",
-                minHeight: "250px",
-                maxHeight: "300px",
+                minHeight: "400px",
+                maxHeight: "500px",
               }}
             >
               <LineChart
@@ -276,7 +279,7 @@ export default function Dashboard() {
             {/* Triggered Alerts History Section */}
             <Paper
               sx={{
-                height: "300px",
+                height: "350px",
                 backgroundColor: "#1a1a1a",
                 border: "1px solid #333",
                 borderRadius: 2,
@@ -293,11 +296,14 @@ export default function Dashboard() {
         <Grid item xs={12} md={3}>
           <Paper
             sx={{
-              height: "100%",
+              height: "100vh", // Fixed full height
+              maxHeight: "100vh", // Maximum height
               backgroundColor: "#1a1a1a",
               border: "1px solid #333",
               borderRadius: 2,
               overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
             }}
           >
             <MarketPanel
@@ -313,70 +319,77 @@ export default function Dashboard() {
   };
 
   return (
-    <Box sx={{ minHeight: "100vh", backgroundColor: "#0a0a0a" }}>
-      {/* Header */}
+    <SocketProvider>
       <Box
         sx={{
-          backgroundColor: "#1a1a1a",
-          borderBottom: "1px solid #333",
-          p: 2,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
+          minHeight: "100vh",
+          backgroundColor: "#0a0a0a",
         }}
       >
-        <Box sx={{ display: "flex", alignItems: "center" }}>
-          {isMobile && (
-            <IconButton
-              color="inherit"
-              onClick={() => setMobileDrawerOpen(true)}
-              sx={{ mr: 2 }}
-            >
-              <MenuIcon />
-            </IconButton>
-          )}
-          <Typography variant="h5" component="h1" sx={{ color: "white" }}>
-            Crypto Alerts Dashboard
-          </Typography>
-        </Box>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
-          <Typography variant="body2" sx={{ color: "#888" }}>
-            {selectedCoin} - {selectedTimeframe}
-          </Typography>
-        </Box>
-      </Box>
-
-      {/* Main Content */}
-      <Box sx={{ p: 2 }}>{renderMainContent()}</Box>
-
-      {/* Mobile Bottom Navigation */}
-      {isMobile && (
-        <BottomNavigation
-          value={mobileBottomNav}
-          onChange={handleMobileNavChange}
+        {/* Header */}
+        <Box
           sx={{
-            position: "fixed",
-            bottom: 0,
-            left: 0,
-            right: 0,
             backgroundColor: "#1a1a1a",
-            borderTop: "1px solid #333",
-            "& .MuiBottomNavigationAction-root": {
-              color: "#888",
-              "&.Mui-selected": {
-                color: "#1976d2",
-              },
-            },
+            borderBottom: "1px solid #333",
+            p: 2,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
           }}
         >
-          <BottomNavigationAction label="Chart" icon={<TrendingUpIcon />} />
-          <BottomNavigationAction label="Filters" icon={<FilterListIcon />} />
-          <BottomNavigationAction label="Market" icon={<ListIcon />} />
-        </BottomNavigation>
-      )}
+          <Box sx={{ display: "flex", alignItems: "center" }}>
+            {isMobile && (
+              <IconButton
+                color="inherit"
+                onClick={() => setMobileDrawerOpen(true)}
+                sx={{ mr: 2 }}
+              >
+                <MenuIcon />
+              </IconButton>
+            )}
+            <Typography variant="h5" component="h1" sx={{ color: "white" }}>
+              Crypto Alerts Dashboard
+            </Typography>
+          </Box>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <Typography variant="body2" sx={{ color: "#888" }}>
+              {selectedCoin} - {selectedTimeframe}
+            </Typography>
+          </Box>
+        </Box>
 
-      {/* Mobile Drawer */}
-      {renderMobileDrawer()}
-    </Box>
+        {/* Main Content */}
+        <Box sx={{ p: 2 }}>{renderMainContent()}</Box>
+
+        {/* Mobile Bottom Navigation */}
+        {isMobile && (
+          <BottomNavigation
+            value={mobileBottomNav}
+            onChange={handleMobileNavChange}
+            sx={{
+              position: "fixed",
+              bottom: 0,
+              left: 0,
+              right: 0,
+              backgroundColor: "#1a1a1a",
+              borderTop: "1px solid #333",
+              "& .MuiBottomNavigationAction-root": {
+                color: "#888",
+                "&.Mui-selected": {
+                  color: "#1976d2",
+                },
+              },
+            }}
+          >
+            <BottomNavigationAction label="Chart" icon={<TrendingUpIcon />} />
+            <BottomNavigationAction label="Filters" icon={<FilterListIcon />} />
+            <BottomNavigationAction label="Market" icon={<ListIcon />} />
+          </BottomNavigation>
+        )}
+
+        {/* Mobile Drawer */}
+        {renderMobileDrawer()}
+      </Box>
+    </SocketProvider>
   );
 }

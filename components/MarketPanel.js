@@ -10,6 +10,7 @@ import React, {
   forwardRef,
   useImperativeHandle,
 } from "react";
+import { useSocket } from "../contexts/SocketContext";
 import {
   Box,
   Paper,
@@ -41,126 +42,26 @@ import CurrencyExchangeIcon from "@mui/icons-material/CurrencyExchange";
 import StarIcon from "@mui/icons-material/Star";
 import StarBorderIcon from "@mui/icons-material/StarBorder";
 
-// Mock data for demonstration - exact same as client
-const mockCryptoData = [
-  {
-    symbol: "BTCUSDT",
-    price: 45000,
-    change: 2.5,
-    volume: 1234567890,
-    isFavorite: true,
-  },
-  {
-    symbol: "ETHUSDT",
-    price: 3000,
-    change: -1.2,
-    volume: 987654321,
-    isFavorite: false,
-  },
-  {
-    symbol: "ADAUSDT",
-    price: 0.45,
-    change: 5.8,
-    volume: 456789123,
-    isFavorite: true,
-  },
-  {
-    symbol: "SOLUSDT",
-    price: 100,
-    change: 3.2,
-    volume: 789123456,
-    isFavorite: false,
-  },
-  {
-    symbol: "DOTUSDT",
-    price: 7.5,
-    change: -2.1,
-    volume: 321654987,
-    isFavorite: true,
-  },
-  {
-    symbol: "LINKUSDT",
-    price: 15.2,
-    change: 1.8,
-    volume: 654321987,
-    isFavorite: false,
-  },
-  {
-    symbol: "UNIUSDT",
-    price: 8.9,
-    change: -0.5,
-    volume: 321987654,
-    isFavorite: true,
-  },
-  {
-    symbol: "AVAXUSDT",
-    price: 25.6,
-    change: 4.2,
-    volume: 789654321,
-    isFavorite: false,
-  },
-  {
-    symbol: "MATICUSDT",
-    price: 0.85,
-    change: -1.5,
-    volume: 456123789,
-    isFavorite: true,
-  },
-  {
-    symbol: "ATOMUSDT",
-    price: 12.3,
-    change: 2.1,
-    volume: 654789123,
-    isFavorite: false,
-  },
-  {
-    symbol: "NEARUSDT",
-    price: 3.2,
-    change: 6.5,
-    volume: 321456789,
-    isFavorite: true,
-  },
-  {
-    symbol: "FTMUSDT",
-    price: 0.35,
-    change: -3.2,
-    volume: 789321654,
-    isFavorite: false,
-  },
-  {
-    symbol: "ALGOUSDT",
-    price: 0.18,
-    change: 1.5,
-    volume: 456789321,
-    isFavorite: true,
-  },
-  {
-    symbol: "VETUSDT",
-    price: 0.025,
-    change: -2.8,
-    volume: 321789654,
-    isFavorite: false,
-  },
-  {
-    symbol: "ICPUSDT",
-    price: 8.5,
-    change: 4.1,
-    volume: 654123789,
-    isFavorite: true,
-  },
-];
-
 const MarketPanel = forwardRef(
   ({ onSelectCoin, onCreateAlert, onAlertsCreated }, ref) => {
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down("md"));
     const isTablet = useMediaQuery(theme.breakpoints.down("lg"));
 
-    // State management - exact same as client
+    // Socket context for real-time data
+    const {
+      marketData,
+      isConnected,
+      subscribeToSymbols,
+      fetchAllPairs,
+      toggleFavorite: socketToggleFavorite,
+      getFilteredMarketData,
+    } = useSocket();
+
+    // State management
     const [view, setView] = useState("market");
     const [searchTerm, setSearchTerm] = useState("");
     const [searchInput, setSearchInput] = useState("");
-    const [cryptoData, setCryptoData] = useState(mockCryptoData);
     const [loading, setLoading] = useState(false);
     const [selectAllChecked, setSelectAllChecked] = useState(false);
     const [checkedPairs, setCheckedPairs] = useState(new Set());
@@ -174,12 +75,19 @@ const MarketPanel = forwardRef(
     useImperativeHandle(ref, () => ({
       refreshData: () => {
         setLoading(true);
+        // Subscribe to all available symbols
+        subscribeToSymbols([]);
         setTimeout(() => {
           setLoading(false);
         }, 1000);
       },
       getSelectedCoins: () => Array.from(checkedPairs),
     }));
+
+    // Subscribe to market data on mount
+    useEffect(() => {
+      subscribeToSymbols([]); // Subscribe to all symbols
+    }, [subscribeToSymbols]);
 
     // Handle search with debounce - exact same as client
     const handleSearchChange = useCallback((event) => {
@@ -195,32 +103,29 @@ const MarketPanel = forwardRef(
       }, 300);
     }, []);
 
-    // Toggle favorite - exact same as client
-    const toggleFavorite = useCallback((symbol) => {
-      setCryptoData((prev) =>
-        prev.map((coin) =>
-          coin.symbol === symbol
-            ? { ...coin, isFavorite: !coin.isFavorite }
-            : coin
-        )
-      );
-    }, []);
+    // Toggle favorite using socket context
+    const toggleFavorite = useCallback(
+      (symbol) => {
+        socketToggleFavorite(symbol);
+      },
+      [socketToggleFavorite]
+    );
 
     // Check if coin is favorite
     const isFavorite = useCallback(
       (symbol) => {
-        const coin = cryptoData.find((c) => c.symbol === symbol);
+        const coin = marketData.find((c) => c.symbol === symbol);
         return coin ? coin.isFavorite : false;
       },
-      [cryptoData]
+      [marketData]
     );
 
     // Get favorite symbols
     const getFavoriteSymbols = useCallback(() => {
-      return cryptoData
+      return marketData
         .filter((coin) => coin.isFavorite)
         .map((coin) => coin.symbol);
-    }, [cryptoData]);
+    }, [marketData]);
 
     // Toggle pair selection
     const togglePairSelection = useCallback((symbol) => {
@@ -255,27 +160,14 @@ const MarketPanel = forwardRef(
       }
     }, [selectAllChecked]);
 
-    // Filter and sort data - exact same logic as client
+    // Filter and sort data using socket context
     const filteredData = useMemo(() => {
-      let filtered = cryptoData;
-
-      // Apply view filter
-      if (view === "favorites") {
-        filtered = filtered.filter((coin) => coin.isFavorite);
-      }
-
-      // Apply search filter
-      if (searchTerm) {
-        filtered = filtered.filter((coin) =>
-          coin.symbol.toLowerCase().includes(searchTerm.toLowerCase())
-        );
-      }
-
-      // Sort by symbol (default)
-      filtered.sort((a, b) => a.symbol.localeCompare(b.symbol));
-
-      return filtered;
-    }, [cryptoData, view, searchTerm]);
+      return getFilteredMarketData({
+        search: searchTerm,
+        favorites: view === "favorites",
+        sortBy: "symbol",
+      });
+    }, [getFilteredMarketData, searchTerm, view]);
 
     // Update select all checkbox
     useEffect(() => {
@@ -433,11 +325,39 @@ const MarketPanel = forwardRef(
                 Create Alert ({checkedPairs.size})
               </Button>
             )}
+
+            {/* Connection Status */}
+            <Box
+              sx={{ display: "flex", alignItems: "center", gap: 1, ml: "auto" }}
+            >
+              <Box
+                sx={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  backgroundColor: isConnected ? "#4caf50" : "#f44336",
+                }}
+              />
+              <Typography
+                variant="caption"
+                sx={{ color: "#888", fontSize: "0.7rem" }}
+              >
+                {isConnected ? "Live" : "Offline"} • {marketData.length} pairs
+              </Typography>
+            </Box>
           </Box>
         </Box>
 
-        {/* Coin List - exact same as client */}
-        <Box sx={{ flex: 1, overflow: "auto" }}>
+        {/* Coin List with fixed height and scrollbar */}
+        <Box
+          className="market-panel-scrollbar"
+          sx={{
+            flex: 1,
+            height: "calc(100vh - 300px)", // Fixed height
+            minHeight: "400px", // Minimum height
+            overflow: "auto",
+          }}
+        >
           {loading ? (
             // Loading skeleton - exact same as client
             Array.from({ length: 10 }).map((_, index) => (
@@ -446,6 +366,33 @@ const MarketPanel = forwardRef(
                 <Skeleton variant="text" width="40%" height={16} />
               </Box>
             ))
+          ) : filteredData.length === 0 ? (
+            // Empty state
+            <Box
+              sx={{
+                height: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexDirection: "column",
+                gap: 2,
+                p: 3,
+              }}
+            >
+              <CurrencyExchangeIcon sx={{ fontSize: 48, color: "#666" }} />
+              <Typography
+                variant="h6"
+                sx={{ color: "#888", textAlign: "center" }}
+              >
+                No Market Data
+              </Typography>
+              <Typography
+                variant="body2"
+                sx={{ color: "#666", textAlign: "center" }}
+              >
+                Market data will appear here when available
+              </Typography>
+            </Box>
           ) : (
             <List sx={{ p: 0 }}>
               {filteredData.map((coin, index) => {
@@ -580,14 +527,33 @@ const MarketPanel = forwardRef(
           )}
         </Box>
 
-        {/* Footer Stats - exact same as client */}
+        {/* Footer Stats */}
         <Box
-          sx={{ p: 2, borderTop: "1px solid #333", backgroundColor: "#1a1a1a" }}
+          sx={{
+            p: 2,
+            borderTop: "1px solid #333",
+            backgroundColor: "#1a1a1a",
+            flexShrink: 0, // Prevent shrinking
+          }}
         >
-          <Typography variant="caption" sx={{ color: "#888" }}>
-            {filteredData.length} coins • {getFavoriteSymbols().length}{" "}
-            favorites
-          </Typography>
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <Typography variant="caption" sx={{ color: "#888" }}>
+              {filteredData.length} coins • {getFavoriteSymbols().length}{" "}
+              favorites
+            </Typography>
+            <Typography
+              variant="caption"
+              sx={{ color: "#666", fontSize: "0.7rem" }}
+            >
+              Scroll to see more
+            </Typography>
+          </Box>
         </Box>
       </Box>
     );

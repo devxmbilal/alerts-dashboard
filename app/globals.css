@@ -24,9 +24,32 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
+/* Custom scrollbar for market panel */
+.market-panel-scrollbar::-webkit-scrollbar {
   width: 8px;
+}
+
+.market-panel-scrollbar::-webkit-scrollbar-track {
+  background: #1a1a1a;
+  border-radius: 4px;
+}
+
+.market-panel-scrollbar::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 4px;
+}
+
+.market-panel-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #666;
+}
+
+.market-panel-scrollbar::-webkit-scrollbar-corner {
+  background: #1a1a1a;
+}
+
+/* Global thin scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
 }
 
 ::-webkit-scrollbar-track {
@@ -34,12 +57,18 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #333;
-  border-radius: 4px;
+  background: #444;
+  border-radius: 2px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  background: #666;
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #444 #1a1a1a;
 }
 
 /* Smooth transitions */

@@ -198,7 +198,6 @@ const FilterSidebar = forwardRef(
           "minDaily",
           "changePercent",
           "alertCount",
-          "candle",
         ];
 
         let newFilters = { ...filters };
@@ -338,34 +337,82 @@ const FilterSidebar = forwardRef(
       { value: "D", label: "D" },
     ];
 
-    // Candle options
-    const candleOptions = [
-      { value: "GREEN_CANDLE", label: "Green Candle" },
-      { value: "RED_CANDLE", label: "Red Candle" },
-      { value: "DOJI", label: "Doji" },
-      { value: "HAMMER", label: "Hammer" },
-      { value: "SHOOTING_STAR", label: "Shooting Star" },
+    // Candle time options - matching the image
+    const candleTimeOptions = [
+      { value: "5MIN", label: "5MIN" },
+      { value: "15MIN", label: "15MIN" },
+      { value: "1HR", label: "1HR" },
+      { value: "4HR", label: "4HR" },
+      { value: "12HR", label: "12HR" },
+      { value: "D", label: "D" },
+      { value: "W", label: "W" },
     ];
 
-    // RSI Range options
-    const rsiRangeOptions = [
-      { value: "OVERSOLD", label: "Oversold (<30)" },
-      { value: "OVERBOUGHT", label: "Overbought (>70)" },
-      { value: "NEUTRAL", label: "Neutral (30-70)" },
+    // Candle condition options - matching the image
+    const candleConditionOptions = [
+      { value: "CANDLE_ABOVE_OPEN", label: "Candle Above Open" },
+      { value: "CANDLE_BELOW_OPEN", label: "Candle Below Open" },
+      { value: "GREEN_CANDLE", label: "Green Candle (Close > Open)" },
+      { value: "RED_CANDLE", label: "Red Candle (Close < Open)" },
+      { value: "BULLISH_HAMMER", label: "Bullish Hammer" },
+      { value: "BEARISH_HAMMER", label: "Bearish Hammer" },
+      { value: "DOJI", label: "Doji (Open ≈ Close)" },
+      { value: "LONG_UPPER_WICK", label: "Long Upper Wick" },
+      { value: "LONG_LOWER_WICK", label: "Long Lower Wick" },
+      { value: "NONE", label: "None" },
     ];
 
-    // Volume options
-    const volumeOptions = [
-      { value: "HIGH", label: "High Volume" },
-      { value: "LOW", label: "Low Volume" },
-      { value: "SPIKE", label: "Volume Spike" },
+    // RSI Range timeframe options - matching the image
+    const rsiTimeframeOptions = [
+      { value: "5MIN", label: "5MIN" },
+      { value: "15MIN", label: "15MIN" },
+      { value: "1HR", label: "1HR" },
+      { value: "4HR", label: "4HR" },
+      { value: "12HR", label: "12HR" },
+      { value: "D", label: "D" },
     ];
 
-    // EMA options
-    const emaOptions = [
-      { value: "FAST_ABOVE_SLOW", label: "Fast Above Slow" },
-      { value: "FAST_BELOW_SLOW", label: "Fast Below Slow" },
-      { value: "CROSSOVER", label: "Crossover" },
+    // RSI Range condition options - matching the image
+    const rsiConditionOptions = [
+      { value: "ABOVE", label: "ABOVE" },
+      { value: "BELOW", label: "BELOW" },
+      { value: "CROSSING_UP", label: "CROSSING UP" },
+      { value: "CROSSING_DOWN", label: "CROSSING DOWN" },
+    ];
+
+    // Volume timeframe options - matching the image
+    const volumeTimeframeOptions = [
+      { value: "1MIN", label: "1MIN" },
+      { value: "5MIN", label: "5MIN" },
+      { value: "15MIN", label: "15MIN" },
+      { value: "1HR", label: "1HR" },
+      { value: "4HR", label: "4HR" },
+    ];
+
+    // Volume condition options - matching the image
+    const volumeConditionOptions = [
+      { value: "INCREASING", label: "INCREASING" },
+      { value: "DECREASING", label: "DECREASING" },
+      { value: "ABOVE", label: "ABOVE" },
+      { value: "BELOW", label: "BELOW" },
+    ];
+
+    // EMA timeframe options - matching the image
+    const emaTimeframeOptions = [
+      { value: "5MIN", label: "5MIN" },
+      { value: "15MIN", label: "15MIN" },
+      { value: "1HR", label: "1HR" },
+      { value: "4HR", label: "4HR" },
+      { value: "12HR", label: "12HR" },
+      { value: "D", label: "D" },
+    ];
+
+    // EMA condition options - matching the image
+    const emaConditionOptions = [
+      { value: "ABOVE", label: "ABOVE" },
+      { value: "BELOW", label: "BELOW" },
+      { value: "CROSSING_UP", label: "CROSSING UP" },
+      { value: "CROSSING_DOWN", label: "CROSSING DOWN" },
     ];
 
     // Timeframe options
@@ -382,27 +429,13 @@ const FilterSidebar = forwardRef(
       <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
         {/* Header */}
         <Box sx={{ p: 2, borderBottom: "1px solid #333" }}>
-          <Typography
-            variant="h6"
-            sx={{ color: "white", mb: 1, fontWeight: 600 }}
-          >
+          <Typography variant="h6" sx={{ color: "white", fontWeight: 600 }}>
             Alert Filters
           </Typography>
-          <Typography variant="body2" sx={{ color: "#888" }}>
-            Selected: {selectedSymbol || "None"}
-          </Typography>
-          {activeFiltersCount > 0 && (
-            <Chip
-              label={`${activeFiltersCount} active filters`}
-              size="small"
-              color="primary"
-              sx={{ mt: 1 }}
-            />
-          )}
         </Box>
 
         {/* Filters */}
-        <Box sx={{ flex: 1, overflow: "auto", p: 2 }}>
+        <Box sx={{ flex: 1, p: 2 }}>
           {/* Market Filter */}
           <DarkAccordion defaultExpanded>
             <AccordionSummary
@@ -637,23 +670,51 @@ const FilterSidebar = forwardRef(
               </Box>
             </AccordionSummary>
             <AccordionDetails>
-              <FormGroup>
-                {candleOptions.map((option) => (
-                  <FormControlLabel
-                    key={option.value}
-                    control={
-                      <CustomCheckbox
-                        checked={filters.candle[option.value] || false}
-                        onChange={() =>
-                          handleCheckboxChange("candle", option.value)
-                        }
-                      />
-                    }
-                    label={option.label}
-                    sx={{ color: "white" }}
-                  />
+              {/* Time options in two rows */}
+              <Grid container spacing={1} sx={{ mb: 2 }}>
+                {candleTimeOptions.map((option) => (
+                  <Grid item xs={3} key={option.value}>
+                    <FormControlLabel
+                      control={
+                        <CustomCheckbox
+                          checked={filters.candle[option.value] || false}
+                          onChange={() =>
+                            handleCheckboxChange("candle", option.value)
+                          }
+                        />
+                      }
+                      label={option.label}
+                      sx={{
+                        color: "white",
+                        "& .MuiFormControlLabel-label": {
+                          fontSize: "14px",
+                        },
+                      }}
+                    />
+                  </Grid>
                 ))}
-              </FormGroup>
+              </Grid>
+
+              {/* Condition dropdown */}
+              <Typography variant="body2" sx={{ color: "#888", mb: 1 }}>
+                Condition:
+              </Typography>
+              <CustomTextField
+                select
+                fullWidth
+                size="small"
+                value={filters.candle.condition || "CANDLE_ABOVE_OPEN"}
+                onChange={(e) =>
+                  handleInputChange("candle", "condition", e.target.value)
+                }
+                sx={{ mb: 1 }}
+              >
+                {candleConditionOptions.map((option) => (
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuItem>
+                ))}
+              </CustomTextField>
             </AccordionDetails>
           </DarkAccordion>
 
@@ -664,27 +725,93 @@ const FilterSidebar = forwardRef(
             >
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <TimelineIcon sx={{ color: "#ff5722" }} />
-                <Typography sx={{ color: "white" }}>RSI Range</Typography>
+                <Typography sx={{ color: "white" }}>
+                  RSI Range (Multiple)
+                </Typography>
               </Box>
             </AccordionSummary>
             <AccordionDetails>
-              <FormGroup>
-                {rsiRangeOptions.map((option) => (
-                  <FormControlLabel
-                    key={option.value}
-                    control={
-                      <CustomCheckbox
-                        checked={filters.rsiRange[option.value] || false}
-                        onChange={() =>
-                          handleCheckboxChange("rsiRange", option.value)
-                        }
-                      />
-                    }
-                    label={option.label}
-                    sx={{ color: "white" }}
-                  />
+              {/* Timeframe checkboxes */}
+              <Grid container spacing={1} sx={{ mb: 2 }}>
+                {rsiTimeframeOptions.map((option) => (
+                  <Grid item xs={2} key={option.value}>
+                    <FormControlLabel
+                      control={
+                        <CustomCheckbox
+                          checked={filters.rsiRange[option.value] || false}
+                          onChange={() =>
+                            handleCheckboxChange("rsiRange", option.value)
+                          }
+                        />
+                      }
+                      label={option.label}
+                      sx={{
+                        color: "white",
+                        "& .MuiFormControlLabel-label": {
+                          fontSize: "14px",
+                        },
+                      }}
+                    />
+                  </Grid>
                 ))}
-              </FormGroup>
+              </Grid>
+
+              {/* Input fields */}
+              <Grid container spacing={2} sx={{ mb: 2 }}>
+                <Grid item xs={6}>
+                  <CustomTextField
+                    fullWidth
+                    size="small"
+                    label="RSI Period"
+                    value={filters.rsiRange.period || "14"}
+                    onChange={(e) =>
+                      handleInputChange("rsiRange", "period", e.target.value)
+                    }
+                  />
+                </Grid>
+                <Grid item xs={6}>
+                  <CustomTextField
+                    fullWidth
+                    size="small"
+                    label="Level (1-100)"
+                    value={filters.rsiRange.level || "70"}
+                    onChange={(e) =>
+                      handleInputChange("rsiRange", "level", e.target.value)
+                    }
+                  />
+                </Grid>
+              </Grid>
+
+              {/* Condition buttons */}
+              <Grid container spacing={1}>
+                {rsiConditionOptions.map((option) => (
+                  <Grid item xs={6} key={option.value}>
+                    <Button
+                      fullWidth
+                      variant={
+                        filters.rsiRange.condition === option.value
+                          ? "contained"
+                          : "outlined"
+                      }
+                      onClick={() =>
+                        handleInputChange("rsiRange", "condition", option.value)
+                      }
+                      sx={{
+                        mb: 1,
+                        fontSize: "12px",
+                        textTransform: "none",
+                        borderColor: "#444",
+                        color: "white",
+                        "&:hover": {
+                          borderColor: "#666",
+                        },
+                      }}
+                    >
+                      {option.label}
+                    </Button>
+                  </Grid>
+                ))}
+              </Grid>
             </AccordionDetails>
           </DarkAccordion>
 
@@ -699,23 +826,80 @@ const FilterSidebar = forwardRef(
               </Box>
             </AccordionSummary>
             <AccordionDetails>
-              <FormGroup>
-                {volumeOptions.map((option) => (
-                  <FormControlLabel
-                    key={option.value}
-                    control={
-                      <CustomCheckbox
-                        checked={filters.volume[option.value] || false}
-                        onChange={() =>
-                          handleCheckboxChange("volume", option.value)
-                        }
-                      />
-                    }
-                    label={option.label}
-                    sx={{ color: "white" }}
-                  />
+              {/* Timeframe checkboxes */}
+              <Grid container spacing={1} sx={{ mb: 2 }}>
+                {volumeTimeframeOptions.map((option) => (
+                  <Grid item xs={2.4} key={option.value}>
+                    <FormControlLabel
+                      control={
+                        <CustomCheckbox
+                          checked={filters.volume[option.value] || false}
+                          onChange={() =>
+                            handleCheckboxChange("volume", option.value)
+                          }
+                        />
+                      }
+                      label={option.label}
+                      sx={{
+                        color: "white",
+                        "& .MuiFormControlLabel-label": {
+                          fontSize: "14px",
+                        },
+                      }}
+                    />
+                  </Grid>
                 ))}
-              </FormGroup>
+              </Grid>
+
+              {/* Condition buttons */}
+              <Grid container spacing={1} sx={{ mb: 2 }}>
+                {volumeConditionOptions.map((option) => (
+                  <Grid item xs={6} key={option.value}>
+                    <Button
+                      fullWidth
+                      variant={
+                        filters.volume.condition === option.value
+                          ? "contained"
+                          : "outlined"
+                      }
+                      onClick={() =>
+                        handleInputChange("volume", "condition", option.value)
+                      }
+                      sx={{
+                        mb: 1,
+                        fontSize: "12px",
+                        textTransform: "none",
+                        borderColor: "#444",
+                        color: "white",
+                        "&:hover": {
+                          borderColor: "#666",
+                        },
+                      }}
+                    >
+                      {option.label}
+                    </Button>
+                  </Grid>
+                ))}
+              </Grid>
+
+              {/* Percentage input */}
+              <Typography variant="body2" sx={{ color: "#888", mb: 1 }}>
+                Percentage %:
+              </Typography>
+              <CustomTextField
+                fullWidth
+                size="small"
+                placeholder="Enter percentage"
+                value={filters.volume.percentage || ""}
+                onChange={(e) =>
+                  handleInputChange("volume", "percentage", e.target.value)
+                }
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">%</InputAdornment>
+                  ),
+                }}
+              />
             </AccordionDetails>
           </DarkAccordion>
 
@@ -726,27 +910,93 @@ const FilterSidebar = forwardRef(
             >
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <ShowChartIcon sx={{ color: "#3f51b5" }} />
-                <Typography sx={{ color: "white" }}>EMA Fast/Slow</Typography>
+                <Typography sx={{ color: "white" }}>
+                  EMA Fast / Slow (Multiple)
+                </Typography>
               </Box>
             </AccordionSummary>
             <AccordionDetails>
-              <FormGroup>
-                {emaOptions.map((option) => (
-                  <FormControlLabel
-                    key={option.value}
-                    control={
-                      <CustomCheckbox
-                        checked={filters.ema[option.value] || false}
-                        onChange={() =>
-                          handleCheckboxChange("ema", option.value)
-                        }
-                      />
-                    }
-                    label={option.label}
-                    sx={{ color: "white" }}
-                  />
+              {/* Timeframe checkboxes in two rows */}
+              <Grid container spacing={1} sx={{ mb: 2 }}>
+                {emaTimeframeOptions.map((option) => (
+                  <Grid item xs={4} key={option.value}>
+                    <FormControlLabel
+                      control={
+                        <CustomCheckbox
+                          checked={filters.ema[option.value] || false}
+                          onChange={() =>
+                            handleCheckboxChange("ema", option.value)
+                          }
+                        />
+                      }
+                      label={option.label}
+                      sx={{
+                        color: "white",
+                        "& .MuiFormControlLabel-label": {
+                          fontSize: "14px",
+                        },
+                      }}
+                    />
+                  </Grid>
                 ))}
-              </FormGroup>
+              </Grid>
+
+              {/* Input fields */}
+              <Grid container spacing={2} sx={{ mb: 2 }}>
+                <Grid item xs={6}>
+                  <CustomTextField
+                    fullWidth
+                    size="small"
+                    label="Fast"
+                    value={filters.ema.fast || "12"}
+                    onChange={(e) =>
+                      handleInputChange("ema", "fast", e.target.value)
+                    }
+                  />
+                </Grid>
+                <Grid item xs={6}>
+                  <CustomTextField
+                    fullWidth
+                    size="small"
+                    label="Slow"
+                    value={filters.ema.slow || "26"}
+                    onChange={(e) =>
+                      handleInputChange("ema", "slow", e.target.value)
+                    }
+                  />
+                </Grid>
+              </Grid>
+
+              {/* Condition buttons */}
+              <Grid container spacing={1}>
+                {emaConditionOptions.map((option) => (
+                  <Grid item xs={12} key={option.value}>
+                    <Button
+                      fullWidth
+                      variant={
+                        filters.ema.condition === option.value
+                          ? "contained"
+                          : "outlined"
+                      }
+                      onClick={() =>
+                        handleInputChange("ema", "condition", option.value)
+                      }
+                      sx={{
+                        mb: 1,
+                        fontSize: "12px",
+                        textTransform: "none",
+                        borderColor: "#444",
+                        color: "white",
+                        "&:hover": {
+                          borderColor: "#666",
+                        },
+                      }}
+                    >
+                      {option.label}
+                    </Button>
+                  </Grid>
+                ))}
+              </Grid>
             </AccordionDetails>
           </DarkAccordion>
 

@@ -249,10 +249,10 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
         return <TelegramIcon />;
       case "both":
         return (
-          <Box sx={{ display: "flex", gap: 0.5 }}>
+          <span style={{ display: "flex", gap: "4px" }}>
             <EmailIcon sx={{ fontSize: 16 }} />
             <TelegramIcon sx={{ fontSize: 16 }} />
-          </Box>
+          </span>
         );
       default:
         return <NotificationsActiveIcon />;
@@ -401,7 +401,7 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
                       </Box>
                     }
                     secondary={
-                      <Box>
+                      <span>
                         <Typography
                           variant="caption"
                           sx={{ color: "#888", display: "block" }}
@@ -416,22 +416,22 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
                         >
                           Current: {formatPrice(alert.currentPrice)}
                         </Typography>
-                        <Box
-                          sx={{
+                        <span
+                          style={{
                             display: "flex",
                             alignItems: "center",
-                            gap: 1,
-                            mt: 0.5,
+                            gap: "8px",
+                            marginTop: "4px",
                           }}
                         >
                           <Typography variant="caption" sx={{ color: "#888" }}>
                             {formatTimeAgo(alert.triggeredAt)}
                           </Typography>
-                          <Box
-                            sx={{
+                          <span
+                            style={{
                               display: "flex",
                               alignItems: "center",
-                              gap: 0.5,
+                              gap: "4px",
                             }}
                           >
                             {getNotificationIcon(alert.notificationType)}
@@ -444,9 +444,9 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
                                 sx={{ fontSize: 12, color: "#f44336" }}
                               />
                             )}
-                          </Box>
-                        </Box>
-                      </Box>
+                          </span>
+                        </span>
+                      </span>
                     }
                   />
 
