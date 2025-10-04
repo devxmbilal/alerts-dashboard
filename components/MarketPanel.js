@@ -177,6 +177,20 @@ const MarketPanel = forwardRef(
       return data;
     }, [getFilteredMarketData, searchTerm, view]);
 
+    // Debug filtered data
+    useEffect(() => {
+      console.log(
+        "📊 MarketPanel filteredData (USDT spot pairs only):",
+        filteredData.length
+      );
+      if (filteredData.length > 0) {
+        console.log(
+          "📊 Sample filtered pairs:",
+          filteredData.slice(0, 5).map((item) => item.symbol)
+        );
+      }
+    }, [filteredData.length]);
+
     // Update select all checkbox
     useEffect(() => {
       if (filteredData.length === 0) {
@@ -244,9 +258,15 @@ const MarketPanel = forwardRef(
         <Box sx={{ p: 2, borderBottom: "1px solid #333" }}>
           <Typography
             variant="h6"
-            sx={{ color: "white", mb: 2, fontWeight: 600 }}
+            sx={{ color: "white", mb: 1, fontWeight: 600 }}
           >
             Market Panel
+          </Typography>
+          <Typography
+            variant="body2"
+            sx={{ color: "#888", mb: 2, fontSize: "0.8rem" }}
+          >
+            USDT Pairs• {filteredData.length} pairs
           </Typography>
 
           {/* View Toggle - exact same as client */}
@@ -335,7 +355,7 @@ const MarketPanel = forwardRef(
             )}
 
             {/* Connection Status */}
-            <Box
+            {/* <Box
               sx={{ display: "flex", alignItems: "center", gap: 1, ml: "auto" }}
             >
               <Box
@@ -352,7 +372,7 @@ const MarketPanel = forwardRef(
               >
                 {isConnected ? "Live" : "Offline"} • {marketData.length} pairs
               </Typography>
-            </Box>
+            </Box> */}
           </Box>
         </Box>
 

@@ -40,9 +40,12 @@ let USDT_PAIRS = [];
 class BinanceWorker {
   constructor() {
     this.ws = null;
+    this.wsConnections = [];
     this.reconnectInterval = 5000;
     this.isConnected = false;
     this.heartbeatInterval = null;
+    this.lastPublishTime = 0;
+    this.publishThrottle = 500; // Throttle to max 2 publishes per second
   }
 
   async start() {
@@ -50,6 +53,7 @@ class BinanceWorker {
     await this.connectToRedis();
     await this.connectToBinance();
     this.startHeartbeat();
+    this.startPairCleanup(); // Start periodic pair cleanup
   }
 
   async connectToRedis() {
@@ -156,46 +160,65 @@ class BinanceWorker {
 
   connectWebSocket() {
     try {
-      // Create stream names for all pairs (limit to 200 streams max per connection)
+      // Create multiple WebSocket connections to cover all pairs
       const maxStreams = 200;
-      const pairsToStream = USDT_PAIRS.slice(0, maxStreams);
-      const streams = pairsToStream.map((pair) => `${pair}@ticker`).join("/");
-      const wsUrl = `${BINANCE_WS_BASE}/${streams}`;
+      const totalPairs = USDT_PAIRS.length;
+      const numConnections = Math.ceil(totalPairs / maxStreams);
 
       console.log(
-        `🔌 Connecting to Binance WebSocket for ${pairsToStream.length} pairs...`
+        `🔌 Creating ${numConnections} WebSocket connections for ${totalPairs} pairs...`
       );
-      this.ws = new WebSocket(wsUrl);
 
-      this.ws.on("open", () => {
-        console.log("✅ Binance WebSocket connected");
-        this.isConnected = true;
-        this.reconnectInterval = 5000; // Reset reconnect interval
-      });
+      this.wsConnections = [];
 
-      this.ws.on("message", async (data) => {
-        try {
-          const message = JSON.parse(data);
-          if (message.e === "24hrTicker") {
-            const processedData = this.processTickerData(message);
-            await this.cacheAndPublish(processedData);
+      for (let i = 0; i < numConnections; i++) {
+        const start = i * maxStreams;
+        const end = Math.min(start + maxStreams, totalPairs);
+        const pairsToStream = USDT_PAIRS.slice(start, end);
+        const streams = pairsToStream.map((pair) => `${pair}@ticker`).join("/");
+        const wsUrl = `${BINANCE_WS_BASE}/${streams}`;
+
+        console.log(
+          `🔌 Connection ${i + 1}: Streaming pairs ${start + 1}-${end} (${
+            pairsToStream.length
+          } pairs)`
+        );
+
+        const ws = new WebSocket(wsUrl);
+        this.wsConnections.push(ws);
+
+        // Set up event handlers for this connection
+        ws.on("open", () => {
+          console.log(`✅ WebSocket connection ${i + 1} connected`);
+          if (i === 0) {
+            // Set isConnected on first connection
+            this.isConnected = true;
+            this.reconnectInterval = 5000;
           }
-        } catch (error) {
-          console.error("❌ Error processing WebSocket message:", error);
-        }
-      });
+        });
 
-      this.ws.on("close", () => {
-        console.log("🔌 Binance WebSocket disconnected");
-        this.isConnected = false;
-        this.reconnect();
-      });
+        ws.on("message", async (data) => {
+          try {
+            const message = JSON.parse(data);
+            if (message.e === "24hrTicker") {
+              const processedData = this.processTickerData(message);
+              await this.cacheAndPublish(processedData);
+            }
+          } catch (error) {
+            console.error("❌ Error processing WebSocket message:", error);
+          }
+        });
 
-      this.ws.on("error", (error) => {
-        console.error("❌ Binance WebSocket error:", error);
-        this.isConnected = false;
-        this.reconnect();
-      });
+        ws.on("close", () => {
+          console.log(`🔌 WebSocket connection ${i + 1} disconnected`);
+          this.reconnect();
+        });
+
+        ws.on("error", (error) => {
+          console.error(`❌ WebSocket connection ${i + 1} error:`, error);
+          this.reconnect();
+        });
+      }
     } catch (error) {
       console.error("❌ WebSocket connection failed:", error);
       this.reconnect();
@@ -223,6 +246,13 @@ class BinanceWorker {
       // Cache in Redis
       const cacheKey = `crypto:${data.symbol}`;
       await redis.setex(cacheKey, 300, JSON.stringify(data)); // 5 min cache
+
+      // Throttle publishing to prevent overwhelming Redis
+      const now = Date.now();
+      if (now - this.lastPublishTime < this.publishThrottle) {
+        return; // Skip this publish to throttle
+      }
+      this.lastPublishTime = now;
 
       // Publish to Redis pub/sub
       await redis.publish(
@@ -261,6 +291,85 @@ class BinanceWorker {
     }, 30000); // Every 30 seconds
   }
 
+  startPairCleanup() {
+    // Clean up delisted pairs every 5 minutes
+    setInterval(async () => {
+      try {
+        console.log("🧹 Starting pair cleanup...");
+
+        // Get current valid pairs from Binance
+        const response = await fetch(`${BINANCE_REST_API}/exchangeInfo`);
+        const exchangeInfo = await response.json();
+
+        const validSymbols = exchangeInfo.symbols
+          .filter(
+            (symbol) =>
+              symbol.status === "TRADING" &&
+              symbol.symbol.endsWith("USDT") &&
+              symbol.isSpotTradingAllowed === true
+          )
+          .map((symbol) => symbol.symbol.toLowerCase());
+
+        // Get all cached pairs from Redis
+        const allKeys = await redis.keys("crypto:*");
+        const cryptoKeys = allKeys.filter(
+          (key) => key !== "crypto:usdt_pairs" && !key.includes("undefined")
+        );
+
+        let removedCount = 0;
+        for (const key of cryptoKeys) {
+          const symbol = key.replace("crypto:", "").toUpperCase();
+          if (!validSymbols.includes(symbol.toLowerCase())) {
+            await redis.del(key);
+            removedCount++;
+            console.log(`🗑️ Removed delisted pair: ${symbol}`);
+          }
+        }
+
+        if (removedCount > 0) {
+          console.log(
+            `🧹 Cleanup complete: Removed ${removedCount} delisted pairs`
+          );
+        }
+
+        // Update USDT_PAIRS with current valid pairs
+        const newUSDT_PAIRS = exchangeInfo.symbols
+          .filter((symbol) => {
+            return (
+              symbol.status === "TRADING" &&
+              symbol.symbol.endsWith("USDT") &&
+              symbol.isSpotTradingAllowed === true &&
+              !symbol.symbol.includes("_") &&
+              !symbol.symbol.includes("BULL") &&
+              !symbol.symbol.includes("BEAR") &&
+              !symbol.symbol.includes("UP") &&
+              !symbol.symbol.includes("DOWN") &&
+              !symbol.symbol.includes("3L") &&
+              !symbol.symbol.includes("3S") &&
+              !symbol.symbol.includes("5L") &&
+              !symbol.symbol.includes("5S") &&
+              symbol.baseAsset !== "BUSD" &&
+              symbol.quoteAsset === "USDT"
+            );
+          })
+          .map((symbol) => symbol.symbol.toLowerCase())
+          .sort();
+
+        if (newUSDT_PAIRS.length !== USDT_PAIRS.length) {
+          USDT_PAIRS = newUSDT_PAIRS;
+          await redis.setex(
+            "crypto:usdt_pairs",
+            3600,
+            JSON.stringify(USDT_PAIRS)
+          );
+          console.log(`📊 Updated USDT pairs: ${USDT_PAIRS.length} pairs`);
+        }
+      } catch (error) {
+        console.error("❌ Error during pair cleanup:", error);
+      }
+    }, 300000); // Every 5 minutes
+  }
+
   reconnect() {
     if (this.ws) {
       this.ws.removeAllListeners();
@@ -283,6 +392,17 @@ class BinanceWorker {
       clearInterval(this.heartbeatInterval);
     }
 
+    // Close all WebSocket connections
+    if (this.wsConnections && this.wsConnections.length > 0) {
+      this.wsConnections.forEach((ws, index) => {
+        if (ws) {
+          console.log(`🔌 Closing WebSocket connection ${index + 1}`);
+          ws.close();
+        }
+      });
+    }
+
+    // Also close the old single connection if it exists
     if (this.ws) {
       this.ws.close();
     }

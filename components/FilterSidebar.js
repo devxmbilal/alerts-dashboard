@@ -286,25 +286,13 @@ const FilterSidebar = forwardRef(
     }, [filters]);
 
     // Market options
-    const marketOptions = [
-      { value: "SPOT", label: "Spot" },
-      { value: "FUTURES", label: "Futures" },
-    ];
+    const marketOptions = [{ value: "SPOT", label: "Spot" }];
 
     // Exchange options
-    const exchangeOptions = [
-      { value: "BINANCE", label: "Binance" },
-      { value: "COINBASE", label: "Coinbase" },
-      { value: "KRAKEN", label: "Kraken" },
-    ];
+    const exchangeOptions = [{ value: "BINANCE", label: "Binance" }];
 
     // Pair options
-    const pairOptions = [
-      { value: "USDT", label: "USDT" },
-      { value: "BTC", label: "BTC" },
-      { value: "ETH", label: "ETH" },
-      { value: "BNB", label: "BNB" },
-    ];
+    const pairOptions = [{ value: "USDT", label: "USDT" }];
 
     // Min Daily Volume options - matching the image
     const minDailyOptions = [

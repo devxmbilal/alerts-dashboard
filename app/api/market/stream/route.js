@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import Redis from "ioredis";
 
-// Redis configuration
+// Redis configuration - shared connection pool
 const redis = new Redis({
   host: "localhost",
   port: 6379,
@@ -11,6 +11,9 @@ const redis = new Redis({
   lazyConnect: true,
   retryDelayOnClusterDown: 300,
   maxRetriesPerRequest: 3,
+  keepAlive: 30000,
+  connectTimeout: 10000,
+  commandTimeout: 5000,
 });
 
 // Handle Redis connection errors
@@ -21,9 +24,92 @@ redis.on("error", (err) => {
 // Track active connections to prevent memory leaks
 const activeConnections = new Set();
 
+// Shared Redis subscriber to avoid creating too many connections
+let sharedSubscriber = null;
+const subscriberClients = new Map(); // Map of connectionId -> controller
+
+// Initialize shared subscriber
+const initializeSharedSubscriber = () => {
+  if (sharedSubscriber) return;
+
+  sharedSubscriber = new Redis({
+    host: "localhost",
+    port: 6379,
+    retryDelayOnFailover: 100,
+    enableReadyCheck: false,
+    maxRetriesPerRequest: null,
+    lazyConnect: true,
+    retryDelayOnClusterDown: 300,
+    maxRetriesPerRequest: 3,
+    keepAlive: 30000,
+    connectTimeout: 10000,
+    commandTimeout: 5000,
+  });
+
+  sharedSubscriber.on("error", (err) => {
+    console.error("❌ Shared Redis subscriber error:", err);
+  });
+
+  sharedSubscriber.on("connect", () => {
+    console.log("✅ Shared Redis subscriber connected");
+  });
+
+  sharedSubscriber.on("close", () => {
+    console.log("🔌 Shared Redis subscriber disconnected");
+  });
+
+  // Subscribe to general channels
+  sharedSubscriber.subscribe(["market:updates", "market:heartbeat"], (err) => {
+    if (err) {
+      console.error("❌ Shared Redis subscription error:", err);
+    } else {
+      console.log("✅ Shared Redis subscriber subscribed to general channels");
+    }
+  });
+
+  // Handle messages from shared subscriber
+  sharedSubscriber.on("message", (channel, message) => {
+    try {
+      const data = JSON.parse(message);
+
+      // Broadcast to all connected clients
+      subscriberClients.forEach((controller, connectionId) => {
+        try {
+          if (data.type === "heartbeat") {
+            controller.enqueue(
+              `data: ${JSON.stringify({
+                type: "heartbeat",
+                timestamp: data.timestamp,
+              })}\n\n`
+            );
+          } else if (
+            data.type === "ticker_update" ||
+            data.type === "symbol_update"
+          ) {
+            controller.enqueue(
+              `data: ${JSON.stringify({
+                type: "market_update",
+                symbol: data.data.symbol,
+                data: data.data,
+              })}\n\n`
+            );
+          }
+        } catch (error) {
+          console.log(`📡 Controller closed for connection ${connectionId}`);
+          subscriberClients.delete(connectionId);
+          activeConnections.delete(connectionId);
+        }
+      });
+    } catch (error) {
+      console.error("❌ Error processing shared Redis message:", error);
+    }
+  });
+};
+
 // Periodic cleanup of stale connections (every 5 minutes)
 setInterval(() => {
   console.log(`📊 Active SSE connections: ${activeConnections.size}`);
+  console.log(`📊 Subscriber clients: ${subscriberClients.size}`);
 }, 300000);
 
 export async function GET(request) {
@@ -48,6 +134,10 @@ export async function GET(request) {
       let heartbeatInterval = null;
       const connectionId = Date.now() + Math.random();
       activeConnections.add(connectionId);
+      subscriberClients.set(connectionId, controller);
+
+      // Initialize shared subscriber if not already done
+      initializeSharedSubscriber();
 
       // Helper function to safely enqueue data
       const safeEnqueue = (data) => {
@@ -61,6 +151,7 @@ export async function GET(request) {
               clearInterval(heartbeatInterval);
             }
             activeConnections.delete(connectionId);
+            subscriberClients.delete(connectionId);
           }
         }
       };
@@ -68,92 +159,15 @@ export async function GET(request) {
       // Send initial data
       sendInitialData(controller, symbols);
 
-      // Subscribe to Redis channels
-      const channels = ["market:updates", "market:heartbeat"];
-      symbols.forEach((symbol) => {
-        channels.push(`market:${symbol.toLowerCase()}`);
-      });
-
-      // Subscribe to Redis pub/sub
-      const subscriber = new Redis({
-        host: "localhost",
-        port: 6379,
-        retryDelayOnFailover: 100,
-        enableReadyCheck: false,
-        maxRetriesPerRequest: null,
-        lazyConnect: true,
-        retryDelayOnClusterDown: 300,
-        maxRetriesPerRequest: 3,
-      });
-
-      // Handle Redis connection errors
-      subscriber.on("error", (err) => {
-        console.error("❌ Redis subscriber error:", err);
-      });
-
-      subscriber.on("connect", () => {
-        console.log("✅ Redis subscriber connected");
-      });
-
-      subscriber.on("close", () => {
-        console.log("🔌 Redis subscriber disconnected");
-      });
-
-      subscriber.subscribe(channels, (err) => {
-        if (err) {
-          console.error("❌ Redis subscription error:", err);
-          return;
-        }
-        console.log("✅ Subscribed to Redis channels:", channels);
-      });
-
-      subscriber.on("message", (channel, message) => {
-        if (!isConnected) return; // Don't process messages if connection is closed
-
-        try {
-          const data = JSON.parse(message);
-
-          if (data.type === "heartbeat") {
-            // Send heartbeat to keep connection alive
-            safeEnqueue(
-              `data: ${JSON.stringify({
-                type: "heartbeat",
-                timestamp: data.timestamp,
-              })}\n\n`
-            );
-            return;
-          }
-
-          if (data.type === "ticker_update" || data.type === "symbol_update") {
-            // Send market data update
-            safeEnqueue(
-              `data: ${JSON.stringify({
-                type: "market_update",
-                symbol: data.data.symbol,
-                data: data.data,
-              })}\n\n`
-            );
-          }
-        } catch (error) {
-          console.error("❌ Error processing Redis message:", error);
-        }
-      });
-
       // Handle client disconnect
       request.signal.addEventListener("abort", () => {
         console.log("📡 SSE connection closed");
         isConnected = false;
         activeConnections.delete(connectionId);
+        subscriberClients.delete(connectionId);
 
         if (heartbeatInterval) {
           clearInterval(heartbeatInterval);
-        }
-
-        try {
-          subscriber.unsubscribe();
-          subscriber.disconnect();
-        } catch (error) {
-          console.error("❌ Error disconnecting Redis:", error);
         }
 
         try {

@@ -166,6 +166,41 @@ export const SocketProvider = ({ children }) => {
     (filter = {}) => {
       let data = getAllMarketData();
 
+      // Filter to only show USDT spot pairs (Binance spot market)
+      data = data.filter((item) => {
+        // Only show USDT pairs
+        if (!item.symbol.endsWith("USDT")) {
+          return false;
+        }
+
+        // Exclude premium pairs (usually have _ in symbol)
+        if (item.symbol.includes("_")) {
+          return false;
+        }
+
+        // Exclude leveraged tokens (more specific matching)
+        const leveragedTokens = [
+          "BULL",
+          "BEAR",
+          "UP",
+          "DOWN",
+          "3L",
+          "3S",
+          "5L",
+          "5S",
+        ];
+        if (leveragedTokens.some((token) => item.symbol.includes(token))) {
+          return false;
+        }
+
+        // Exclude BUSD pairs (but allow USDT pairs that might contain BUSD in base asset)
+        if (item.symbol.startsWith("BUSD")) {
+          return false;
+        }
+
+        return true;
+      });
+
       if (filter.search) {
         data = data.filter((item) =>
           item.symbol.toLowerCase().includes(filter.search.toLowerCase())
