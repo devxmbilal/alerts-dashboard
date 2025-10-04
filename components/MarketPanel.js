@@ -58,6 +58,12 @@ const MarketPanel = forwardRef(
       getFilteredMarketData,
     } = useSocket();
 
+    // Debug market data
+    useEffect(() => {
+      console.log("📊 MarketPanel marketData size:", marketData.length);
+      console.log("📊 MarketPanel isConnected:", isConnected);
+    }, [marketData.length, isConnected]);
+
     // State management
     const [view, setView] = useState("market");
     const [searchTerm, setSearchTerm] = useState("");
@@ -162,11 +168,13 @@ const MarketPanel = forwardRef(
 
     // Filter and sort data using socket context
     const filteredData = useMemo(() => {
-      return getFilteredMarketData({
+      const data = getFilteredMarketData({
         search: searchTerm,
         favorites: view === "favorites",
         sortBy: "symbol",
       });
+      console.log("📊 MarketPanel filteredData:", data.length, "items");
+      return data;
     }, [getFilteredMarketData, searchTerm, view]);
 
     // Update select all checkbox

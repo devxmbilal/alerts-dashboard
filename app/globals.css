@@ -47,6 +47,29 @@ body {
   background: #1a1a1a;
 }
 
+/* Custom scrollbar for filter sidebar */
+.filter-sidebar-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.filter-sidebar-scrollbar::-webkit-scrollbar-track {
+  background: #1a1a1a;
+  border-radius: 4px;
+}
+
+.filter-sidebar-scrollbar::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 4px;
+}
+
+.filter-sidebar-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #666;
+}
+
+.filter-sidebar-scrollbar::-webkit-scrollbar-corner {
+  background: #1a1a1a;
+}
+
 /* Global thin scrollbar */
 ::-webkit-scrollbar {
   width: 4px;

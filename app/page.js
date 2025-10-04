@@ -190,12 +190,14 @@ export default function Dashboard() {
           );
         case "filters":
           return (
-            <FilterSidebar
-              ref={filterSidebarRef}
-              selectedSymbol={selectedCoin}
-              onCreateAlert={handleCreateAlert}
-              onAlertsCreated={handleAlertsCreated}
-            />
+            <Box sx={{ height: "calc(100vh - 200px)", minHeight: "500px" }}>
+              <FilterSidebar
+                ref={filterSidebarRef}
+                selectedSymbol={selectedCoin}
+                onCreateAlert={handleCreateAlert}
+                onAlertsCreated={handleAlertsCreated}
+              />
+            </Box>
           );
         case "market":
           return (
@@ -231,11 +233,14 @@ export default function Dashboard() {
         <Grid item xs={12} md={3}>
           <Paper
             sx={{
-              height: "100%",
+              height: "100vh",
+              maxHeight: "100vh",
               backgroundColor: "#1a1a1a",
               border: "1px solid #333",
               borderRadius: 2,
               overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
             }}
           >
             <FilterSidebar

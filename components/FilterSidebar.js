@@ -435,7 +435,17 @@ const FilterSidebar = forwardRef(
         </Box>
 
         {/* Filters */}
-        <Box sx={{ flex: 1, p: 2 }}>
+        <Box
+          sx={{
+            flex: 1,
+            p: 2,
+            overflow: "auto",
+            height: "calc(100vh - 120px)",
+            minHeight: "500px",
+            maxHeight: "calc(100vh - 120px)",
+          }}
+          className="filter-sidebar-scrollbar"
+        >
           {/* Market Filter */}
           <DarkAccordion defaultExpanded>
             <AccordionSummary

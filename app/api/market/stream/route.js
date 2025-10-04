@@ -185,15 +185,35 @@ export async function POST() {
 
 async function sendInitialData(controller, symbols) {
   try {
-    // Get cached data from Redis
-    const promises = symbols.map(async (symbol) => {
-      const cacheKey = `crypto:${symbol.toLowerCase()}`;
-      const cached = await redis.get(cacheKey);
-      return cached ? JSON.parse(cached) : null;
-    });
+    let validData = [];
 
-    const cachedData = await Promise.all(promises);
-    const validData = cachedData.filter(Boolean);
+    if (symbols.length === 0) {
+      // If no specific symbols requested, get all available data
+      console.log("📊 Fetching all market data for initial load...");
+      const allKeys = await redis.keys("crypto:*");
+      const cryptoKeys = allKeys.filter(
+        (key) => key !== "crypto:usdt_pairs" && !key.includes("undefined")
+      );
+
+      const promises = cryptoKeys.map(async (key) => {
+        const cached = await redis.get(key);
+        return cached ? JSON.parse(cached) : null;
+      });
+
+      const cachedData = await Promise.all(promises);
+      validData = cachedData.filter(Boolean);
+      console.log(`📊 Found ${validData.length} market data entries`);
+    } else {
+      // Get specific symbols data
+      const promises = symbols.map(async (symbol) => {
+        const cacheKey = `crypto:${symbol.toLowerCase()}`;
+        const cached = await redis.get(cacheKey);
+        return cached ? JSON.parse(cached) : null;
+      });
+
+      const cachedData = await Promise.all(promises);
+      validData = cachedData.filter(Boolean);
+    }
 
     if (validData.length > 0) {
       try {
@@ -203,9 +223,12 @@ async function sendInitialData(controller, symbols) {
             data: validData,
           })}\n\n`
         );
+        console.log(`📡 Sent initial data: ${validData.length} symbols`);
       } catch (error) {
         console.log("📡 Controller closed during initial data send");
       }
+    } else {
+      console.log("⚠️ No market data available for initial load");
     }
   } catch (error) {
     console.error("❌ Error sending initial data:", error);
