@@ -18,7 +18,7 @@ import MenuIcon from "@mui/icons-material/Menu";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import TrendingUpIcon from "@mui/icons-material/TrendingUp";
 import ListIcon from "@mui/icons-material/List";
-import LineChart from "../components/LineChart";
+import TradingViewChart from "../components/TradingViewChart";
 import MarketPanel from "../components/MarketPanel";
 import FilterSidebar from "../components/FilterSidebar";
 import TriggeredAlertsPanel from "../components/TriggeredAlertsPanel";
@@ -178,10 +178,9 @@ export default function Dashboard() {
         case "chart":
           return (
             <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-              <LineChart
+              <TradingViewChart
                 symbol={selectedCoin}
                 timeframe={selectedTimeframe}
-                onTimeframeChange={setSelectedTimeframe}
               />
               <Box sx={{ height: "350px", mt: 1 }}>
                 <TriggeredAlertsPanel />
@@ -213,10 +212,9 @@ export default function Dashboard() {
         default:
           return (
             <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-              <LineChart
+              <TradingViewChart
                 symbol={selectedCoin}
                 timeframe={selectedTimeframe}
-                onTimeframeChange={setSelectedTimeframe}
               />
               <Box sx={{ height: "350px", mt: 1 }}>
                 <TriggeredAlertsPanel />
@@ -274,10 +272,9 @@ export default function Dashboard() {
                 maxHeight: "500px",
               }}
             >
-              <LineChart
+              <TradingViewChart
                 symbol={selectedCoin}
                 timeframe={selectedTimeframe}
-                onTimeframeChange={setSelectedTimeframe}
               />
             </Paper>
 
