@@ -17,6 +17,7 @@
     "axios": "^1.6.0",
     "eventsource": "^4.0.0",
     "ioredis": "^5.8.0",
+    "lightweight-charts": "^5.0.9",
     "next": "15.5.4",
     "react": "19.1.0",
     "react-dom": "19.1.0",
