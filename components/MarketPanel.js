@@ -30,7 +30,6 @@ import {
   FormControlLabel,
   Button,
   useTheme,
-  useMediaQuery,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import ManageSearchIcon from "@mui/icons-material/ManageSearch";
@@ -45,8 +44,23 @@ import StarBorderIcon from "@mui/icons-material/StarBorder";
 const MarketPanel = forwardRef(
   ({ onSelectCoin, onCreateAlert, onAlertsCreated }, ref) => {
     const theme = useTheme();
-    const isMobile = useMediaQuery(theme.breakpoints.down("md"));
-    const isTablet = useMediaQuery(theme.breakpoints.down("lg"));
+    const [isMobile, setIsMobile] = useState(false);
+    const [isTablet, setIsTablet] = useState(false);
+    const [mounted, setMounted] = useState(false);
+
+    // Use useEffect to set responsive states after hydration
+    useEffect(() => {
+      setMounted(true);
+      const checkResponsive = () => {
+        setIsMobile(window.innerWidth < theme.breakpoints.values.md);
+        setIsTablet(window.innerWidth < theme.breakpoints.values.lg);
+      };
+
+      checkResponsive();
+      window.addEventListener("resize", checkResponsive);
+
+      return () => window.removeEventListener("resize", checkResponsive);
+    }, [theme.breakpoints.values.md, theme.breakpoints.values.lg]);
 
     // Socket context for real-time data
     const {
@@ -62,7 +76,8 @@ const MarketPanel = forwardRef(
     useEffect(() => {
       console.log("📊 MarketPanel marketData size:", marketData.length);
       console.log("📊 MarketPanel isConnected:", isConnected);
-    }, [marketData.length, isConnected]);
+      console.log("📊 MarketPanel mounted:", mounted);
+    }, [marketData.length, isConnected, mounted]);
 
     // State management
     const [view, setView] = useState("market");
@@ -154,6 +169,18 @@ const MarketPanel = forwardRef(
       [checkedPairs]
     );
 
+    // Filter and sort data using socket context
+    const filteredData = useMemo(() => {
+      const data = getFilteredMarketData({
+        search: searchTerm,
+        favorites: view === "favorites",
+        sortBy: "symbol",
+      });
+      console.log("📊 MarketPanel filteredData updated:", data.length, "items");
+      console.log("📊 MarketPanel marketData size:", marketData.length);
+      return data;
+    }, [getFilteredMarketData, searchTerm, view, marketData.length]);
+
     // Select all pairs
     const handleSelectAll = useCallback(() => {
       if (selectAllChecked) {
@@ -164,18 +191,39 @@ const MarketPanel = forwardRef(
         setCheckedPairs(new Set(allSymbols));
         setSelectAllChecked(true);
       }
-    }, [selectAllChecked]);
+    }, [selectAllChecked, filteredData]);
 
-    // Filter and sort data using socket context
-    const filteredData = useMemo(() => {
-      const data = getFilteredMarketData({
-        search: searchTerm,
-        favorites: view === "favorites",
-        sortBy: "symbol",
-      });
-      console.log("📊 MarketPanel filteredData:", data.length, "items");
-      return data;
-    }, [getFilteredMarketData, searchTerm, view]);
+    // Toggle all visible pairs favorites (add all or remove all)
+    const handleAddAllFavorites = useCallback(() => {
+      // Check if all visible pairs are already favorited
+      const allFavorited = filteredData.every((coin) =>
+        isFavorite(coin.symbol)
+      );
+
+      if (allFavorited) {
+        // Remove all from favorites
+        filteredData.forEach((coin) => {
+          if (isFavorite(coin.symbol)) {
+            toggleFavorite(coin.symbol);
+          }
+        });
+      } else {
+        // Add all to favorites
+        filteredData.forEach((coin) => {
+          if (!isFavorite(coin.symbol)) {
+            toggleFavorite(coin.symbol);
+          }
+        });
+      }
+    }, [filteredData, isFavorite, toggleFavorite]);
+
+    // Check if all visible pairs are favorited (for button text)
+    const allFavorited = useMemo(() => {
+      return (
+        filteredData.length > 0 &&
+        filteredData.every((coin) => isFavorite(coin.symbol))
+      );
+    }, [filteredData, isFavorite]);
 
     // Debug filtered data
     useEffect(() => {
@@ -327,20 +375,28 @@ const MarketPanel = forwardRef(
             />
           </Box>
 
-          {/* Select All and Actions - exact same as client */}
+          {/* Add All Favorites and Actions */}
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={selectAllChecked}
-                  onChange={handleSelectAll}
-                  sx={{ color: "#1976d2" }}
-                  size="small"
-                />
-              }
-              label="Select All"
-              sx={{ color: "white", fontSize: "0.75rem" }}
-            />
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={handleAddAllFavorites}
+              startIcon={allFavorited ? <StarBorderIcon /> : <StarIcon />}
+              sx={{
+                color: allFavorited ? "#ff6b6b" : "#ffd700",
+                borderColor: allFavorited ? "#ff6b6b" : "#ffd700",
+                "&:hover": {
+                  borderColor: allFavorited ? "#ff6b6b" : "#ffd700",
+                  backgroundColor: allFavorited
+                    ? "rgba(255, 107, 107, 0.1)"
+                    : "rgba(255, 215, 0, 0.1)",
+                },
+                fontSize: "0.8rem",
+                px: 2,
+              }}
+            >
+              {allFavorited ? "Remove All Favorites" : "Add All Favorites"}
+            </Button>
 
             {checkedPairs.size > 0 && (
               <Button
@@ -451,16 +507,19 @@ const MarketPanel = forwardRef(
                         width: "100%",
                       }}
                     >
-                      {/* Selection Checkbox - exact same as client */}
-                      <Checkbox
-                        checked={isSelected}
-                        onChange={() => togglePairSelection(coin.symbol)}
-                        onClick={(e) => e.stopPropagation()}
-                        sx={{ color: "#1976d2", mr: 1 }}
+                      {/* Favorite Star - moved to left side */}
+                      <IconButton
                         size="small"
-                      />
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleFavorite(coin.symbol);
+                        }}
+                        sx={{ mr: 1, color: isFav ? "#ffd700" : "#888" }}
+                      >
+                        {isFav ? <StarIcon /> : <StarBorderIcon />}
+                      </IconButton>
 
-                      {/* Coin Info - exact same as client */}
+                      {/* Coin Info */}
                       <Box sx={{ flex: 1, minWidth: 0 }}>
                         <Box
                           sx={{
@@ -535,18 +594,6 @@ const MarketPanel = forwardRef(
                           </Typography>
                         </Box>
                       </Box>
-
-                      {/* Favorite Toggle - exact same as client */}
-                      <IconButton
-                        size="small"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleFavorite(coin.symbol);
-                        }}
-                        sx={{ ml: 1, color: isFav ? "#ffd700" : "#888" }}
-                      >
-                        {isFav ? <StarIcon /> : <StarBorderIcon />}
-                      </IconButton>
                     </Box>
                   </ListItem>
                 );

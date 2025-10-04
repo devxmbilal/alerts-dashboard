@@ -318,7 +318,7 @@ const LineChart = ({ symbol, timeframe, onTimeframeChange }) => {
       </Box>
 
       {/* Chart Area */}
-      <Box sx={{ flex: 1, p: 1.5, position: "relative", minHeight: "400px" }}>
+      <Box sx={{ flex: 1, p: 1.5, position: "relative", minHeight: "500px" }}>
         {loading ? (
           <Skeleton variant="rectangular" height="100%" animation="wave" />
         ) : chartData ? (

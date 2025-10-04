@@ -62,21 +62,42 @@ export const SocketProvider = ({ children }) => {
               data.data.length,
               "symbols"
             );
-            const newMarketData = new Map();
-            data.data.forEach((item) => {
-              newMarketData.set(item.symbol, item);
+            setMarketData((prev) => {
+              const newMarketData = new Map();
+              data.data.forEach((item) => {
+                // Preserve favorite status from previous data
+                const previousData = prev.get(item.symbol);
+                newMarketData.set(item.symbol, {
+                  ...item,
+                  isFavorite: previousData ? previousData.isFavorite : false,
+                });
+              });
+              return newMarketData;
             });
-            setMarketData(newMarketData);
             console.log(
               "📊 Market data updated with",
-              newMarketData.size,
+              data.data.length,
               "entries"
             );
           } else if (data.type === "market_update") {
-            console.log("📈 Market update:", data.symbol, data.data.price);
+            console.log(
+              "📈 Market update received:",
+              data.symbol,
+              data.data.price
+            );
             setMarketData((prev) => {
               const newMap = new Map(prev);
-              newMap.set(data.symbol, data.data);
+              const previousData = prev.get(data.symbol);
+              newMap.set(data.symbol, {
+                ...data.data,
+                isFavorite: previousData ? previousData.isFavorite : false,
+              });
+              console.log(
+                "📈 Market data updated for:",
+                data.symbol,
+                "Total pairs:",
+                newMap.size
+              );
               return newMap;
             });
             setLastUpdate(Date.now());

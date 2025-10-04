@@ -10,7 +10,6 @@ import {
   Drawer,
   IconButton,
   useTheme,
-  useMediaQuery,
   BottomNavigation,
   BottomNavigationAction,
 } from "@mui/material";
@@ -26,7 +25,19 @@ import { SocketProvider } from "../contexts/SocketContext";
 
 export default function Dashboard() {
   const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down("md"));
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Use useEffect to set mobile state after hydration
+  useEffect(() => {
+    const checkIsMobile = () => {
+      setIsMobile(window.innerWidth < theme.breakpoints.values.md);
+    };
+
+    checkIsMobile();
+    window.addEventListener("resize", checkIsMobile);
+
+    return () => window.removeEventListener("resize", checkIsMobile);
+  }, [theme.breakpoints.values.md]);
 
   // State management
   const [selectedCoin, setSelectedCoin] = useState("BTCUSDT");
@@ -268,8 +279,8 @@ export default function Dashboard() {
                 border: "1px solid #333",
                 borderRadius: 2,
                 overflow: "hidden",
-                minHeight: "400px",
-                maxHeight: "500px",
+                minHeight: "500px",
+                maxHeight: "600px",
               }}
             >
               <TradingViewChart
