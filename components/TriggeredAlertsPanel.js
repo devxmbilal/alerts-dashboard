@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, memo } from "react";
+import { useAlert } from "../contexts/AlertContext";
+import AlertHistoryItem from "./AlertHistoryItem";
 import {
   Box,
   Paper,
@@ -31,144 +33,29 @@ import {
   Telegram as TelegramIcon,
 } from "@mui/icons-material";
 
-// Mock triggered alerts data
-const mockTriggeredAlerts = [
-  {
-    id: 1,
-    symbol: "BTCUSDT",
-    type: "price",
-    condition: "above",
-    value: 46000,
-    currentPrice: 46500,
-    triggeredAt: new Date(Date.now() - 1000 * 60 * 5), // 5 minutes ago
-    status: "triggered",
-    notificationSent: true,
-    notificationType: "both",
-  },
-  {
-    id: 2,
-    symbol: "ETHUSDT",
-    type: "percentage",
-    condition: "above",
-    value: 5,
-    currentPrice: 3150,
-    triggeredAt: new Date(Date.now() - 1000 * 60 * 15), // 15 minutes ago
-    status: "triggered",
-    notificationSent: true,
-    notificationType: "email",
-  },
-  {
-    id: 3,
-    symbol: "ADAUSDT",
-    type: "rsi",
-    condition: "above",
-    value: 70,
-    currentPrice: 0.48,
-    triggeredAt: new Date(Date.now() - 1000 * 60 * 30), // 30 minutes ago
-    status: "triggered",
-    notificationSent: false,
-    notificationType: "telegram",
-  },
-  {
-    id: 4,
-    symbol: "SOLUSDT",
-    type: "volume",
-    condition: "above",
-    value: 1000000,
-    currentPrice: 105,
-    triggeredAt: new Date(Date.now() - 1000 * 60 * 45), // 45 minutes ago
-    status: "triggered",
-    notificationSent: true,
-    notificationType: "both",
-  },
-  {
-    id: 5,
-    symbol: "DOGEUSDT",
-    type: "price",
-    condition: "below",
-    value: 0.08,
-    currentPrice: 0.079,
-    triggeredAt: new Date(Date.now() - 1000 * 60 * 60), // 1 hour ago
-    status: "triggered",
-    notificationSent: true,
-    notificationType: "telegram",
-  },
-  {
-    id: 6,
-    symbol: "LINKUSDT",
-    type: "percentage",
-    condition: "above",
-    value: 3,
-    currentPrice: 15.2,
-    triggeredAt: new Date(Date.now() - 1000 * 60 * 90), // 1.5 hours ago
-    status: "triggered",
-    notificationSent: true,
-    notificationType: "both",
-  },
-  {
-    id: 7,
-    symbol: "MATICUSDT",
-    type: "price",
-    condition: "above",
-    value: 0.85,
-    currentPrice: 0.87,
-    triggeredAt: new Date(Date.now() - 1000 * 60 * 120), // 2 hours ago
-    status: "triggered",
-    notificationSent: false,
-    notificationType: "email",
-  },
-  {
-    id: 8,
-    symbol: "AVAXUSDT",
-    type: "percentage",
-    condition: "below",
-    value: -2,
-    currentPrice: 28.5,
-    triggeredAt: new Date(Date.now() - 1000 * 60 * 150), // 2.5 hours ago
-    status: "triggered",
-    notificationSent: true,
-    notificationType: "telegram",
-  },
-  {
-    id: 9,
-    symbol: "DOTUSDT",
-    type: "price",
-    condition: "above",
-    value: 6.5,
-    currentPrice: 6.8,
-    triggeredAt: new Date(Date.now() - 1000 * 60 * 180), // 3 hours ago
-    status: "triggered",
-    notificationSent: true,
-    notificationType: "both",
-  },
-  {
-    id: 10,
-    symbol: "UNIUSDT",
-    type: "percentage",
-    condition: "above",
-    value: 4,
-    currentPrice: 7.2,
-    triggeredAt: new Date(Date.now() - 1000 * 60 * 210), // 3.5 hours ago
-    status: "triggered",
-    notificationSent: true,
-    notificationType: "email",
-  },
-];
+// No mock data - alerts will be loaded from real triggers
 
 const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("md"));
 
-  const [alerts, setAlerts] = useState(mockTriggeredAlerts);
   const [loading, setLoading] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const { getTriggeredAlerts, clearTriggeredAlerts } = useAlert();
+  const alerts = getTriggeredAlerts();
+
+  // Set mounted after hydration
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Load alerts
   const loadAlerts = async () => {
     setLoading(true);
     try {
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      setAlerts(mockTriggeredAlerts);
+      // Alerts are now managed by AlertContext
+      console.log("📊 TriggeredAlertsPanel: Loading alerts from context");
+      await new Promise((resolve) => setTimeout(resolve, 500));
     } catch (error) {
       console.error("Error loading alerts:", error);
     } finally {
@@ -178,7 +65,7 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
 
   // Clear all alerts
   const handleClearAll = () => {
-    setAlerts([]);
+    clearTriggeredAlerts();
     onClearAll?.();
   };
 
@@ -378,17 +265,23 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
                           {alert.symbol}
                         </Typography>
                         <Chip
-                          label={alert.type.toUpperCase()}
+                          label={
+                            alert.type ? alert.type.toUpperCase() : "ALERT"
+                          }
                           size="small"
                           sx={{
-                            backgroundColor: getAlertTypeColor(alert.type),
+                            backgroundColor: getAlertTypeColor(
+                              alert.type || "alert"
+                            ),
                             color: "white",
                             fontSize: "0.65rem",
                             height: 20,
                           }}
                         />
                         <Chip
-                          label={alert.condition}
+                          label={`${alert.conditions?.changePercent || "N/A"} ${
+                            alert.conditions?.percentage || "0"
+                          }%`}
                           size="small"
                           variant="outlined"
                           sx={{
@@ -404,17 +297,27 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
                       <span>
                         <Typography
                           variant="caption"
+                          sx={{ color: "#888", display: "block", mb: 1 }}
+                        >
+                          {alert.conditionsText || "Conditions met"}
+                        </Typography>
+                        <Typography
+                          variant="caption"
                           sx={{ color: "#888", display: "block" }}
                         >
-                          {alert.type === "percentage" ? "Change" : "Price"}:{" "}
-                          {alert.condition} {alert.value}
-                          {alert.type === "percentage" ? "%" : ""}
+                          Target: {alert.targetValue || 1} | Actual:{" "}
+                          {alert.actualValue?.toFixed(6) || "N/A"} |{" "}
+                          {alert.timeframe || "5MIN"}
                         </Typography>
                         <Typography
                           variant="caption"
                           sx={{ color: "white", display: "block" }}
                         >
-                          Current: {formatPrice(alert.currentPrice)}
+                          Price: {formatPrice(alert.triggeredPrice || 0)} | 24h
+                          Change:{" "}
+                          {alert.price24hChange
+                            ? `${parseFloat(alert.price24hChange).toFixed(3)}%`
+                            : "N/A"}
                         </Typography>
                         <span
                           style={{
@@ -425,7 +328,9 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
                           }}
                         >
                           <Typography variant="caption" sx={{ color: "#888" }}>
-                            {formatTimeAgo(alert.triggeredAt)}
+                            {mounted
+                              ? formatTimeAgo(alert.triggeredAt)
+                              : "Loading..."}
                           </Typography>
                           <span
                             style={{
@@ -434,7 +339,9 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
                               gap: "4px",
                             }}
                           >
-                            {getNotificationIcon(alert.notificationType)}
+                            {getNotificationIcon(
+                              alert.notificationType || "both"
+                            )}
                             {alert.notificationSent ? (
                               <CheckCircleIcon
                                 sx={{ fontSize: 12, color: "#4caf50" }}
@@ -501,7 +408,8 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
             Total Alerts: {alerts.length}
           </Typography>
           <Typography variant="caption" sx={{ color: "#888" }}>
-            Last Update: {new Date().toLocaleTimeString()}
+            Last Update:{" "}
+            {mounted ? new Date().toLocaleTimeString() : "Loading..."}
           </Typography>
         </Box>
       </Box>

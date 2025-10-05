@@ -12,20 +12,64 @@ import {
   useTheme,
   BottomNavigation,
   BottomNavigationAction,
+  CircularProgress,
 } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import TrendingUpIcon from "@mui/icons-material/TrendingUp";
 import ListIcon from "@mui/icons-material/List";
+import LogoutIcon from "@mui/icons-material/Logout";
 import TradingViewChart from "../components/TradingViewChart";
 import MarketPanel from "../components/MarketPanel";
 import FilterSidebar from "../components/FilterSidebar";
 import TriggeredAlertsPanel from "../components/TriggeredAlertsPanel";
 import { SocketProvider } from "../contexts/SocketContext";
+import { useRouter } from "next/navigation";
 
 export default function Dashboard() {
+  const router = useRouter();
   const theme = useTheme();
   const [isMobile, setIsMobile] = useState(false);
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // Authentication check
+  useEffect(() => {
+    checkAuth();
+  }, []);
+
+  const checkAuth = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        router.push("/login");
+        return;
+      }
+
+      // Verify token with server
+      const response = await fetch("/api/auth/me", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setUser(data.data);
+      } else {
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
+        router.push("/login");
+      }
+    } catch (error) {
+      console.error("Auth check failed:", error);
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      router.push("/login");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Use useEffect to set mobile state after hydration
   useEffect(() => {
@@ -122,6 +166,12 @@ export default function Dashboard() {
 
   const handleAlertsCreated = (alerts) => {
     setAlerts((prev) => [...prev, ...alerts]);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    router.push("/login");
   };
 
   // Mobile drawer content
@@ -331,6 +381,32 @@ export default function Dashboard() {
     );
   };
 
+  // Show loading screen while checking authentication
+  if (loading) {
+    return (
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          minHeight: "100vh",
+          background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+        }}
+      >
+        <CircularProgress size={60} sx={{ color: "white", mb: 2 }} />
+        <Typography variant="h6" sx={{ color: "white" }}>
+          Loading Alerts Dashboard...
+        </Typography>
+      </Box>
+    );
+  }
+
+  // If not authenticated, will redirect to login
+  if (!user) {
+    return null;
+  }
+
   return (
     <SocketProvider>
       <Box
@@ -368,6 +444,17 @@ export default function Dashboard() {
             <Typography variant="body2" sx={{ color: "#888" }}>
               {selectedCoin} - {selectedTimeframe}
             </Typography>
+            <Typography variant="body2" sx={{ color: "#888" }}>
+              Welcome, {user.name}
+            </Typography>
+            <IconButton
+              color="inherit"
+              onClick={handleLogout}
+              sx={{ color: "#888" }}
+              title="Logout"
+            >
+              <LogoutIcon />
+            </IconButton>
           </Box>
         </Box>
 

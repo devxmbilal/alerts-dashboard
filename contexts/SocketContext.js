@@ -24,6 +24,19 @@ export const SocketProvider = ({ children }) => {
   const [eventSource, setEventSource] = useState(null);
   const [subscribedSymbols, setSubscribedSymbols] = useState([]);
   const [lastUpdate, setLastUpdate] = useState(null);
+  const [alertProcessor, setAlertProcessor] = useState(null);
+
+  // Set alert processor from AlertContext
+  const setAlertProcessorRef = useCallback((processor) => {
+    setAlertProcessor(() => processor);
+  }, []);
+
+  // Process alerts when market data updates
+  useEffect(() => {
+    if (alertProcessor && marketData.size > 0) {
+      alertProcessor(marketData);
+    }
+  }, [marketData, alertProcessor]);
 
   // Connect to Server-Sent Events
   const connect = useCallback(
@@ -130,7 +143,7 @@ export const SocketProvider = ({ children }) => {
         setIsConnected(false);
       };
     },
-    [eventSource]
+    [] // Remove eventSource from dependencies to prevent infinite loop
   );
 
   // Disconnect from SSE
@@ -141,7 +154,7 @@ export const SocketProvider = ({ children }) => {
       setEventSource(null);
       setIsConnected(false);
     }
-  }, [eventSource]);
+  }, []); // Remove eventSource from dependencies to prevent infinite loop
 
   // Subscribe to specific symbols
   const subscribeToSymbols = useCallback(
@@ -189,6 +202,11 @@ export const SocketProvider = ({ children }) => {
 
       // Filter to only show USDT spot pairs (Binance spot market)
       data = data.filter((item) => {
+        // Check if item and symbol exist
+        if (!item || !item.symbol || typeof item.symbol !== "string") {
+          return false;
+        }
+
         // Only show USDT pairs
         if (!item.symbol.endsWith("USDT")) {
           return false;
@@ -290,6 +308,7 @@ export const SocketProvider = ({ children }) => {
     disconnect,
     lastUpdate,
     subscribedSymbols,
+    setAlertProcessorRef,
   };
 
   return (

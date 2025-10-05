@@ -71,6 +71,11 @@ const initializeSharedSubscriber = () => {
   sharedSubscriber.on("message", (channel, message) => {
     try {
       const data = JSON.parse(message);
+      console.log(
+        `📡 Broadcasting to ${subscriberClients.size} clients:`,
+        data.type,
+        data.symbol || "N/A"
+      );
 
       // Broadcast to all connected clients
       subscriberClients.forEach((controller, connectionId) => {
@@ -83,13 +88,14 @@ const initializeSharedSubscriber = () => {
               })}\n\n`
             );
           } else if (
+            data.type === "market_update" ||
             data.type === "ticker_update" ||
             data.type === "symbol_update"
           ) {
             controller.enqueue(
               `data: ${JSON.stringify({
                 type: "market_update",
-                symbol: data.data.symbol,
+                symbol: data.symbol || data.data.symbol,
                 data: data.data,
               })}\n\n`
             );

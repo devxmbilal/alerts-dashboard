@@ -11,6 +11,7 @@ import React, {
   useImperativeHandle,
 } from "react";
 import { useSocket } from "../contexts/SocketContext";
+import { useAlert } from "../contexts/AlertContext";
 import {
   Box,
   Paper,
@@ -72,6 +73,8 @@ const MarketPanel = forwardRef(
       getFilteredMarketData,
     } = useSocket();
 
+    const { removeAlert } = useAlert();
+
     // Debug market data
     useEffect(() => {
       console.log("📊 MarketPanel marketData size:", marketData.length);
@@ -108,7 +111,7 @@ const MarketPanel = forwardRef(
     // Subscribe to market data on mount
     useEffect(() => {
       subscribeToSymbols([]); // Subscribe to all symbols
-    }, [subscribeToSymbols]);
+    }, []); // Empty dependency array to run only once
 
     // Handle search with debounce - exact same as client
     const handleSearchChange = useCallback((event) => {
@@ -124,14 +127,6 @@ const MarketPanel = forwardRef(
       }, 300);
     }, []);
 
-    // Toggle favorite using socket context
-    const toggleFavorite = useCallback(
-      (symbol) => {
-        socketToggleFavorite(symbol);
-      },
-      [socketToggleFavorite]
-    );
-
     // Check if coin is favorite
     const isFavorite = useCallback(
       (symbol) => {
@@ -139,6 +134,20 @@ const MarketPanel = forwardRef(
         return coin ? coin.isFavorite : false;
       },
       [marketData]
+    );
+
+    // Toggle favorite using socket context
+    const toggleFavorite = useCallback(
+      (symbol) => {
+        const wasFavorite = isFavorite(symbol);
+        socketToggleFavorite(symbol);
+
+        // If unfavoriting, remove any existing alerts for this symbol
+        if (wasFavorite) {
+          removeAlert(symbol);
+        }
+      },
+      [socketToggleFavorite, isFavorite, removeAlert]
     );
 
     // Get favorite symbols

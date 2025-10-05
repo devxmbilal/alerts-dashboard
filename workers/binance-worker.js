@@ -258,7 +258,8 @@ class BinanceWorker {
       await redis.publish(
         "market:updates",
         JSON.stringify({
-          type: "ticker_update",
+          type: "market_update",
+          symbol: data.symbol,
           data: data,
         })
       );

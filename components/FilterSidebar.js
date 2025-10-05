@@ -47,6 +47,8 @@ import {
   BarChart as BarChartIcon,
   CurrencyExchange as CurrencyExchangeIcon,
 } from "@mui/icons-material";
+import { useAlert } from "../contexts/AlertContext";
+import { useSocket } from "../contexts/SocketContext";
 
 // Custom styled components - exact same as client
 const CustomCheckbox = styled((props) => (
@@ -133,6 +135,11 @@ const FilterSidebar = forwardRef(
   ({ selectedSymbol, onCreateAlert, onAlertsCreated }, ref) => {
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down("md"));
+
+    // Alert and Socket contexts
+    const { createAlertsForSymbols, removeAlertsForSymbols, hasAlert } =
+      useAlert();
+    const { marketData } = useSocket();
 
     // State management - exact same as client
     const [filters, setFilters] = useState({
@@ -238,10 +245,30 @@ const FilterSidebar = forwardRef(
       }));
     }, []);
 
-    // Handle alert creation
+    // Get favorite symbols
+    const getFavoriteSymbols = useCallback(() => {
+      return marketData
+        .filter((coin) => coin.isFavorite)
+        .map((coin) => coin.symbol);
+    }, [marketData]);
+
+    // Handle alert creation for favorites
     const handleCreateAlert = useCallback(async () => {
-      if (!selectedSymbol) {
-        setErrorMessage("Please select a coin first");
+      const favoriteSymbols = getFavoriteSymbols();
+
+      if (favoriteSymbols.length === 0) {
+        setErrorMessage("Please add some coins to favorites first");
+        return;
+      }
+
+      // Check if Min Daily and Change % conditions are set
+      const hasMinDaily = Object.keys(filters.minDaily).length > 0;
+      const hasChangePercent =
+        Object.keys(filters.changePercent).length > 0 &&
+        filters.changePercent.percentage;
+
+      if (!hasMinDaily || !hasChangePercent) {
+        setErrorMessage("Please set both Min Daily and Change % conditions");
         return;
       }
 
@@ -249,31 +276,67 @@ const FilterSidebar = forwardRef(
       setErrorMessage("");
 
       try {
-        // Simulate API call
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        // Create alert conditions - include ALL conditions from filters
+        const alertConditions = {
+          // Basic conditions (required)
+          minDaily: Object.keys(filters.minDaily)[0], // Get selected min daily value
+          changePercent: Object.keys(filters.changePercent)[0], // Get selected timeframe
+          timeframe: Object.keys(filters.changePercent)[0],
+          percentage: filters.changePercent.percentage,
 
-        const newAlert = {
-          id: Date.now(),
-          symbol: selectedSymbol,
-          filters: { ...filters },
-          settings: { ...alertSettings },
-          createdAt: new Date(),
-          status: "active",
+          // Additional conditions (optional but will be saved if set)
+          candle: {
+            timeframes: Object.keys(filters.candle).filter(
+              (key) => key !== "condition"
+            ),
+            condition: filters.candle.condition || "CANDLE_ABOVE_OPEN",
+          },
+          rsiRange: {
+            timeframes: Object.keys(filters.rsiRange).filter(
+              (key) => !["period", "level", "condition"].includes(key)
+            ),
+            period: filters.rsiRange.period || "14",
+            level: filters.rsiRange.level || "70",
+            condition: filters.rsiRange.condition || "ABOVE",
+          },
+          volume: {
+            timeframes: Object.keys(filters.volume).filter(
+              (key) => !["condition", "percentage"].includes(key)
+            ),
+            condition: filters.volume.condition || "INCREASING",
+            percentage: filters.volume.percentage || "",
+          },
+          ema: {
+            timeframes: Object.keys(filters.ema).filter(
+              (key) => !["fast", "slow", "condition"].includes(key)
+            ),
+            fast: filters.ema.fast || "12",
+            slow: filters.ema.slow || "26",
+            condition: filters.ema.condition || "ABOVE",
+          },
         };
 
-        setCreatedAlerts((prev) => [...prev, newAlert]);
-        onCreateAlert?.(newAlert);
-        setSuccessMessage(`Alert created for ${selectedSymbol}`);
+        // Create alerts for all favorite symbols
+        const createdAlerts = createAlertsForSymbols(
+          favoriteSymbols,
+          alertConditions
+        );
+
+        setCreatedAlerts((prev) => [...prev, ...createdAlerts]);
+        onCreateAlert?.(createdAlerts);
+        setSuccessMessage(
+          `Alerts created for ${createdAlerts.length} favorite coins`
+        );
 
         // Clear success message after 3 seconds
         setTimeout(() => setSuccessMessage(""), 3000);
       } catch (error) {
-        console.error("Error creating alert:", error);
-        setErrorMessage("Failed to create alert");
+        console.error("Error creating alerts:", error);
+        setErrorMessage("Failed to create alerts");
       } finally {
         setIsCreating(false);
       }
-    }, [selectedSymbol, filters, alertSettings, onCreateAlert]);
+    }, [getFavoriteSymbols, filters, createAlertsForSymbols, onCreateAlert]);
 
     // Get active filters count
     const activeFiltersCount = useMemo(() => {
@@ -299,12 +362,12 @@ const FilterSidebar = forwardRef(
       { value: "10000", label: "10k" },
       { value: "100000", label: "100K" },
       { value: "500000", label: "500K" },
-      { value: "1000000", label: "1MN" },
-      { value: "2000000", label: "2MN" },
-      { value: "5000000", label: "5MN" },
-      { value: "10000000", label: "10MN" },
-      { value: "25000000", label: "25MN" },
-      { value: "50000000", label: "50MN and Above" },
+      { value: "1000000", label: "1M" },
+      { value: "2000000", label: "2M" },
+      { value: "5000000", label: "5M" },
+      { value: "10000000", label: "10M" },
+      { value: "25000000", label: "25M" },
+      { value: "50000000", label: "50M and Above" },
     ];
 
     // Change % options - matching the image
@@ -1085,11 +1148,13 @@ const FilterSidebar = forwardRef(
             fullWidth
             variant="contained"
             onClick={handleCreateAlert}
-            disabled={!selectedSymbol || isCreating}
+            disabled={getFavoriteSymbols().length === 0 || isCreating}
             startIcon={<NotificationsActiveIcon />}
             sx={{ mb: 1 }}
           >
-            {isCreating ? "Creating..." : "Create Alert"}
+            {isCreating
+              ? "Creating..."
+              : `Create Alerts for ${getFavoriteSymbols().length} Favorites`}
           </Button>
 
           <Button
