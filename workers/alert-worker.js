@@ -1,7 +1,7 @@
-const Redis = require("ioredis");
-const { connectToMongoDB } = require("../utils/mongodb");
-const AlertService = require("../services/AlertService");
-const AlertHistoryService = require("../services/AlertHistoryService");
+import Redis from "ioredis";
+import { connectToMongoDB } from "../utils/mongodb.js";
+import AlertService from "../services/AlertService.js";
+import AlertHistoryService from "../services/AlertHistoryService.js";
 
 class AlertWorker {
   constructor() {
@@ -377,4 +377,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = AlertWorker;
+export default AlertWorker;

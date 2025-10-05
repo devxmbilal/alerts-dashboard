@@ -1,5 +1,5 @@
-const Redis = require("ioredis");
-const WebSocket = require("ws");
+import Redis from "ioredis";
+import WebSocket from "ws";
 
 // Redis configuration
 const redis = new Redis({
@@ -428,4 +428,4 @@ process.on("SIGTERM", async () => {
 const worker = new BinanceWorker();
 worker.start().catch(console.error);
 
-module.exports = BinanceWorker;
+export default BinanceWorker;
