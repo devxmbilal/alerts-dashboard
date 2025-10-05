@@ -41,21 +41,63 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
 
   const [loading, setLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [alerts, setAlerts] = useState([]);
+  const [eventSource, setEventSource] = useState(null);
   const { getTriggeredAlerts, clearTriggeredAlerts } = useAlert();
-  const alerts = getTriggeredAlerts();
 
   // Set mounted after hydration
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Load alerts
+  // Load alerts from database
   const loadAlerts = async () => {
     setLoading(true);
     try {
-      // Alerts are now managed by AlertContext
-      console.log("📊 TriggeredAlertsPanel: Loading alerts from context");
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Get current user ID from localStorage
+      const user = JSON.parse(localStorage.getItem("user") || "{}");
+      const userId = user._id || user.id;
+
+      if (!userId) {
+        console.log("No user ID found");
+        return;
+      }
+
+      // Fetch triggered alerts from database
+      const response = await fetch(
+        `/api/alerts/history?userId=${userId}&limit=50`
+      );
+      const data = await response.json();
+
+      if (data.success) {
+        // Transform database alerts to display format
+        const triggeredAlerts = data.data.map((alert) => ({
+          id: alert._id,
+          symbol: alert.symbol,
+          type: "triggered",
+          triggered: true,
+          triggeredAt: new Date(alert.createdAt),
+          triggeredPrice: alert.triggerData.price,
+          triggeredVolume: alert.triggerData.volume,
+          priceChangePercent: alert.triggerData.priceChangePercent,
+          conditions: alert.alertConditions,
+          conditionsText: `Volume: ${alert.triggerData.volume?.toLocaleString()} | Change: ${alert.triggerData.priceChangePercent?.toFixed(
+            3
+          )}%`,
+          targetValue: alert.alertConditions.percentage,
+          actualValue: Math.abs(alert.triggerData.priceChangePercent || 0),
+          timeframe: alert.alertConditions.timeframe,
+          volume24h: alert.triggerData.volume,
+          price24hChange: alert.triggerData.priceChangePercent,
+          notificationType: "both",
+          notificationSent: true,
+        }));
+
+        setAlerts(triggeredAlerts);
+        console.log("📊 Loaded triggered alerts:", triggeredAlerts.length);
+      } else {
+        console.error("Failed to load alerts:", data.error);
+      }
     } catch (error) {
       console.error("Error loading alerts:", error);
     } finally {
@@ -149,6 +191,112 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
   // Load alerts on mount
   useEffect(() => {
     loadAlerts();
+  }, []);
+
+  // Auto-refresh alerts every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadAlerts();
+    }, 30000); // 30 seconds
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Connect to real-time alert stream
+  useEffect(() => {
+    const connectToAlertStream = () => {
+      const user = JSON.parse(localStorage.getItem("user") || "{}");
+      const userId = user._id || user.id;
+
+      if (!userId) {
+        console.log("No user ID found for alert stream");
+        return;
+      }
+
+      // Close existing connection
+      if (eventSource) {
+        eventSource.close();
+      }
+
+      const url = `/api/alerts/stream?userId=${userId}`;
+      console.log("🔌 Connecting to alert stream:", url);
+
+      const es = new EventSource(url);
+      setEventSource(es);
+
+      es.onopen = () => {
+        console.log("✅ Alert stream connected");
+      };
+
+      es.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.type === "alert_triggered") {
+            console.log("🚨 Real-time alert received:", data.data);
+
+            // Add new alert to the list
+            const newAlert = {
+              id: data.data.alertId,
+              symbol: data.data.symbol,
+              type: "triggered",
+              triggered: true,
+              triggeredAt: new Date(data.data.triggeredAt),
+              triggeredPrice: data.data.triggeredPrice,
+              triggeredVolume: data.data.triggeredVolume,
+              priceChangePercent: data.data.triggeredChange,
+              conditions: data.data.conditions,
+              conditionsText: `Volume: ${data.data.triggeredVolume?.toLocaleString()} | Change: ${data.data.triggeredChange?.toFixed(
+                3
+              )}%`,
+              targetValue: data.data.conditions.percentage,
+              actualValue: Math.abs(data.data.triggeredChange || 0),
+              timeframe: data.data.conditions.timeframe,
+              volume24h: data.data.triggeredVolume,
+              price24hChange: data.data.triggeredChange,
+              notificationType: "both",
+              notificationSent: true,
+            };
+
+            setAlerts((prev) => [newAlert, ...prev]);
+
+            // Emit custom event for other components
+            window.dispatchEvent(
+              new CustomEvent("alertTriggered", { detail: data.data })
+            );
+          } else if (data.type === "heartbeat") {
+            console.log("💓 Alert stream heartbeat");
+          }
+        } catch (error) {
+          console.error("❌ Error parsing alert stream message:", error);
+        }
+      };
+
+      es.onerror = (error) => {
+        console.error("❌ Alert stream error:", error);
+        // Attempt to reconnect after 5 seconds
+        setTimeout(() => {
+          if (es.readyState === EventSource.CLOSED) {
+            console.log("🔄 Reconnecting to alert stream...");
+            connectToAlertStream();
+          }
+        }, 5000);
+      };
+
+      es.onclose = () => {
+        console.log("🔌 Alert stream closed");
+      };
+    };
+
+    // Connect when component mounts
+    connectToAlertStream();
+
+    // Cleanup on unmount
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
   }, []);
 
   return (

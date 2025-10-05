@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { connectToMongoDB } from "../../../utils/mongodb.js";
+import { connectToMongoDB } from "../../../../utils/mongodb.js";
 import AlertHistoryService from "../../../../services/AlertHistoryService.js";
 
 // GET /api/alerts/history - Get alert history for a user

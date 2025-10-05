@@ -1,112 +1,92 @@
-import { NextResponse } from 'next/server';
-import Redis from 'ioredis';
+import { NextResponse } from "next/server";
+import Redis from "ioredis";
 
+// Redis configuration
 const redis = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
+  host: process.env.REDIS_HOST || "localhost",
   port: process.env.REDIS_PORT || 6379,
+  retryDelayOnFailover: 100,
+  enableReadyCheck: false,
+  maxRetriesPerRequest: null,
   lazyConnect: true,
-  retryDelayOnClusterDown: 300,
-  maxRetriesPerRequest: 3,
 });
-
-let isConnected = false;
-let subscriber = null;
-let activeConnections = new Set();
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
-  const userId = searchParams.get('userId') || 'default';
+  const userId = searchParams.get("userId");
 
-  // Create a ReadableStream for Server-Sent Events
+  if (!userId) {
+    return NextResponse.json({ error: "User ID is required" }, { status: 400 });
+  }
+
+  // Create SSE response
+  const encoder = new TextEncoder();
   const stream = new ReadableStream({
     start(controller) {
-      const connectionId = Date.now();
-      activeConnections.add(connectionId);
+      console.log(`🔌 Alert stream started for user: ${userId}`);
 
-      console.log(`🔌 Alert SSE connection ${connectionId} started for user ${userId}`);
+      // Subscribe to alert triggers for this user
+      const subscriber = new Redis({
+        host: process.env.REDIS_HOST || "localhost",
+        port: process.env.REDIS_PORT || 6379,
+      });
 
-      // Initialize Redis subscriber if not already done
-      if (!subscriber) {
-        subscriber = new Redis({
-          host: process.env.REDIS_HOST || 'localhost',
-          port: process.env.REDIS_PORT || 6379,
-          lazyConnect: true,
-        });
-
-        subscriber.subscribe('alert:triggers', (err, count) => {
-          if (err) {
-            console.error('❌ Redis subscription error:', err);
-            return;
-          }
-          console.log(`✅ Subscribed to alert:triggers (${count} channels)`);
-        });
-
-        subscriber.on('message', (channel, message) => {
-          if (channel === 'alert:triggers') {
-            try {
-              const alertData = JSON.parse(message);
-              
-              // Broadcast to all active connections
-              activeConnections.forEach(id => {
-                const encoder = new TextEncoder();
-                const data = `data: ${JSON.stringify(alertData)}\n\n`;
-                controller.enqueue(encoder.encode(data));
-              });
-              
-              console.log(`📡 Broadcasting alert to ${activeConnections.size} connections`);
-            } catch (error) {
-              console.error('❌ Error processing alert message:', error);
-            }
-          }
-        });
-
-        subscriber.on('error', (err) => {
-          console.error('❌ Redis subscriber error:', err);
-        });
-      }
-
-      // Send initial connection message
-      const encoder = new TextEncoder();
-      const initMessage = `data: ${JSON.stringify({
-        type: 'connected',
-        userId,
-        timestamp: new Date().toISOString()
-      })}\n\n`;
-      controller.enqueue(encoder.encode(initMessage));
-
-      // Heartbeat to keep connection alive
-      const heartbeatInterval = setInterval(() => {
-        try {
-          const heartbeatMessage = `data: ${JSON.stringify({
-            type: 'heartbeat',
-            timestamp: new Date().toISOString()
-          })}\n\n`;
-          controller.enqueue(encoder.encode(heartbeatMessage));
-        } catch (error) {
-          console.error('❌ Error sending heartbeat:', error);
-          clearInterval(heartbeatInterval);
+      subscriber.subscribe("alert:triggers", (err) => {
+        if (err) {
+          console.error("❌ Redis subscription error:", err);
+          return;
         }
-      }, 30000); // Every 30 seconds
+        console.log("✅ Subscribed to alert:triggers channel");
+      });
 
-      // Cleanup on connection close
-      const cleanup = () => {
-        activeConnections.delete(connectionId);
-        clearInterval(heartbeatInterval);
-        console.log(`🔌 Alert SSE connection ${connectionId} closed`);
-      };
+      subscriber.on("message", (channel, message) => {
+        try {
+          const alertData = JSON.parse(message);
 
-      // Handle connection close
-      request.signal?.addEventListener('abort', cleanup);
-    }
+          // Only send alerts for this user
+          if (alertData.userId === userId) {
+            console.log("🚨 Alert triggered for user:", userId, alertData);
+
+            const data = JSON.stringify({
+              type: "alert_triggered",
+              data: alertData,
+            });
+
+            controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+          }
+        } catch (error) {
+          console.error("❌ Error parsing alert message:", error);
+        }
+      });
+
+      // Send heartbeat every 30 seconds
+      const heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ type: "heartbeat" })}\n\n`)
+          );
+        } catch (error) {
+          console.error("❌ Heartbeat error:", error);
+          clearInterval(heartbeat);
+        }
+      }, 30000);
+
+      // Cleanup on close
+      request.signal.addEventListener("abort", () => {
+        console.log("🔌 Alert stream closed for user:", userId);
+        clearInterval(heartbeat);
+        subscriber.disconnect();
+      });
+    },
   });
 
-  return new NextResponse(stream, {
+  return new Response(stream, {
     headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Cache-Control',
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "Cache-Control",
     },
   });
 }
