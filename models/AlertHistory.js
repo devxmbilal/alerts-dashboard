@@ -104,7 +104,6 @@ const alertHistorySchema = new mongoose.Schema(
 // Indexes for efficient querying
 alertHistorySchema.index({ userId: 1, createdAt: -1 });
 alertHistorySchema.index({ symbol: 1, createdAt: -1 });
-alertHistorySchema.index({ alertId: 1 });
 alertHistorySchema.index({ status: 1, createdAt: -1 });
 
 // Update the updatedAt field before saving
