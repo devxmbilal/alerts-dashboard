@@ -51,8 +51,6 @@ const userSchema = new mongoose.Schema(
 );
 
 // Index for efficient querying
-userSchema.index({ username: 1 });
-userSchema.index({ email: 1 });
 userSchema.index({ isActive: 1 });
 
 // Hash password before saving
@@ -86,4 +84,4 @@ userSchema.methods.toJSON = function () {
   return userObject;
 };
 
-export default mongoose.model("User", userSchema);
+export default mongoose.models.User || mongoose.model("User", userSchema);

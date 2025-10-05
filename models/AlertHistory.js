@@ -112,4 +112,5 @@ alertHistorySchema.pre("save", function (next) {
   next();
 });
 
-export default mongoose.model("AlertHistory", alertHistorySchema);
+export default mongoose.models.AlertHistory ||
+  mongoose.model("AlertHistory", alertHistorySchema);
