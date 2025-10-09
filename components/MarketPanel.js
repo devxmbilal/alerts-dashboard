@@ -30,6 +30,7 @@ import {
   Checkbox,
   FormControlLabel,
   Button,
+  CircularProgress,
   useTheme,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
@@ -130,6 +131,7 @@ const MarketPanel = forwardRef(
     // State for favorites from MongoDB
     const [userFavorites, setUserFavorites] = useState(new Set());
     const [favoritesLoading, setFavoritesLoading] = useState(false);
+    const [bulkOperationLoading, setBulkOperationLoading] = useState(false);
 
     // Load user favorites from MongoDB
     const loadUserFavorites = useCallback(async () => {
@@ -183,6 +185,12 @@ const MarketPanel = forwardRef(
             ? "/api/favorites/remove"
             : "/api/favorites/add";
 
+          console.log(
+            `🔄 ${
+              wasFavorite ? "Removing" : "Adding"
+            } ${symbol} to favorites...`
+          );
+
           const response = await fetch(endpoint, {
             method: "POST",
             headers: {
@@ -195,6 +203,11 @@ const MarketPanel = forwardRef(
           if (response.ok) {
             const data = await response.json();
             setUserFavorites(new Set(data.favorites || []));
+            console.log(
+              `✅ ${symbol} ${
+                wasFavorite ? "removed from" : "added to"
+              } favorites`
+            );
 
             // Also update socket context for real-time updates
             socketToggleFavorite(symbol);
@@ -279,6 +292,8 @@ const MarketPanel = forwardRef(
     // Toggle all visible pairs favorites (add all or remove all)
     const handleAddAllFavorites = useCallback(async () => {
       try {
+        setBulkOperationLoading(true);
+
         const token = localStorage.getItem("token");
         if (!token) {
           console.error("No authentication token found");
@@ -290,46 +305,60 @@ const MarketPanel = forwardRef(
           isFavorite(coin.symbol)
         );
 
+        let symbolsToProcess = [];
+        let action = "";
+
         if (allFavorited) {
           // Remove all from favorites
-          const symbolsToRemove = filteredData
+          symbolsToProcess = filteredData
             .filter((coin) => isFavorite(coin.symbol))
             .map((coin) => coin.symbol);
-
-          for (const symbol of symbolsToRemove) {
-            await fetch("/api/favorites/remove", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify({ symbol }),
-            });
-          }
+          action = "remove";
         } else {
           // Add all to favorites
-          const symbolsToAdd = filteredData
+          symbolsToProcess = filteredData
             .filter((coin) => !isFavorite(coin.symbol))
             .map((coin) => coin.symbol);
-
-          for (const symbol of symbolsToAdd) {
-            await fetch("/api/favorites/add", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify({ symbol }),
-            });
-          }
+          action = "add";
         }
 
-        // Reload favorites to update UI
-        await loadUserFavorites();
+        if (symbolsToProcess.length === 0) {
+          console.log("No symbols to process");
+          return;
+        }
+
+        console.log(
+          `🚀 Bulk ${action}ing ${symbolsToProcess.length} favorites...`
+        );
+
+        // Single API call for all symbols
+        const response = await fetch("/api/favorites/bulk", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            symbols: symbolsToProcess,
+            action: action,
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          console.log(`✅ Bulk ${action} completed:`, data.message);
+
+          // Update local state immediately
+          setUserFavorites(new Set(data.favorites || []));
+        } else {
+          console.error(`❌ Bulk ${action} failed:`, await response.text());
+        }
       } catch (error) {
         console.error("Error toggling all favorites:", error);
+      } finally {
+        setBulkOperationLoading(false);
       }
-    }, [filteredData, isFavorite, loadUserFavorites]);
+    }, [filteredData, isFavorite]);
 
     // Check if all visible pairs are favorited (for button text)
     const allFavorited = useMemo(() => {
@@ -495,7 +524,16 @@ const MarketPanel = forwardRef(
               variant="outlined"
               size="small"
               onClick={handleAddAllFavorites}
-              startIcon={allFavorited ? <StarBorderIcon /> : <StarIcon />}
+              disabled={bulkOperationLoading}
+              startIcon={
+                bulkOperationLoading ? (
+                  <CircularProgress size={16} />
+                ) : allFavorited ? (
+                  <StarBorderIcon />
+                ) : (
+                  <StarIcon />
+                )
+              }
               sx={{
                 color: allFavorited ? "#ff6b6b" : "#ffd700",
                 borderColor: allFavorited ? "#ff6b6b" : "#ffd700",
@@ -505,11 +543,21 @@ const MarketPanel = forwardRef(
                     ? "rgba(255, 107, 107, 0.1)"
                     : "rgba(255, 215, 0, 0.1)",
                 },
+                "&:disabled": {
+                  color: "#666",
+                  borderColor: "#444",
+                },
                 fontSize: "0.8rem",
                 px: 2,
               }}
             >
-              {allFavorited ? "Remove All Favorites" : "Add All Favorites"}
+              {bulkOperationLoading
+                ? allFavorited
+                  ? "Removing..."
+                  : "Adding..."
+                : allFavorited
+                ? "Remove All Favorites"
+                : "Add All Favorites"}
             </Button>
 
             {checkedPairs.size > 0 && (
