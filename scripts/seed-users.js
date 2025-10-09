@@ -1,5 +1,5 @@
-const { connectToMongoDB } = require("../utils/mongodb");
-const UserService = require("../services/UserService");
+import { connectToMongoDB } from "../utils/mongodb.js";
+import UserService from "../services/UserService.js";
 
 async function seedUsers() {
   try {
@@ -63,7 +63,7 @@ async function seedUsers() {
 }
 
 // Run seeding if called directly
-if (require.main === module) {
+if (import.meta.url === `file://${process.argv[1]}`) {
   seedUsers()
     .then(() => {
       console.log("✅ Seeding completed");
@@ -75,4 +75,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = seedUsers;
+export default seedUsers;

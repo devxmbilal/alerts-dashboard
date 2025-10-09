@@ -127,35 +127,96 @@ const MarketPanel = forwardRef(
       }, 300);
     }, []);
 
-    // Check if coin is favorite
+    // State for favorites from MongoDB
+    const [userFavorites, setUserFavorites] = useState(new Set());
+    const [favoritesLoading, setFavoritesLoading] = useState(false);
+
+    // Load user favorites from MongoDB
+    const loadUserFavorites = useCallback(async () => {
+      try {
+        setFavoritesLoading(true);
+        const token = localStorage.getItem("token");
+        if (!token) return;
+
+        const response = await fetch("/api/favorites/list", {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setUserFavorites(new Set(data.favorites || []));
+        }
+      } catch (error) {
+        console.error("Error loading favorites:", error);
+      } finally {
+        setFavoritesLoading(false);
+      }
+    }, []);
+
+    // Load favorites on mount
+    useEffect(() => {
+      loadUserFavorites();
+    }, [loadUserFavorites]);
+
+    // Check if coin is favorite (using MongoDB favorites)
     const isFavorite = useCallback(
       (symbol) => {
-        const coin = marketData.find((c) => c.symbol === symbol);
-        return coin ? coin.isFavorite : false;
+        return userFavorites.has(symbol);
       },
-      [marketData]
+      [userFavorites]
     );
 
-    // Toggle favorite using socket context
+    // Toggle favorite using API
     const toggleFavorite = useCallback(
-      (symbol) => {
-        const wasFavorite = isFavorite(symbol);
-        socketToggleFavorite(symbol);
+      async (symbol) => {
+        try {
+          const token = localStorage.getItem("token");
+          if (!token) {
+            console.error("No authentication token found");
+            return;
+          }
 
-        // If unfavoriting, remove any existing alerts for this symbol
-        if (wasFavorite) {
-          removeAlert(symbol);
+          const wasFavorite = isFavorite(symbol);
+          const endpoint = wasFavorite
+            ? "/api/favorites/remove"
+            : "/api/favorites/add";
+
+          const response = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ symbol }),
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            setUserFavorites(new Set(data.favorites || []));
+
+            // Also update socket context for real-time updates
+            socketToggleFavorite(symbol);
+
+            // If unfavoriting, remove any existing alerts for this symbol
+            if (wasFavorite) {
+              removeAlert(symbol);
+            }
+          } else {
+            console.error("Failed to toggle favorite:", await response.text());
+          }
+        } catch (error) {
+          console.error("Error toggling favorite:", error);
         }
       },
-      [socketToggleFavorite, isFavorite, removeAlert]
+      [isFavorite, socketToggleFavorite, removeAlert]
     );
 
-    // Get favorite symbols
+    // Get favorite symbols (using MongoDB favorites)
     const getFavoriteSymbols = useCallback(() => {
-      return marketData
-        .filter((coin) => coin.isFavorite)
-        .map((coin) => coin.symbol);
-    }, [marketData]);
+      return Array.from(userFavorites);
+    }, [userFavorites]);
 
     // Toggle pair selection
     const togglePairSelection = useCallback((symbol) => {
@@ -180,15 +241,28 @@ const MarketPanel = forwardRef(
 
     // Filter and sort data using socket context
     const filteredData = useMemo(() => {
-      const data = getFilteredMarketData({
+      let data = getFilteredMarketData({
         search: searchTerm,
-        favorites: view === "favorites",
+        favorites: false, // We'll handle favorites filtering manually
         sortBy: "symbol",
       });
+
+      // If favorites view is selected, filter by user's favorites from MongoDB
+      if (view === "favorites") {
+        data = data.filter((coin) => userFavorites.has(coin.symbol));
+      }
+
       console.log("📊 MarketPanel filteredData updated:", data.length, "items");
       console.log("📊 MarketPanel marketData size:", marketData.length);
+      console.log("📊 MarketPanel userFavorites:", Array.from(userFavorites));
       return data;
-    }, [getFilteredMarketData, searchTerm, view, marketData.length]);
+    }, [
+      getFilteredMarketData,
+      searchTerm,
+      view,
+      marketData.length,
+      userFavorites,
+    ]);
 
     // Select all pairs
     const handleSelectAll = useCallback(() => {
@@ -203,28 +277,59 @@ const MarketPanel = forwardRef(
     }, [selectAllChecked, filteredData]);
 
     // Toggle all visible pairs favorites (add all or remove all)
-    const handleAddAllFavorites = useCallback(() => {
-      // Check if all visible pairs are already favorited
-      const allFavorited = filteredData.every((coin) =>
-        isFavorite(coin.symbol)
-      );
+    const handleAddAllFavorites = useCallback(async () => {
+      try {
+        const token = localStorage.getItem("token");
+        if (!token) {
+          console.error("No authentication token found");
+          return;
+        }
 
-      if (allFavorited) {
-        // Remove all from favorites
-        filteredData.forEach((coin) => {
-          if (isFavorite(coin.symbol)) {
-            toggleFavorite(coin.symbol);
+        // Check if all visible pairs are already favorited
+        const allFavorited = filteredData.every((coin) =>
+          isFavorite(coin.symbol)
+        );
+
+        if (allFavorited) {
+          // Remove all from favorites
+          const symbolsToRemove = filteredData
+            .filter((coin) => isFavorite(coin.symbol))
+            .map((coin) => coin.symbol);
+
+          for (const symbol of symbolsToRemove) {
+            await fetch("/api/favorites/remove", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({ symbol }),
+            });
           }
-        });
-      } else {
-        // Add all to favorites
-        filteredData.forEach((coin) => {
-          if (!isFavorite(coin.symbol)) {
-            toggleFavorite(coin.symbol);
+        } else {
+          // Add all to favorites
+          const symbolsToAdd = filteredData
+            .filter((coin) => !isFavorite(coin.symbol))
+            .map((coin) => coin.symbol);
+
+          for (const symbol of symbolsToAdd) {
+            await fetch("/api/favorites/add", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({ symbol }),
+            });
           }
-        });
+        }
+
+        // Reload favorites to update UI
+        await loadUserFavorites();
+      } catch (error) {
+        console.error("Error toggling all favorites:", error);
       }
-    }, [filteredData, isFavorite, toggleFavorite]);
+    }, [filteredData, isFavorite, loadUserFavorites]);
 
     // Check if all visible pairs are favorited (for button text)
     const allFavorited = useMemo(() => {

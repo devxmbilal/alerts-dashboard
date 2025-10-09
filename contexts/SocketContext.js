@@ -272,7 +272,7 @@ export const SocketProvider = ({ children }) => {
     [getAllMarketData]
   );
 
-  // Toggle favorite status
+  // Toggle favorite status (now just for UI updates, actual persistence handled by API)
   const toggleFavorite = useCallback((symbol) => {
     setMarketData((prev) => {
       const newMap = new Map(prev);

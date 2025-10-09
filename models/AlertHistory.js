@@ -21,9 +21,11 @@ const alertHistorySchema = new mongoose.Schema(
     alertConditions: {
       // Store the original alert conditions
       minDaily: String,
-      changePercent: String,
-      timeframe: String,
-      percentage: String,
+      changePercent: {
+        timeframe: String,
+        percentage: String,
+      },
+      alertCounttimeframe: String,
       candle: {
         timeframes: [String],
         condition: String,

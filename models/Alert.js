@@ -18,19 +18,19 @@ const alertSchema = new mongoose.Schema(
         type: String,
         required: true,
       },
-      changePercent: {
-        type: String,
-        required: true,
+       changePercent: {
+        timeframe: {
+          type: String,
+          required: true,
+        },
+        percentage: {
+          type: String,
+          required: true,
+        },
       },
-      timeframe: {
+      alertCounttimeframe: {
         type: String,
-        required: true,
       },
-      percentage: {
-        type: String,
-        required: true,
-      },
-
       // Additional conditions (optional)
       candle: {
         timeframes: [String],

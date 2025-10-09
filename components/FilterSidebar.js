@@ -171,6 +171,50 @@ const FilterSidebar = forwardRef(
     const [createdAlerts, setCreatedAlerts] = useState([]);
     const [errorMessage, setErrorMessage] = useState("");
     const [successMessage, setSuccessMessage] = useState("");
+    const [favoriteCount, setFavoriteCount] = useState(0);
+
+    // Get favorite symbols from localStorage (fallback) or API
+    const getFavoriteSymbols = useCallback(async () => {
+      try {
+        const token = localStorage.getItem("token");
+        if (!token) {
+          // Fallback to localStorage for guest users
+          const favorites = JSON.parse(
+            localStorage.getItem("favorites") || "[]"
+          );
+          return favorites;
+        }
+
+        const response = await fetch("/api/favorites/list", {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          return data.favorites || [];
+        }
+
+        // Fallback to localStorage if API fails
+        const favorites = JSON.parse(localStorage.getItem("favorites") || "[]");
+        return favorites;
+      } catch (error) {
+        console.error("Error fetching favorites:", error);
+        // Fallback to localStorage
+        const favorites = JSON.parse(localStorage.getItem("favorites") || "[]");
+        return favorites;
+      }
+    }, []);
+
+    // Load favorite count on mount
+    useEffect(() => {
+      const loadFavoriteCount = async () => {
+        const favorites = await getFavoriteSymbols();
+        setFavoriteCount(favorites.length);
+      };
+      loadFavoriteCount();
+    }, [getFavoriteSymbols]);
 
     // Expose methods to parent
     useImperativeHandle(ref, () => ({
@@ -245,16 +289,9 @@ const FilterSidebar = forwardRef(
       }));
     }, []);
 
-    // Get favorite symbols
-    const getFavoriteSymbols = useCallback(() => {
-      return marketData
-        .filter((coin) => coin.isFavorite)
-        .map((coin) => coin.symbol);
-    }, [marketData]);
-
     // Handle alert creation for favorites
     const handleCreateAlert = useCallback(async () => {
-      const favoriteSymbols = getFavoriteSymbols();
+      const favoriteSymbols = await getFavoriteSymbols();
 
       if (favoriteSymbols.length === 0) {
         setErrorMessage("Please add some coins to favorites first");
@@ -1148,13 +1185,13 @@ const FilterSidebar = forwardRef(
             fullWidth
             variant="contained"
             onClick={handleCreateAlert}
-            disabled={getFavoriteSymbols().length === 0 || isCreating}
+            disabled={favoriteCount === 0 || isCreating}
             startIcon={<NotificationsActiveIcon />}
             sx={{ mb: 1 }}
           >
             {isCreating
               ? "Creating..."
-              : `Create Alerts for ${getFavoriteSymbols().length} Favorites`}
+              : `Create Alerts for ${favoriteCount} Favorites`}
           </Button>
 
           <Button
