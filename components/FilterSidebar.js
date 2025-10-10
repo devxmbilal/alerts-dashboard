@@ -49,6 +49,7 @@ import {
 } from "@mui/icons-material";
 import { useAlert } from "../contexts/AlertContext";
 import { useSocket } from "../contexts/SocketContext";
+import { useFavorites } from "../contexts/FavoritesContext";
 
 // Custom styled components - exact same as client
 const CustomCheckbox = styled((props) => (
@@ -136,10 +137,11 @@ const FilterSidebar = forwardRef(
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down("md"));
 
-    // Alert and Socket contexts
+    // Alert, Socket, and Favorites contexts
     const { createAlertsForSymbols, removeAlertsForSymbols, hasAlert } =
       useAlert();
     const { marketData } = useSocket();
+    const { favoriteCount, getFavoriteSymbols } = useFavorites();
 
     // State management - exact same as client
     const [filters, setFilters] = useState({
@@ -171,50 +173,6 @@ const FilterSidebar = forwardRef(
     const [createdAlerts, setCreatedAlerts] = useState([]);
     const [errorMessage, setErrorMessage] = useState("");
     const [successMessage, setSuccessMessage] = useState("");
-    const [favoriteCount, setFavoriteCount] = useState(0);
-
-    // Get favorite symbols from localStorage (fallback) or API
-    const getFavoriteSymbols = useCallback(async () => {
-      try {
-        const token = localStorage.getItem("token");
-        if (!token) {
-          // Fallback to localStorage for guest users
-          const favorites = JSON.parse(
-            localStorage.getItem("favorites") || "[]"
-          );
-          return favorites;
-        }
-
-        const response = await fetch("/api/favorites/list", {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          return data.favorites || [];
-        }
-
-        // Fallback to localStorage if API fails
-        const favorites = JSON.parse(localStorage.getItem("favorites") || "[]");
-        return favorites;
-      } catch (error) {
-        console.error("Error fetching favorites:", error);
-        // Fallback to localStorage
-        const favorites = JSON.parse(localStorage.getItem("favorites") || "[]");
-        return favorites;
-      }
-    }, []);
-
-    // Load favorite count on mount
-    useEffect(() => {
-      const loadFavoriteCount = async () => {
-        const favorites = await getFavoriteSymbols();
-        setFavoriteCount(favorites.length);
-      };
-      loadFavoriteCount();
-    }, [getFavoriteSymbols]);
 
     // Expose methods to parent
     useImperativeHandle(ref, () => ({

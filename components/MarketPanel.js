@@ -12,6 +12,7 @@ import React, {
 } from "react";
 import { useSocket } from "../contexts/SocketContext";
 import { useAlert } from "../contexts/AlertContext";
+import { useFavorites } from "../contexts/FavoritesContext";
 import {
   Box,
   Paper,
@@ -75,6 +76,12 @@ const MarketPanel = forwardRef(
     } = useSocket();
 
     const { removeAlert } = useAlert();
+    const {
+      favorites: userFavorites,
+      isFavorite,
+      toggleFavorite: contextToggleFavorite,
+      bulkUpdateFavorites,
+    } = useFavorites();
 
     // Debug market data
     useEffect(() => {
@@ -128,105 +135,32 @@ const MarketPanel = forwardRef(
       }, 300);
     }, []);
 
-    // State for favorites from MongoDB
-    const [userFavorites, setUserFavorites] = useState(new Set());
+    // State for UI
     const [favoritesLoading, setFavoritesLoading] = useState(false);
     const [bulkOperationLoading, setBulkOperationLoading] = useState(false);
 
-    // Load user favorites from MongoDB
-    const loadUserFavorites = useCallback(async () => {
-      try {
-        setFavoritesLoading(true);
-        const token = localStorage.getItem("token");
-        if (!token) return;
-
-        const response = await fetch("/api/favorites/list", {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          setUserFavorites(new Set(data.favorites || []));
-        }
-      } catch (error) {
-        console.error("Error loading favorites:", error);
-      } finally {
-        setFavoritesLoading(false);
-      }
-    }, []);
-
-    // Load favorites on mount
-    useEffect(() => {
-      loadUserFavorites();
-    }, [loadUserFavorites]);
-
-    // Check if coin is favorite (using MongoDB favorites)
-    const isFavorite = useCallback(
-      (symbol) => {
-        return userFavorites.has(symbol);
-      },
-      [userFavorites]
-    );
-
-    // Toggle favorite using API
+    // Toggle favorite using context
     const toggleFavorite = useCallback(
       async (symbol) => {
         try {
-          const token = localStorage.getItem("token");
-          if (!token) {
-            console.error("No authentication token found");
-            return;
-          }
-
-          const wasFavorite = isFavorite(symbol);
-          const endpoint = wasFavorite
-            ? "/api/favorites/remove"
-            : "/api/favorites/add";
-
-          console.log(
-            `🔄 ${
-              wasFavorite ? "Removing" : "Adding"
-            } ${symbol} to favorites...`
-          );
-
-          const response = await fetch(endpoint, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({ symbol }),
-          });
-
-          if (response.ok) {
-            const data = await response.json();
-            setUserFavorites(new Set(data.favorites || []));
-            console.log(
-              `✅ ${symbol} ${
-                wasFavorite ? "removed from" : "added to"
-              } favorites`
-            );
-
+          const success = await contextToggleFavorite(symbol);
+          if (success) {
             // Also update socket context for real-time updates
             socketToggleFavorite(symbol);
 
             // If unfavoriting, remove any existing alerts for this symbol
-            if (wasFavorite) {
+            if (isFavorite(symbol)) {
               removeAlert(symbol);
             }
-          } else {
-            console.error("Failed to toggle favorite:", await response.text());
           }
         } catch (error) {
           console.error("Error toggling favorite:", error);
         }
       },
-      [isFavorite, socketToggleFavorite, removeAlert]
+      [contextToggleFavorite, socketToggleFavorite, removeAlert, isFavorite]
     );
 
-    // Get favorite symbols (using MongoDB favorites)
+    // Get favorite symbols (using context)
     const getFavoriteSymbols = useCallback(() => {
       return Array.from(userFavorites);
     }, [userFavorites]);
@@ -294,12 +228,6 @@ const MarketPanel = forwardRef(
       try {
         setBulkOperationLoading(true);
 
-        const token = localStorage.getItem("token");
-        if (!token) {
-          console.error("No authentication token found");
-          return;
-        }
-
         // Check if all visible pairs are already favorited
         const allFavorited = filteredData.every((coin) =>
           isFavorite(coin.symbol)
@@ -331,34 +259,19 @@ const MarketPanel = forwardRef(
           `🚀 Bulk ${action}ing ${symbolsToProcess.length} favorites...`
         );
 
-        // Single API call for all symbols
-        const response = await fetch("/api/favorites/bulk", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            symbols: symbolsToProcess,
-            action: action,
-          }),
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          console.log(`✅ Bulk ${action} completed:`, data.message);
-
-          // Update local state immediately
-          setUserFavorites(new Set(data.favorites || []));
+        // Use context bulk update function
+        const success = await bulkUpdateFavorites(symbolsToProcess, action);
+        if (success) {
+          console.log(`✅ Bulk ${action} completed`);
         } else {
-          console.error(`❌ Bulk ${action} failed:`, await response.text());
+          console.error(`❌ Bulk ${action} failed`);
         }
       } catch (error) {
         console.error("Error toggling all favorites:", error);
       } finally {
         setBulkOperationLoading(false);
       }
-    }, [filteredData, isFavorite]);
+    }, [filteredData, isFavorite, bulkUpdateFavorites]);
 
     // Check if all visible pairs are favorited (for button text)
     const allFavorited = useMemo(() => {
