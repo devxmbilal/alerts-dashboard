@@ -457,7 +457,8 @@ const MarketPanel = forwardRef(
             variant="body2"
             sx={{ color: "#888", mb: 2, fontSize: "0.8rem" }}
           >
-            USDT Pairs• {filteredData.length} pairs
+            USDT Pairs• {filteredData.length} pairs • Favorites•{" "}
+            {userFavorites.size} coins
           </Typography>
 
           {/* View Toggle - exact same as client */}
