@@ -35,7 +35,7 @@ import {
 
 // No mock data - alerts will be loaded from real triggers
 
-const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
+const TriggeredAlertsPanel = ({ onRefresh, onClearAll, onAlertTrigger }) => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("md"));
 
@@ -49,6 +49,33 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Monitor for new alerts and trigger chart switch
+  useEffect(() => {
+    if (alerts.length > 0 && onAlertTrigger) {
+      // Get the most recent alert (first in the array since they're sorted by date desc)
+      const latestAlert = alerts[0];
+
+      // Check if this is a new alert (triggered recently)
+      const now = new Date();
+      const alertTime = new Date(latestAlert.triggeredAt);
+      const timeDiff = now - alertTime;
+
+      // If alert was triggered within the last 30 seconds, switch chart
+      if (timeDiff < 30000) {
+        console.log(
+          `🚨 New alert detected for ${latestAlert.symbol}, switching chart...`
+        );
+        onAlertTrigger({
+          symbol: latestAlert.symbol,
+          price: latestAlert.triggeredPrice,
+          priceChangePercent: latestAlert.priceChangePercent,
+          conditions: latestAlert.conditionsText,
+          triggeredAt: latestAlert.triggeredAt,
+        });
+      }
+    }
+  }, [alerts, onAlertTrigger]);
 
   // Load alerts from database
   const loadAlerts = async () => {
@@ -76,19 +103,25 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll }) => {
           symbol: alert.symbol,
           type: "triggered",
           triggered: true,
-          triggeredAt: new Date(alert.createdAt),
+          triggeredAt: new Date(alert.triggeredAt || alert.createdAt),
           triggeredPrice: alert.triggerData.price,
           triggeredVolume: alert.triggerData.volume,
           priceChangePercent: alert.triggerData.priceChangePercent,
           conditions: alert.alertConditions,
-          conditionsText: `Volume: ${alert.triggerData.volume?.toLocaleString()} | Change: ${alert.triggerData.priceChangePercent?.toFixed(
-            3
-          )}%`,
-          targetValue: alert.alertConditions.percentage,
+          conditionsText:
+            alert.conditions ||
+            `Volume: ${alert.triggerData.volume?.toLocaleString()} | Change: ${alert.triggerData.priceChangePercent?.toFixed(
+              3
+            )}%`,
+          targetValue: alert.alertConditions.changePercent?.percentage,
           actualValue: Math.abs(alert.triggerData.priceChangePercent || 0),
-          timeframe: alert.alertConditions.timeframe,
+          timeframe: alert.alertConditions.changePercent?.timeframe,
           volume24h: alert.triggerData.volume,
           price24hChange: alert.triggerData.priceChangePercent,
+          high: alert.triggerData.high,
+          low: alert.triggerData.low,
+          open: alert.triggerData.open,
+          close: alert.triggerData.close,
           notificationType: "both",
           notificationSent: true,
         }));

@@ -255,7 +255,7 @@ const FilterSidebar = forwardRef(
         return;
       }
 
-      // Check if Min Daily and Change % conditions are set
+      // Check if Min Daily and Change % conditions are set (required)
       const hasMinDaily = Object.keys(filters.minDaily).length > 0;
       const hasChangePercent =
         Object.keys(filters.changePercent).length > 0 &&
@@ -276,7 +276,7 @@ const FilterSidebar = forwardRef(
           return;
         }
 
-        // Create alert conditions - include ALL conditions from filters
+        // Create alert conditions - Min Daily and Change % are mandatory
         const alertConditions = {
           // Basic conditions (required)
           minDaily: Object.keys(filters.minDaily)[0], // Get selected min daily value
@@ -284,56 +284,54 @@ const FilterSidebar = forwardRef(
             timeframe: Object.keys(filters.changePercent)[0], // Get selected timeframe
             percentage: filters.changePercent.percentage,
           },
-
-          // Additional conditions (optional but will be saved if set)
-          alertCount:
-            Object.keys(filters.alertCount).length > 0
-              ? {
-                  timeframe: Object.keys(filters.alertCount)[0],
-                }
-              : undefined,
-          candle:
-            Object.keys(filters.candle).length > 0
-              ? {
-                  timeframes: Object.keys(filters.candle).filter(
-                    (key) => key !== "condition"
-                  ),
-                  condition: filters.candle.condition || "CANDLE_ABOVE_OPEN",
-                }
-              : undefined,
-          rsiRange:
-            Object.keys(filters.rsiRange).length > 0
-              ? {
-                  timeframes: Object.keys(filters.rsiRange).filter(
-                    (key) => !["period", "level", "condition"].includes(key)
-                  ),
-                  period: filters.rsiRange.period || "14",
-                  level: filters.rsiRange.level || "70",
-                  condition: filters.rsiRange.condition || "ABOVE",
-                }
-              : undefined,
-          volume:
-            Object.keys(filters.volume).length > 0
-              ? {
-                  timeframes: Object.keys(filters.volume).filter(
-                    (key) => !["condition", "percentage"].includes(key)
-                  ),
-                  condition: filters.volume.condition || "INCREASING",
-                  percentage: filters.volume.percentage || "",
-                }
-              : undefined,
-          ema:
-            Object.keys(filters.ema).length > 0
-              ? {
-                  timeframes: Object.keys(filters.ema).filter(
-                    (key) => !["fast", "slow", "condition"].includes(key)
-                  ),
-                  fast: filters.ema.fast || "12",
-                  slow: filters.ema.slow || "26",
-                  condition: filters.ema.condition || "ABOVE",
-                }
-              : undefined,
         };
+
+        if (hasAlertCount) {
+          alertConditions.alertCount = {
+            timeframe: Object.keys(filters.alertCount)[0],
+          };
+        }
+
+        if (hasCandle) {
+          alertConditions.candle = {
+            timeframes: Object.keys(filters.candle).filter(
+              (key) => key !== "condition"
+            ),
+            condition: filters.candle.condition || "CANDLE_ABOVE_OPEN",
+          };
+        }
+
+        if (hasRsiRange) {
+          alertConditions.rsiRange = {
+            timeframes: Object.keys(filters.rsiRange).filter(
+              (key) => !["period", "level", "condition"].includes(key)
+            ),
+            period: filters.rsiRange.period || "14",
+            level: filters.rsiRange.level || "70",
+            condition: filters.rsiRange.condition || "ABOVE",
+          };
+        }
+
+        if (hasVolume) {
+          alertConditions.volume = {
+            timeframes: Object.keys(filters.volume).filter(
+              (key) => !["condition", "percentage"].includes(key)
+            ),
+            condition: filters.volume.condition || "INCREASING",
+            percentage: filters.volume.percentage || "",
+          };
+        }
+
+        if (hasEma) {
+          alertConditions.ema = {
+            timeframes: Object.keys(filters.ema).filter(
+              (key) => !["fast", "slow", "condition"].includes(key)
+            ),
+            fast: filters.ema.fast || "12",
+            slow: filters.ema.slow || "26",
+            condition: filters.ema.condition || "ABOVE",
+          };
+        }
 
         // Remove undefined conditions
         Object.keys(alertConditions).forEach((key) => {

@@ -31,11 +31,12 @@ export async function GET(request) {
       );
     } else {
       // Get alert history with pagination
-      alertHistory = await AlertHistoryService.getAlertHistoryWithPagination(
+      const result = await AlertHistoryService.getAlertHistoryWithPagination(
         userId,
         page,
         limit
       );
+      alertHistory = result.data; // Extract data from pagination result
     }
 
     return NextResponse.json({

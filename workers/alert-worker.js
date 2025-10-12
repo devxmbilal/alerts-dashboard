@@ -2,6 +2,10 @@ import Redis from "ioredis";
 import { connectToMongoDB } from "../utils/mongodb.js";
 import AlertService from "../services/AlertService.js";
 import AlertHistoryService from "../services/AlertHistoryService.js";
+import { isAlertLocked, updateAlertLock } from "../utils/alertLock.js";
+import Alert from "../models/Alert.js";
+import WebSocketService from "../services/WebSocketService.js";
+import RealTimeAlertProcessor from "../services/RealTimeAlertProcessor.js";
 
 class AlertWorker {
   constructor() {
@@ -18,7 +22,7 @@ class AlertWorker {
   }
 
   async start() {
-    console.log("🚀 Starting Alert Worker...");
+    console.log("🚀 Starting Real-Time Alert Worker...");
 
     try {
       // Connect to MongoDB
@@ -28,98 +32,37 @@ class AlertWorker {
       await this.redis.ping();
       console.log("✅ Connected to Redis");
 
-      // Subscribe to price updates
-      await this.subscribeToPriceUpdates();
+      // Load all active alerts into memory
+      await RealTimeAlertProcessor.loadAllActiveAlerts();
+      console.log("✅ Loaded active alerts into memory");
+
+      // Connect to WebSocket for real-time data
+      await WebSocketService.connect();
+      console.log("✅ Connected to Binance WebSocket");
+
+      // Subscribe to all price updates
+      WebSocketService.subscribeToAll((priceData) => {
+        this.handlePriceUpdate(priceData);
+      });
 
       this.isRunning = true;
-      console.log("✅ Alert Worker started successfully");
+      console.log("✅ Real-Time Alert Worker started successfully");
+      console.log("🔥 Monitoring live market data for instant alerts...");
     } catch (error) {
       console.error("❌ Alert Worker startup failed:", error);
       throw error;
     }
   }
 
-  async subscribeToPriceUpdates() {
-    // Subscribe to market updates channel
-    this.redis.subscribe("market:updates", (err, count) => {
-      if (err) {
-        console.error("❌ Redis subscription error:", err);
-        return;
-      }
-      console.log(`✅ Subscribed to market:updates (${count} channels)`);
-    });
-
-    // Listen for messages
-    this.redis.on("message", async (channel, message) => {
-      if (channel === "market:updates") {
-        try {
-          const data = JSON.parse(message);
-          if (data.type === "market_update" && data.symbol) {
-            await this.processPriceUpdate(data);
-          }
-        } catch (error) {
-          console.error("❌ Error processing price update:", error);
-        }
-      }
-    });
-
-    // Handle Redis connection events
-    this.redis.on("error", (err) => {
-      console.error("❌ Redis error:", err);
-    });
-
-    this.redis.on("connect", () => {
-      console.log("✅ Redis connected");
-    });
-
-    this.redis.on("close", () => {
-      console.log("⚠️ Redis connection closed");
-    });
-  }
-
-  async processPriceUpdate(marketData) {
-    const { symbol, price, volume, priceChangePercent } = marketData;
-
-    if (!symbol || !price || !volume) {
-      return; // Skip invalid data
-    }
-
+  async handlePriceUpdate(priceData) {
     try {
-      // Get all active alerts for this symbol
-      const alerts = await AlertService.getActiveAlertsForSymbol(symbol);
-
-      if (alerts.length === 0) {
-        return; // No alerts for this symbol
-      }
-
-      console.log(`📊 Processing ${alerts.length} alerts for ${symbol}`);
-
-      // Evaluate each alert
-      for (const alert of alerts) {
-        const alertKey = `${alert._id}_${symbol}`;
-
-        // Skip if already processed recently (avoid duplicates)
-        if (this.processedAlerts.has(alertKey)) {
-          continue;
-        }
-
-        const shouldTrigger = await this.evaluateAlertConditions(
-          alert,
-          marketData
-        );
-
-        if (shouldTrigger) {
-          await this.triggerAlert(alert, marketData);
-          this.processedAlerts.add(alertKey);
-
-          // Remove from processed set after 5 minutes to allow re-triggering
-          setTimeout(() => {
-            this.processedAlerts.delete(alertKey);
-          }, 5 * 60 * 1000);
-        }
-      }
+      // Process the price update in real-time
+      await RealTimeAlertProcessor.processPriceUpdate(priceData);
     } catch (error) {
-      console.error(`❌ Error processing alerts for ${symbol}:`, error);
+      console.error(
+        `❌ Error handling price update for ${priceData.symbol}:`,
+        error
+      );
     }
   }
 
@@ -127,6 +70,14 @@ class AlertWorker {
     const { conditions } = alert;
 
     try {
+      // Check if alert is locked due to alert count condition
+      if (isAlertLocked(alert)) {
+        console.log(
+          `🔒 Alert ${alert._id} for ${alert.symbol} is locked until ${alert.conditions.alertCount.lockUntil}`
+        );
+        return false; // Alert is locked, don't trigger
+      }
+
       // Check Min Daily volume condition (required)
       if (conditions.minDaily && marketData.volume) {
         const minVolume = parseFloat(conditions.minDaily);
@@ -140,10 +91,10 @@ class AlertWorker {
       // Check Change % condition (required)
       if (
         conditions.changePercent &&
-        conditions.percentage &&
+        conditions.changePercent.percentage &&
         marketData.priceChangePercent
       ) {
-        const requiredChange = parseFloat(conditions.percentage);
+        const requiredChange = parseFloat(conditions.changePercent.percentage);
         const actualChange = Math.abs(
           parseFloat(marketData.priceChangePercent)
         );
@@ -210,6 +161,34 @@ class AlertWorker {
         );
         if (!emaMatch) {
           return false;
+        }
+      }
+
+      // Check Alert Count conditions (optional) - this is handled by the lock check above
+      // If we reach here and alert count is set, we need to update the lock
+      if (conditions.alertCount && conditions.alertCount.timeframe) {
+        // Update the alert lock after successful trigger
+        const updatedConditions = updateAlertLock(alert);
+
+        // Update the alert in database with new lock time
+        try {
+          await AlertService.updateAlert(alert._id, {
+            conditions: updatedConditions,
+            triggered: true,
+            triggeredAt: new Date(),
+            triggeredPrice: parseFloat(marketData.price),
+            triggeredVolume: parseFloat(marketData.volume),
+            triggeredChange: parseFloat(marketData.priceChangePercent),
+          });
+
+          console.log(
+            `🔒 Alert ${alert._id} for ${alert.symbol} locked until ${updatedConditions.alertCount.lockUntil}`
+          );
+        } catch (error) {
+          console.error(
+            `❌ Error updating alert lock for ${alert.symbol}:`,
+            error
+          );
         }
       }
 

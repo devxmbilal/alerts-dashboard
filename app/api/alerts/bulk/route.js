@@ -3,6 +3,7 @@ import { connectToMongoDB } from "../../../../utils/mongodb.js";
 import { verifyToken } from "../../../../utils/auth.js";
 import { FavoritesCache, AlertsCache } from "../../../../utils/redis.js";
 import { initializeRedis } from "../../../../utils/init-redis.js";
+import { calculateLockTime } from "../../../../utils/alertLock.js";
 import Alert from "../../../../models/Alert.js";
 
 // POST /api/alerts/bulk - Create alerts for all favorite pairs
@@ -90,71 +91,43 @@ export async function POST(request) {
     );
 
     // Prepare alert documents for bulk insert
-    const alertDocuments = favoriteSymbols.map((symbol) => ({
-      symbol: symbol,
-      userId: decoded.userId,
-      conditions: {
-        // Basic conditions (required)
-        minDaily: conditions.minDaily,
-        changePercent: {
-          timeframe: conditions.changePercent.timeframe,
-          percentage: conditions.changePercent.percentage,
-        },
-        // Optional conditions
-        alertCount: conditions.alertCount
-          ? {
-              timeframe: conditions.alertCount.timeframe,
-            }
-          : undefined,
-        candle: conditions.candle
-          ? {
-              timeframes: conditions.candle.timeframes || [],
-              condition: conditions.candle.condition || "CANDLE_ABOVE_OPEN",
-            }
-          : undefined,
-        rsiRange: conditions.rsiRange
-          ? {
-              timeframes: conditions.rsiRange.timeframes || [],
-              period: conditions.rsiRange.period || "14",
-              level: conditions.rsiRange.level || "70",
-              condition: conditions.rsiRange.condition || "ABOVE",
-            }
-          : undefined,
-        volume: conditions.volume
-          ? {
-              timeframes: conditions.volume.timeframes || [],
-              condition: conditions.volume.condition || "INCREASING",
-              percentage: conditions.volume.percentage,
-            }
-          : undefined,
-        ema: conditions.ema
-          ? {
-              timeframes: conditions.ema.timeframes || [],
-              fast: conditions.ema.fast || "12",
-              slow: conditions.ema.slow || "26",
-              condition: conditions.ema.condition || "ABOVE",
-            }
-          : undefined,
-      },
-      status: "active",
-      triggered: false,
-      notificationSettings: notificationSettings || {
-        email: false,
-        telegram: false,
-        webhook: false,
-      },
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    }));
+    const alertDocuments = favoriteSymbols.map((symbol) => {
+      let alertConditions = { ...conditions };
 
-    // Remove undefined optional conditions
-    alertDocuments.forEach((alert) => {
-      Object.keys(alert.conditions).forEach((key) => {
-        if (alert.conditions[key] === undefined) {
-          delete alert.conditions[key];
+      // If alert count is set, calculate initial lock time
+      if (conditions.alertCount && conditions.alertCount.timeframe) {
+        try {
+          const lockUntil = calculateLockTime(conditions.alertCount.timeframe);
+          alertConditions = {
+            ...alertConditions,
+            alertCount: {
+              ...alertConditions.alertCount,
+              lockUntil: lockUntil,
+              lastTriggered: null,
+            },
+          };
+        } catch (error) {
+          console.error(`❌ Error calculating lock time for ${symbol}:`, error);
         }
-      });
+      }
+
+      return {
+        symbol: symbol,
+        userId: decoded.userId,
+        conditions: alertConditions,
+        status: "active",
+        triggered: false,
+        notificationSettings: notificationSettings || {
+          email: false,
+          telegram: false,
+          webhook: false,
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
     });
+
+    // No need to remove undefined conditions since we only pass set conditions
 
     // Delete existing alerts for these symbols first
     await Alert.deleteMany({

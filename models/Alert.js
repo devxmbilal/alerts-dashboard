@@ -32,6 +32,12 @@ const alertSchema = new mongoose.Schema(
         timeframe: {
           type: String,
         },
+        lockUntil: {
+          type: Date,
+        },
+        lastTriggered: {
+          type: Date,
+        },
       },
       // Additional conditions (optional)
       candle: {

@@ -2,29 +2,33 @@ import AlertHistory from "../models/AlertHistory.js";
 
 class AlertHistoryService {
   // Create alert history entry when alert is triggered
-  static async createAlertHistory(alert, triggerData) {
+  static async createAlertHistory(alertHistoryData) {
     try {
       const alertHistory = new AlertHistory({
-        alertId: alert._id,
-        userId: alert.userId,
-        symbol: alert.symbol,
-        alertConditions: alert.conditions,
+        alertId: alertHistoryData.alertId,
+        userId: alertHistoryData.userId,
+        symbol: alertHistoryData.symbol,
+        alertConditions: alertHistoryData.alertConditions,
+        conditions: alertHistoryData.conditions,
         triggerData: {
-          price: parseFloat(triggerData.price),
-          volume: parseFloat(triggerData.volume),
-          priceChangePercent: parseFloat(triggerData.priceChangePercent),
-          timestamp: new Date(),
+          price: parseFloat(alertHistoryData.triggerData.price),
+          priceChange: parseFloat(alertHistoryData.triggerData.priceChange),
+          priceChangePercent: parseFloat(
+            alertHistoryData.triggerData.priceChangePercent
+          ),
+          volume: parseFloat(alertHistoryData.triggerData.volume),
+          high: parseFloat(alertHistoryData.triggerData.high),
+          low: parseFloat(alertHistoryData.triggerData.low),
+          open: parseFloat(alertHistoryData.triggerData.open),
+          close: parseFloat(alertHistoryData.triggerData.close),
+          timestamp: alertHistoryData.triggerData.timestamp,
         },
-        notificationSent: {
-          email: alert.notificationSettings?.email || false,
-          telegram: alert.notificationSettings?.telegram || false,
-          webhook: alert.notificationSettings?.webhook || false,
-        },
+        triggeredAt: alertHistoryData.triggeredAt,
         status: "triggered",
       });
 
       await alertHistory.save();
-      console.log(`📝 Alert history created for ${alert.symbol}`);
+      console.log(`📝 Alert history created for ${alertHistoryData.symbol}`);
       return alertHistory;
     } catch (error) {
       console.error("❌ Error creating alert history:", error);

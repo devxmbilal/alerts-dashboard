@@ -25,7 +25,11 @@ const alertHistorySchema = new mongoose.Schema(
         timeframe: String,
         percentage: String,
       },
-      alertCounttimeframe: String,
+      alertCount: {
+        timeframe: String,
+        lockUntil: Date,
+        lastTriggered: Date,
+      },
       candle: {
         timeframes: [String],
         condition: String,
@@ -48,13 +52,17 @@ const alertHistorySchema = new mongoose.Schema(
         condition: String,
       },
     },
+    conditions: {
+      type: String,
+      required: true,
+    },
     triggerData: {
       // Data when alert was triggered
       price: {
         type: Number,
         required: true,
       },
-      volume: {
+      priceChange: {
         type: Number,
         required: true,
       },
@@ -62,10 +70,35 @@ const alertHistorySchema = new mongoose.Schema(
         type: Number,
         required: true,
       },
-      timestamp: {
-        type: Date,
-        default: Date.now,
+      volume: {
+        type: Number,
+        required: true,
       },
+      high: {
+        type: Number,
+        required: true,
+      },
+      low: {
+        type: Number,
+        required: true,
+      },
+      open: {
+        type: Number,
+        required: true,
+      },
+      close: {
+        type: Number,
+        required: true,
+      },
+      timestamp: {
+        type: Number,
+        required: true,
+      },
+    },
+    triggeredAt: {
+      type: Date,
+      required: true,
+      default: Date.now,
     },
     notificationSent: {
       email: {
@@ -107,6 +140,8 @@ const alertHistorySchema = new mongoose.Schema(
 alertHistorySchema.index({ userId: 1, createdAt: -1 });
 alertHistorySchema.index({ symbol: 1, createdAt: -1 });
 alertHistorySchema.index({ status: 1, createdAt: -1 });
+alertHistorySchema.index({ triggeredAt: -1 });
+alertHistorySchema.index({ alertId: 1, triggeredAt: -1 });
 
 // Update the updatedAt field before saving
 alertHistorySchema.pre("save", function (next) {

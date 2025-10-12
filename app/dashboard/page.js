@@ -23,6 +23,7 @@ import TradingViewChart from "../../components/TradingViewChart";
 import MarketPanel from "../../components/MarketPanel";
 import FilterSidebar from "../../components/FilterSidebar";
 import TriggeredAlertsPanel from "../../components/TriggeredAlertsPanel";
+import RealTimeNotifications from "../../components/RealTimeNotifications";
 import { SocketProvider } from "../../contexts/SocketContext";
 import { AlertProvider } from "../../contexts/AlertContext";
 import { FavoritesProvider } from "../../contexts/FavoritesContext";
@@ -87,9 +88,10 @@ export default function Dashboard() {
 
   // State management
   const [selectedCoin, setSelectedCoin] = useState("BTCUSDT");
-  const [selectedTimeframe, setSelectedTimeframe] = useState("1h");
+  const [selectedTimeframe, setSelectedTimeframe] = useState("15m");
   const [lastTriggeredSymbol, setLastTriggeredSymbol] = useState(null);
   const [alerts, setAlerts] = useState([]);
+  const [chartSwitchNotification, setChartSwitchNotification] = useState(null);
 
   // Mobile responsive state
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
@@ -153,6 +155,36 @@ export default function Dashboard() {
     if (isMobile) {
       setCurrentMobileView("chart");
       setMobileBottomNav(0);
+    }
+  };
+
+  // Handle alert trigger - switch chart to triggered pair
+  const handleAlertTrigger = (alertData) => {
+    if (alertData && alertData.symbol) {
+      console.log(
+        `🚨 Alert triggered for ${alertData.symbol}, switching chart...`
+      );
+      setSelectedCoin(alertData.symbol);
+      setLastTriggeredSymbol(alertData.symbol);
+
+      // Show notification
+      setChartSwitchNotification({
+        symbol: alertData.symbol,
+        price: alertData.price,
+        priceChangePercent: alertData.priceChangePercent,
+        timestamp: new Date(),
+      });
+
+      // Auto-hide notification after 5 seconds
+      setTimeout(() => {
+        setChartSwitchNotification(null);
+      }, 5000);
+
+      // Switch to chart view on mobile
+      if (isMobile) {
+        setCurrentMobileView("chart");
+        setMobileBottomNav(0);
+      }
     }
   };
 
@@ -246,7 +278,7 @@ export default function Dashboard() {
                 timeframe={selectedTimeframe}
               />
               <Box sx={{ height: "350px", mt: 1 }}>
-                <TriggeredAlertsPanel />
+                <TriggeredAlertsPanel onAlertTrigger={handleAlertTrigger} />
               </Box>
             </Box>
           );
@@ -280,7 +312,7 @@ export default function Dashboard() {
                 timeframe={selectedTimeframe}
               />
               <Box sx={{ height: "350px", mt: 1 }}>
-                <TriggeredAlertsPanel />
+                <TriggeredAlertsPanel onAlertTrigger={handleAlertTrigger} />
               </Box>
             </Box>
           );
@@ -352,7 +384,7 @@ export default function Dashboard() {
                 mt: 1,
               }}
             >
-              <TriggeredAlertsPanel />
+              <TriggeredAlertsPanel onAlertTrigger={handleAlertTrigger} />
             </Paper>
           </Box>
         </Grid>
@@ -448,9 +480,29 @@ export default function Dashboard() {
                 <Typography variant="body2" sx={{ color: "#888" }}>
                   {selectedCoin} - {selectedTimeframe}
                 </Typography>
+                {chartSwitchNotification && (
+                  <Box
+                    sx={{
+                      backgroundColor: "#4caf50",
+                      color: "white",
+                      px: 2,
+                      py: 0.5,
+                      borderRadius: 1,
+                      fontSize: "0.75rem",
+                      animation: "fadeInOut 5s ease-in-out",
+                    }}
+                  >
+                    🚨 Switched to {chartSwitchNotification.symbol} ($
+                    {chartSwitchNotification.price})
+                  </Box>
+                )}
                 <Typography variant="body2" sx={{ color: "#888" }}>
                   Welcome, {user.name}
                 </Typography>
+                <RealTimeNotifications
+                  token={localStorage.getItem("token")}
+                  onAlertTrigger={handleAlertTrigger}
+                />
                 <IconButton
                   color="inherit"
                   onClick={handleLogout}
