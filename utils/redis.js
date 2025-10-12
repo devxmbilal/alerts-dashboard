@@ -119,4 +119,128 @@ export const FavoritesCache = {
   },
 };
 
+// Alerts cache operations
+export const AlertsCache = {
+  // Get user alerts from cache
+  async getUserAlerts(userId) {
+    try {
+      const client = getRedisClient();
+      if (!client) return null;
+
+      const key = `alerts:${userId}`;
+      const alerts = await client.get(key);
+      return alerts ? JSON.parse(alerts) : null;
+    } catch (error) {
+      console.error("Error getting alerts from cache:", error);
+      return null;
+    }
+  },
+
+  // Set user alerts in cache
+  async setUserAlerts(userId, alerts) {
+    try {
+      const client = getRedisClient();
+      if (!client) return false;
+
+      const key = `alerts:${userId}`;
+      await client.setEx(key, 3600, JSON.stringify(alerts)); // 1 hour expiry
+      return true;
+    } catch (error) {
+      console.error("Error setting alerts in cache:", error);
+      return false;
+    }
+  },
+
+  // Add alert to cache
+  async addAlert(userId, alert) {
+    try {
+      const client = getRedisClient();
+      if (!client) return false;
+
+      const key = `alerts:${userId}`;
+      const currentAlerts = (await this.getUserAlerts(userId)) || [];
+
+      // Remove existing alert for same symbol if exists
+      const filteredAlerts = currentAlerts.filter(
+        (a) => a.symbol !== alert.symbol
+      );
+      filteredAlerts.push(alert);
+
+      await client.setEx(key, 3600, JSON.stringify(filteredAlerts));
+      return true;
+    } catch (error) {
+      console.error("Error adding alert to cache:", error);
+      return false;
+    }
+  },
+
+  // Remove alert from cache
+  async removeAlert(userId, symbol) {
+    try {
+      const client = getRedisClient();
+      if (!client) return false;
+
+      const key = `alerts:${userId}`;
+      const currentAlerts = (await this.getUserAlerts(userId)) || [];
+
+      const filteredAlerts = currentAlerts.filter((a) => a.symbol !== symbol);
+      await client.setEx(key, 3600, JSON.stringify(filteredAlerts));
+      return true;
+    } catch (error) {
+      console.error("Error removing alert from cache:", error);
+      return false;
+    }
+  },
+
+  // Remove multiple alerts from cache
+  async removeAlerts(userId, symbols) {
+    try {
+      const client = getRedisClient();
+      if (!client) return false;
+
+      const key = `alerts:${userId}`;
+      const currentAlerts = (await this.getUserAlerts(userId)) || [];
+
+      const filteredAlerts = currentAlerts.filter(
+        (a) => !symbols.includes(a.symbol)
+      );
+      await client.setEx(key, 3600, JSON.stringify(filteredAlerts));
+      return true;
+    } catch (error) {
+      console.error("Error removing alerts from cache:", error);
+      return false;
+    }
+  },
+
+  // Clear all user alerts cache
+  async clearUserAlerts(userId) {
+    try {
+      const client = getRedisClient();
+      if (!client) return false;
+
+      const key = `alerts:${userId}`;
+      await client.del(key);
+      return true;
+    } catch (error) {
+      console.error("Error clearing alerts cache:", error);
+      return false;
+    }
+  },
+
+  // Bulk update alerts in cache
+  async bulkUpdateAlerts(userId, alerts) {
+    try {
+      const client = getRedisClient();
+      if (!client) return false;
+
+      const key = `alerts:${userId}`;
+      await client.setEx(key, 3600, JSON.stringify(alerts));
+      return true;
+    } catch (error) {
+      console.error("Error bulk updating alerts in cache:", error);
+      return false;
+    }
+  },
+};
+
 export default redisClient;

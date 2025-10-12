@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { connectToMongoDB } from "../../../../utils/mongodb.js";
 import { verifyToken } from "../../../../utils/auth.js";
-import { FavoritesCache } from "../../../../utils/redis.js";
+import { FavoritesCache, AlertsCache } from "../../../../utils/redis.js";
 import { initializeRedis } from "../../../../utils/init-redis.js";
 import User from "../../../../models/User.js";
+import Alert from "../../../../models/Alert.js";
 
 // POST /api/favorites/bulk - Bulk add/remove favorites
 export async function POST(request) {
@@ -73,13 +74,34 @@ export async function POST(request) {
     // Update Redis cache
     await FavoritesCache.setUserFavorites(decoded.userId, updatedFavorites);
 
+    let alertsRemoved = 0;
+
+    // If removing from favorites, also remove alerts
+    if (action === "remove") {
+      const deleteResult = await Alert.deleteMany({
+        userId: decoded.userId,
+        symbol: { $in: symbols },
+      });
+      alertsRemoved = deleteResult.deletedCount;
+
+      // Remove from Redis alerts cache
+      await AlertsCache.removeAlerts(decoded.userId, symbols);
+
+      console.log(
+        `✅ Removed ${symbols.length} symbols from favorites and ${alertsRemoved} alerts`
+      );
+    }
+
     return NextResponse.json({
       success: true,
       message: `${symbols.length} symbols ${
         action === "add" ? "added to" : "removed from"
-      } favorites`,
+      } favorites${
+        alertsRemoved > 0 ? ` and ${alertsRemoved} alerts removed` : ""
+      }`,
       favorites: updatedFavorites,
       count: symbols.length,
+      alertsRemoved: alertsRemoved,
     });
   } catch (error) {
     console.error("Error in bulk favorites operation:", error);

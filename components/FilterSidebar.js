@@ -138,8 +138,7 @@ const FilterSidebar = forwardRef(
     const isMobile = useMediaQuery(theme.breakpoints.down("md"));
 
     // Alert, Socket, and Favorites contexts
-    const { createAlertsForSymbols, removeAlertsForSymbols, hasAlert } =
-      useAlert();
+    const { removeAlertsForSymbols, hasAlert } = useAlert();
     const { marketData } = useSocket();
     const { favoriteCount, getFavoriteSymbols } = useFavorites();
 
@@ -271,67 +270,124 @@ const FilterSidebar = forwardRef(
       setErrorMessage("");
 
       try {
+        const token = localStorage.getItem("token");
+        if (!token) {
+          setErrorMessage("Authentication token not found");
+          return;
+        }
+
         // Create alert conditions - include ALL conditions from filters
         const alertConditions = {
           // Basic conditions (required)
           minDaily: Object.keys(filters.minDaily)[0], // Get selected min daily value
-          changePercent: Object.keys(filters.changePercent)[0], // Get selected timeframe
-          timeframe: Object.keys(filters.changePercent)[0],
-          percentage: filters.changePercent.percentage,
+          changePercent: {
+            timeframe: Object.keys(filters.changePercent)[0], // Get selected timeframe
+            percentage: filters.changePercent.percentage,
+          },
 
           // Additional conditions (optional but will be saved if set)
-          candle: {
-            timeframes: Object.keys(filters.candle).filter(
-              (key) => key !== "condition"
-            ),
-            condition: filters.candle.condition || "CANDLE_ABOVE_OPEN",
-          },
-          rsiRange: {
-            timeframes: Object.keys(filters.rsiRange).filter(
-              (key) => !["period", "level", "condition"].includes(key)
-            ),
-            period: filters.rsiRange.period || "14",
-            level: filters.rsiRange.level || "70",
-            condition: filters.rsiRange.condition || "ABOVE",
-          },
-          volume: {
-            timeframes: Object.keys(filters.volume).filter(
-              (key) => !["condition", "percentage"].includes(key)
-            ),
-            condition: filters.volume.condition || "INCREASING",
-            percentage: filters.volume.percentage || "",
-          },
-          ema: {
-            timeframes: Object.keys(filters.ema).filter(
-              (key) => !["fast", "slow", "condition"].includes(key)
-            ),
-            fast: filters.ema.fast || "12",
-            slow: filters.ema.slow || "26",
-            condition: filters.ema.condition || "ABOVE",
-          },
+          alertCount:
+            Object.keys(filters.alertCount).length > 0
+              ? {
+                  timeframe: Object.keys(filters.alertCount)[0],
+                }
+              : undefined,
+          candle:
+            Object.keys(filters.candle).length > 0
+              ? {
+                  timeframes: Object.keys(filters.candle).filter(
+                    (key) => key !== "condition"
+                  ),
+                  condition: filters.candle.condition || "CANDLE_ABOVE_OPEN",
+                }
+              : undefined,
+          rsiRange:
+            Object.keys(filters.rsiRange).length > 0
+              ? {
+                  timeframes: Object.keys(filters.rsiRange).filter(
+                    (key) => !["period", "level", "condition"].includes(key)
+                  ),
+                  period: filters.rsiRange.period || "14",
+                  level: filters.rsiRange.level || "70",
+                  condition: filters.rsiRange.condition || "ABOVE",
+                }
+              : undefined,
+          volume:
+            Object.keys(filters.volume).length > 0
+              ? {
+                  timeframes: Object.keys(filters.volume).filter(
+                    (key) => !["condition", "percentage"].includes(key)
+                  ),
+                  condition: filters.volume.condition || "INCREASING",
+                  percentage: filters.volume.percentage || "",
+                }
+              : undefined,
+          ema:
+            Object.keys(filters.ema).length > 0
+              ? {
+                  timeframes: Object.keys(filters.ema).filter(
+                    (key) => !["fast", "slow", "condition"].includes(key)
+                  ),
+                  fast: filters.ema.fast || "12",
+                  slow: filters.ema.slow || "26",
+                  condition: filters.ema.condition || "ABOVE",
+                }
+              : undefined,
         };
 
-        // Create alerts for all favorite symbols
-        const createdAlerts = createAlertsForSymbols(
-          favoriteSymbols,
-          alertConditions
+        // Remove undefined conditions
+        Object.keys(alertConditions).forEach((key) => {
+          if (alertConditions[key] === undefined) {
+            delete alertConditions[key];
+          }
+        });
+
+        console.log(
+          `🚀 Creating alerts for ${favoriteSymbols.length} favorite pairs...`
         );
 
-        setCreatedAlerts((prev) => [...prev, ...createdAlerts]);
-        onCreateAlert?.(createdAlerts);
-        setSuccessMessage(
-          `Alerts created for ${createdAlerts.length} favorite coins`
-        );
+        // Single API call to create alerts for all favorite pairs
+        const response = await fetch("/api/alerts/bulk", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            conditions: alertConditions,
+            notificationSettings: {
+              email:
+                alertSettings.notificationType === "email" ||
+                alertSettings.notificationType === "both",
+              telegram:
+                alertSettings.notificationType === "telegram" ||
+                alertSettings.notificationType === "both",
+              webhook: false,
+            },
+          }),
+        });
 
-        // Clear success message after 3 seconds
-        setTimeout(() => setSuccessMessage(""), 3000);
+        if (response.ok) {
+          const data = await response.json();
+          console.log(`✅ Bulk alerts created:`, data.message);
+
+          setCreatedAlerts((prev) => [...prev, ...data.data.alerts]);
+          onCreateAlert?.(data.data.alerts);
+          setSuccessMessage(data.message);
+
+          // Clear success message after 5 seconds
+          setTimeout(() => setSuccessMessage(""), 5000);
+        } else {
+          const errorData = await response.json();
+          setErrorMessage(errorData.error || "Failed to create alerts");
+        }
       } catch (error) {
         console.error("Error creating alerts:", error);
         setErrorMessage("Failed to create alerts");
       } finally {
         setIsCreating(false);
       }
-    }, [getFavoriteSymbols, filters, createAlertsForSymbols, onCreateAlert]);
+    }, [getFavoriteSymbols, filters, alertSettings, onCreateAlert]);
 
     // Get active filters count
     const activeFiltersCount = useMemo(() => {

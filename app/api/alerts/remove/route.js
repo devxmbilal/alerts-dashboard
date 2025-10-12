@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
 import { connectToMongoDB } from "../../../../utils/mongodb.js";
 import { verifyToken } from "../../../../utils/auth.js";
-import { FavoritesCache, AlertsCache } from "../../../../utils/redis.js";
+import { AlertsCache } from "../../../../utils/redis.js";
 import { initializeRedis } from "../../../../utils/init-redis.js";
-import User from "../../../../models/User.js";
 import Alert from "../../../../models/Alert.js";
 
-// POST /api/favorites/remove - Remove symbol from favorites
+// POST /api/alerts/remove - Remove alerts for specific symbols
 export async function POST(request) {
   try {
     await connectToMongoDB();
@@ -30,49 +29,38 @@ export async function POST(request) {
       );
     }
 
-    const { symbol } = await request.json();
-    if (!symbol) {
+    const { symbols } = await request.json();
+
+    if (!symbols || !Array.isArray(symbols) || symbols.length === 0) {
       return NextResponse.json(
-        { error: "Symbol is required" },
+        { error: "Symbols array is required" },
         { status: 400 }
       );
     }
 
-    // Remove symbol from favorites using $pull
-    const user = await User.findByIdAndUpdate(
-      decoded.userId,
-      { $pull: { favorites: symbol } },
-      { new: true, select: "favorites" }
-    );
+    console.log(`🗑️ Removing alerts for ${symbols.length} symbols...`);
 
-    if (!user) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
-
-    // Update Redis cache
-    await FavoritesCache.setUserFavorites(decoded.userId, user.favorites);
-
-    // Remove alerts for this symbol
+    // Remove alerts from MongoDB
     const deleteResult = await Alert.deleteMany({
       userId: decoded.userId,
-      symbol: symbol,
+      symbol: { $in: symbols },
     });
 
-    // Remove from Redis alerts cache
-    await AlertsCache.removeAlert(decoded.userId, symbol);
+    // Remove alerts from Redis cache
+    await AlertsCache.removeAlerts(decoded.userId, symbols);
 
-    console.log(
-      `✅ Removed ${symbol} from favorites and ${deleteResult.deletedCount} alerts`
-    );
+    console.log(`✅ Removed ${deleteResult.deletedCount} alerts`);
 
     return NextResponse.json({
       success: true,
-      message: `${symbol} removed from favorites and ${deleteResult.deletedCount} alerts removed`,
-      favorites: user.favorites,
-      alertsRemoved: deleteResult.deletedCount,
+      message: `Removed ${deleteResult.deletedCount} alerts`,
+      data: {
+        deletedCount: deleteResult.deletedCount,
+        symbols: symbols,
+      },
     });
   } catch (error) {
-    console.error("Error removing from favorites:", error);
+    console.error("Error removing alerts:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

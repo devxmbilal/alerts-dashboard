@@ -1,0 +1,205 @@
+import { NextResponse } from "next/server";
+import { connectToMongoDB } from "../../../../utils/mongodb.js";
+import { verifyToken } from "../../../../utils/auth.js";
+import { FavoritesCache, AlertsCache } from "../../../../utils/redis.js";
+import { initializeRedis } from "../../../../utils/init-redis.js";
+import Alert from "../../../../models/Alert.js";
+
+// POST /api/alerts/bulk - Create alerts for all favorite pairs
+export async function POST(request) {
+  try {
+    await connectToMongoDB();
+    await initializeRedis();
+
+    // Get token from Authorization header
+    const authHeader = request.headers.get("authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return NextResponse.json(
+        { error: "Authorization token required" },
+        { status: 401 }
+      );
+    }
+
+    const token = authHeader.substring(7);
+    const decoded = verifyToken(token);
+    if (!decoded) {
+      return NextResponse.json(
+        { error: "Invalid or expired token" },
+        { status: 401 }
+      );
+    }
+
+    const { conditions, notificationSettings } = await request.json();
+
+    if (!conditions) {
+      return NextResponse.json(
+        { error: "Conditions are required" },
+        { status: 400 }
+      );
+    }
+
+    // Validate required conditions
+    if (
+      !conditions.minDaily ||
+      !conditions.changePercent?.timeframe ||
+      !conditions.changePercent?.percentage
+    ) {
+      return NextResponse.json(
+        { error: "Min Daily and Change % conditions are required" },
+        { status: 400 }
+      );
+    }
+
+    // Get user's favorites from Redis cache or API
+    let favoriteSymbols = await FavoritesCache.getUserFavorites(decoded.userId);
+
+    if (!favoriteSymbols) {
+      // Cache miss - get from API
+      const response = await fetch(
+        `${request.nextUrl.origin}/api/favorites/list`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        favoriteSymbols = data.favorites || [];
+      } else {
+        return NextResponse.json(
+          { error: "Failed to get favorites" },
+          { status: 400 }
+        );
+      }
+    }
+
+    if (favoriteSymbols.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            "No favorite pairs found. Please add some pairs to favorites first.",
+        },
+        { status: 400 }
+      );
+    }
+
+    console.log(
+      `🚀 Creating alerts for ${favoriteSymbols.length} favorite pairs...`
+    );
+
+    // Prepare alert documents for bulk insert
+    const alertDocuments = favoriteSymbols.map((symbol) => ({
+      symbol: symbol,
+      userId: decoded.userId,
+      conditions: {
+        // Basic conditions (required)
+        minDaily: conditions.minDaily,
+        changePercent: {
+          timeframe: conditions.changePercent.timeframe,
+          percentage: conditions.changePercent.percentage,
+        },
+        // Optional conditions
+        alertCount: conditions.alertCount
+          ? {
+              timeframe: conditions.alertCount.timeframe,
+            }
+          : undefined,
+        candle: conditions.candle
+          ? {
+              timeframes: conditions.candle.timeframes || [],
+              condition: conditions.candle.condition || "CANDLE_ABOVE_OPEN",
+            }
+          : undefined,
+        rsiRange: conditions.rsiRange
+          ? {
+              timeframes: conditions.rsiRange.timeframes || [],
+              period: conditions.rsiRange.period || "14",
+              level: conditions.rsiRange.level || "70",
+              condition: conditions.rsiRange.condition || "ABOVE",
+            }
+          : undefined,
+        volume: conditions.volume
+          ? {
+              timeframes: conditions.volume.timeframes || [],
+              condition: conditions.volume.condition || "INCREASING",
+              percentage: conditions.volume.percentage,
+            }
+          : undefined,
+        ema: conditions.ema
+          ? {
+              timeframes: conditions.ema.timeframes || [],
+              fast: conditions.ema.fast || "12",
+              slow: conditions.ema.slow || "26",
+              condition: conditions.ema.condition || "ABOVE",
+            }
+          : undefined,
+      },
+      status: "active",
+      triggered: false,
+      notificationSettings: notificationSettings || {
+        email: false,
+        telegram: false,
+        webhook: false,
+      },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }));
+
+    // Remove undefined optional conditions
+    alertDocuments.forEach((alert) => {
+      Object.keys(alert.conditions).forEach((key) => {
+        if (alert.conditions[key] === undefined) {
+          delete alert.conditions[key];
+        }
+      });
+    });
+
+    // Delete existing alerts for these symbols first
+    await Alert.deleteMany({
+      userId: decoded.userId,
+      symbol: { $in: favoriteSymbols },
+    });
+
+    // Bulk insert new alerts
+    const createdAlerts = await Alert.insertMany(alertDocuments);
+
+    // Update Redis cache with new alerts
+    const alertCacheData = createdAlerts.map((alert) => ({
+      id: alert._id.toString(),
+      symbol: alert.symbol,
+      userId: alert.userId,
+      conditions: alert.conditions,
+      status: alert.status,
+      triggered: alert.triggered,
+      createdAt: alert.createdAt,
+      updatedAt: alert.updatedAt,
+    }));
+
+    await AlertsCache.bulkUpdateAlerts(decoded.userId, alertCacheData);
+
+    console.log(`✅ Created ${createdAlerts.length} alerts for favorite pairs`);
+
+    return NextResponse.json({
+      success: true,
+      message: `Alerts created for ${createdAlerts.length} favorite pairs`,
+      data: {
+        count: createdAlerts.length,
+        symbols: favoriteSymbols,
+        alerts: createdAlerts.map((alert) => ({
+          id: alert._id,
+          symbol: alert.symbol,
+          status: alert.status,
+          conditions: alert.conditions,
+        })),
+      },
+    });
+  } catch (error) {
+    console.error("Error creating bulk alerts:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
+  }
+}

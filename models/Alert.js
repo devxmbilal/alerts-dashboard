@@ -18,7 +18,7 @@ const alertSchema = new mongoose.Schema(
         type: String,
         required: true,
       },
-       changePercent: {
+      changePercent: {
         timeframe: {
           type: String,
           required: true,
@@ -28,8 +28,10 @@ const alertSchema = new mongoose.Schema(
           required: true,
         },
       },
-      alertCounttimeframe: {
-        type: String,
+      alertCount: {
+        timeframe: {
+          type: String,
+        },
       },
       // Additional conditions (optional)
       candle: {
