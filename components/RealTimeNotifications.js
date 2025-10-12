@@ -14,8 +14,6 @@ import {
   Chip,
   Button,
   Collapse,
-  Alert,
-  AlertTitle,
 } from "@mui/material";
 import {
   Notifications as NotificationsIcon,
@@ -28,10 +26,9 @@ import {
 
 const RealTimeNotifications = ({ token, onAlertTrigger }) => {
   const [notifications, setNotifications] = useState([]);
-  const [isConnected, setIsConnected] = useState(true); // Start as connected to avoid initial warning
+  const [isConnected, setIsConnected] = useState(true);
   const [isExpanded, setIsExpanded] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [connectionError, setConnectionError] = useState(false);
   const eventSourceRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
 
@@ -65,18 +62,12 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
       const eventSource = new EventSource(
         `${
           process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"
-        }/api/notifications/stream`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
+        }/api/notifications/stream?token=${encodeURIComponent(token)}`
       );
 
       eventSource.onopen = () => {
         console.log("✅ Connected to notifications stream");
         setIsConnected(true);
-        setConnectionError(false);
       };
 
       eventSource.onmessage = (event) => {
@@ -128,7 +119,6 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
       eventSource.onerror = (error) => {
         console.error("❌ Notifications stream error:", error);
         setIsConnected(false);
-        setConnectionError(true);
 
         // Clear any existing timeout
         if (reconnectTimeoutRef.current) {
@@ -230,6 +220,52 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
     return change >= 0 ? "#4caf50" : "#f44336";
   };
 
+  const formatConditions = (conditions) => {
+    if (typeof conditions === "string") {
+      return conditions;
+    }
+
+    if (typeof conditions === "object" && conditions !== null) {
+      const parts = [];
+
+      if (conditions.minDaily) {
+        parts.push(`Min Daily: ${conditions.minDaily}`);
+      }
+
+      if (conditions.changePercent) {
+        parts.push(
+          `Change: ${conditions.changePercent.percentage}% (${conditions.changePercent.timeframe})`
+        );
+      }
+
+      if (conditions.alertCount) {
+        parts.push(`Alert Count: ${conditions.alertCount.timeframe}`);
+      }
+
+      if (conditions.candle) {
+        parts.push(`Candle: ${conditions.candle.condition}`);
+      }
+
+      if (conditions.rsiRange) {
+        parts.push(
+          `RSI: ${conditions.rsiRange.condition} ${conditions.rsiRange.level}`
+        );
+      }
+
+      if (conditions.volume) {
+        parts.push(`Volume: ${conditions.volume.condition}`);
+      }
+
+      if (conditions.ema) {
+        parts.push(`EMA: ${conditions.ema.condition}`);
+      }
+
+      return parts.join(" • ");
+    }
+
+    return "No conditions";
+  };
+
   return (
     <Box sx={{ position: "relative" }}>
       {/* Notification Bell */}
@@ -245,23 +281,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
         </Badge>
       </IconButton>
 
-      {/* Connection Status - Only show after error */}
-      {connectionError && !isConnected && (
-        <Alert
-          severity="warning"
-          sx={{
-            position: "absolute",
-            top: 50,
-            right: 0,
-            zIndex: 1000,
-            minWidth: 200,
-            maxWidth: 300,
-          }}
-        >
-          <AlertTitle>Connection Issue</AlertTitle>
-          Notifications may be delayed. Reconnecting...
-        </Alert>
-      )}
+      {/* Connection Status - Removed to avoid user confusion */}
 
       {/* Notifications Panel */}
       <Collapse in={isExpanded} timeout="auto" unmountOnExit>
@@ -359,7 +379,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                       secondary={
                         <Box>
                           <Typography variant="body2" color="text.secondary">
-                            {notification.conditions}
+                            {formatConditions(notification.conditions)}
                           </Typography>
                           <Box sx={{ display: "flex", gap: 1, mt: 0.5 }}>
                             <Typography

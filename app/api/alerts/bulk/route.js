@@ -10,7 +10,16 @@ import Alert from "../../../../models/Alert.js";
 export async function POST(request) {
   try {
     await connectToMongoDB();
-    await initializeRedis();
+
+    // Initialize Redis (optional - continue if it fails)
+    try {
+      await initializeRedis();
+    } catch (redisError) {
+      console.warn(
+        "⚠️ Redis initialization failed, continuing without cache:",
+        redisError.message
+      );
+    }
 
     // Get token from Authorization header
     const authHeader = request.headers.get("authorization");
@@ -32,6 +41,13 @@ export async function POST(request) {
 
     const { conditions, notificationSettings } = await request.json();
 
+    console.log(
+      "🔍 Debug - Received conditions:",
+      JSON.stringify(conditions, null, 2)
+    );
+    console.log("🔍 Debug - User ID:", decoded.userId);
+    console.log("🔍 Debug - Notification settings:", notificationSettings);
+
     if (!conditions) {
       return NextResponse.json(
         { error: "Conditions are required" },
@@ -40,19 +56,45 @@ export async function POST(request) {
     }
 
     // Validate required conditions
+    console.log("🔍 Debug - minDaily:", conditions.minDaily);
+    console.log("🔍 Debug - changePercent:", conditions.changePercent);
+    console.log(
+      "🔍 Debug - changePercent.timeframe:",
+      conditions.changePercent?.timeframe
+    );
+    console.log(
+      "🔍 Debug - changePercent.percentage:",
+      conditions.changePercent?.percentage
+    );
+
     if (
       !conditions.minDaily ||
       !conditions.changePercent?.timeframe ||
       !conditions.changePercent?.percentage
     ) {
       return NextResponse.json(
-        { error: "Min Daily and Change % conditions are required" },
+        {
+          error: "Min Daily and Change % conditions are required",
+          details: {
+            minDaily: conditions.minDaily,
+            changePercent: conditions.changePercent,
+          },
+        },
         { status: 400 }
       );
     }
 
     // Get user's favorites from Redis cache or API
-    let favoriteSymbols = await FavoritesCache.getUserFavorites(decoded.userId);
+    let favoriteSymbols = null;
+
+    try {
+      favoriteSymbols = await FavoritesCache.getUserFavorites(decoded.userId);
+    } catch (cacheError) {
+      console.warn(
+        "⚠️ Redis cache error, fetching from API:",
+        cacheError.message
+      );
+    }
 
     if (!favoriteSymbols) {
       // Cache miss - get from API
@@ -130,27 +172,51 @@ export async function POST(request) {
     // No need to remove undefined conditions since we only pass set conditions
 
     // Delete existing alerts for these symbols first
-    await Alert.deleteMany({
-      userId: decoded.userId,
-      symbol: { $in: favoriteSymbols },
-    });
+    try {
+      await Alert.deleteMany({
+        userId: decoded.userId,
+        symbol: { $in: favoriteSymbols },
+      });
+    } catch (deleteError) {
+      console.error("❌ Error deleting existing alerts:", deleteError);
+      return NextResponse.json(
+        { error: "Failed to delete existing alerts" },
+        { status: 500 }
+      );
+    }
 
     // Bulk insert new alerts
-    const createdAlerts = await Alert.insertMany(alertDocuments);
+    let createdAlerts;
+    try {
+      createdAlerts = await Alert.insertMany(alertDocuments);
+    } catch (insertError) {
+      console.error("❌ Error inserting alerts:", insertError);
+      return NextResponse.json(
+        { error: "Failed to create alerts in database" },
+        { status: 500 }
+      );
+    }
 
-    // Update Redis cache with new alerts
-    const alertCacheData = createdAlerts.map((alert) => ({
-      id: alert._id.toString(),
-      symbol: alert.symbol,
-      userId: alert.userId,
-      conditions: alert.conditions,
-      status: alert.status,
-      triggered: alert.triggered,
-      createdAt: alert.createdAt,
-      updatedAt: alert.updatedAt,
-    }));
+    // Update Redis cache with new alerts (optional)
+    try {
+      const alertCacheData = createdAlerts.map((alert) => ({
+        id: alert._id.toString(),
+        symbol: alert.symbol,
+        userId: alert.userId,
+        conditions: alert.conditions,
+        status: alert.status,
+        triggered: alert.triggered,
+        createdAt: alert.createdAt,
+        updatedAt: alert.updatedAt,
+      }));
 
-    await AlertsCache.bulkUpdateAlerts(decoded.userId, alertCacheData);
+      await AlertsCache.bulkUpdateAlerts(decoded.userId, alertCacheData);
+    } catch (cacheError) {
+      console.warn(
+        "⚠️ Redis cache update failed, continuing:",
+        cacheError.message
+      );
+    }
 
     console.log(`✅ Created ${createdAlerts.length} alerts for favorite pairs`);
 
@@ -169,9 +235,20 @@ export async function POST(request) {
       },
     });
   } catch (error) {
-    console.error("Error creating bulk alerts:", error);
+    console.error("❌ Error creating bulk alerts:", error);
+    console.error("❌ Error stack:", error.stack);
+    console.error("❌ Error details:", {
+      message: error.message,
+      name: error.name,
+      code: error.code,
+    });
+
     return NextResponse.json(
-      { error: "Internal server error" },
+      {
+        error: "Internal server error",
+        details: error.message,
+        type: error.name,
+      },
       { status: 500 }
     );
   }

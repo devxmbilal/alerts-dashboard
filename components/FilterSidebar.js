@@ -248,7 +248,9 @@ const FilterSidebar = forwardRef(
 
     // Handle alert creation for favorites
     const handleCreateAlert = useCallback(async () => {
+      console.log("🔍 Debug - Starting alert creation...");
       const favoriteSymbols = await getFavoriteSymbols();
+      console.log("🔍 Debug - favoriteSymbols:", favoriteSymbols);
 
       if (favoriteSymbols.length === 0) {
         setErrorMessage("Please add some coins to favorites first");
@@ -256,13 +258,34 @@ const FilterSidebar = forwardRef(
       }
 
       // Check if Min Daily and Change % conditions are set (required)
-      const hasMinDaily = Object.keys(filters.minDaily).length > 0;
+      const hasMinDaily = Object.values(filters.minDaily).some(
+        (value) => value === true
+      );
       const hasChangePercent =
-        Object.keys(filters.changePercent).length > 0 &&
+        Object.values(filters.changePercent).some((value) => value === true) &&
         filters.changePercent.percentage;
 
+      console.log("🔍 Debug - filters.minDaily:", filters.minDaily);
+      console.log("🔍 Debug - filters.changePercent:", filters.changePercent);
+      console.log("🔍 Debug - hasMinDaily:", hasMinDaily);
+      console.log("🔍 Debug - hasChangePercent:", hasChangePercent);
+      console.log(
+        "🔍 Debug - Object.values(filters.minDaily):",
+        Object.values(filters.minDaily)
+      );
+      console.log(
+        "🔍 Debug - Object.values(filters.changePercent):",
+        Object.values(filters.changePercent)
+      );
+
       if (!hasMinDaily || !hasChangePercent) {
-        setErrorMessage("Please set both Min Daily and Change % conditions");
+        let missingConditions = [];
+        if (!hasMinDaily) missingConditions.push("Min Daily volume");
+        if (!hasChangePercent)
+          missingConditions.push("Change % timeframe and percentage");
+
+        setErrorMessage(`Please set: ${missingConditions.join(", ")}`);
+        setIsCreating(false);
         return;
       }
 
@@ -277,35 +300,92 @@ const FilterSidebar = forwardRef(
         }
 
         // Create alert conditions - Min Daily and Change % are mandatory
+        const minDailyKey = Object.keys(filters.minDaily).find(
+          (key) => filters.minDaily[key] === true
+        );
+        const changePercentKey = Object.keys(filters.changePercent).find(
+          (key) => key !== "percentage" && filters.changePercent[key] === true
+        );
+
+        console.log("🔍 Debug - minDailyKey:", minDailyKey);
+        console.log("🔍 Debug - changePercentKey:", changePercentKey);
+        console.log(
+          "🔍 Debug - changePercent.percentage:",
+          filters.changePercent.percentage
+        );
+
+        // Validate that required conditions are properly set
+        if (!minDailyKey) {
+          setErrorMessage("Please select a Min Daily value");
+          setIsCreating(false);
+          return;
+        }
+
+        if (!changePercentKey || !filters.changePercent.percentage) {
+          setErrorMessage("Please set Change % timeframe and percentage");
+          setIsCreating(false);
+          return;
+        }
+
         const alertConditions = {
           // Basic conditions (required)
-          minDaily: Object.keys(filters.minDaily)[0], // Get selected min daily value
+          minDaily: minDailyKey,
           changePercent: {
-            timeframe: Object.keys(filters.changePercent)[0], // Get selected timeframe
+            timeframe: changePercentKey,
             percentage: filters.changePercent.percentage,
           },
         };
 
+        // Check for optional conditions
+        const hasAlertCount = Object.values(filters.alertCount).some(
+          (value) => value === true
+        );
+        const hasCandle = Object.values(filters.candle).some(
+          (value) => value === true
+        );
+        const hasRsiRange = Object.values(filters.rsiRange).some(
+          (value) => value === true
+        );
+        const hasVolume = Object.values(filters.volume).some(
+          (value) => value === true
+        );
+        const hasEma = Object.values(filters.ema).some(
+          (value) => value === true
+        );
+
+        console.log("🔍 Debug - hasAlertCount:", hasAlertCount);
+        console.log("🔍 Debug - hasCandle:", hasCandle);
+        console.log("🔍 Debug - hasRsiRange:", hasRsiRange);
+        console.log("🔍 Debug - hasVolume:", hasVolume);
+        console.log("🔍 Debug - hasEma:", hasEma);
+
         if (hasAlertCount) {
+          const alertCountKey = Object.keys(filters.alertCount).find(
+            (key) => filters.alertCount[key] === true
+          );
           alertConditions.alertCount = {
-            timeframe: Object.keys(filters.alertCount)[0],
+            timeframe: alertCountKey,
           };
         }
 
         if (hasCandle) {
+          const candleTimeframes = Object.keys(filters.candle).filter(
+            (key) => key !== "condition" && filters.candle[key] === true
+          );
           alertConditions.candle = {
-            timeframes: Object.keys(filters.candle).filter(
-              (key) => key !== "condition"
-            ),
+            timeframes: candleTimeframes,
             condition: filters.candle.condition || "CANDLE_ABOVE_OPEN",
           };
         }
 
         if (hasRsiRange) {
+          const rsiTimeframes = Object.keys(filters.rsiRange).filter(
+            (key) =>
+              !["period", "level", "condition"].includes(key) &&
+              filters.rsiRange[key] === true
+          );
           alertConditions.rsiRange = {
-            timeframes: Object.keys(filters.rsiRange).filter(
-              (key) => !["period", "level", "condition"].includes(key)
-            ),
+            timeframes: rsiTimeframes,
             period: filters.rsiRange.period || "14",
             level: filters.rsiRange.level || "70",
             condition: filters.rsiRange.condition || "ABOVE",
@@ -313,20 +393,26 @@ const FilterSidebar = forwardRef(
         }
 
         if (hasVolume) {
+          const volumeTimeframes = Object.keys(filters.volume).filter(
+            (key) =>
+              !["condition", "percentage"].includes(key) &&
+              filters.volume[key] === true
+          );
           alertConditions.volume = {
-            timeframes: Object.keys(filters.volume).filter(
-              (key) => !["condition", "percentage"].includes(key)
-            ),
+            timeframes: volumeTimeframes,
             condition: filters.volume.condition || "INCREASING",
             percentage: filters.volume.percentage || "",
           };
         }
 
         if (hasEma) {
+          const emaTimeframes = Object.keys(filters.ema).filter(
+            (key) =>
+              !["fast", "slow", "condition"].includes(key) &&
+              filters.ema[key] === true
+          );
           alertConditions.ema = {
-            timeframes: Object.keys(filters.ema).filter(
-              (key) => !["fast", "slow", "condition"].includes(key)
-            ),
+            timeframes: emaTimeframes,
             fast: filters.ema.fast || "12",
             slow: filters.ema.slow || "26",
             condition: filters.ema.condition || "ABOVE",
@@ -343,8 +429,10 @@ const FilterSidebar = forwardRef(
         console.log(
           `🚀 Creating alerts for ${favoriteSymbols.length} favorite pairs...`
         );
+        console.log("🔍 Debug - alertConditions:", alertConditions);
 
         // Single API call to create alerts for all favorite pairs
+        console.log("🔍 Debug - Making API call to /api/alerts/bulk");
         const response = await fetch("/api/alerts/bulk", {
           method: "POST",
           headers: {
@@ -365,6 +453,9 @@ const FilterSidebar = forwardRef(
           }),
         });
 
+        console.log("🔍 Debug - API response status:", response.status);
+        console.log("🔍 Debug - API response ok:", response.ok);
+
         if (response.ok) {
           const data = await response.json();
           console.log(`✅ Bulk alerts created:`, data.message);
@@ -374,9 +465,13 @@ const FilterSidebar = forwardRef(
           setSuccessMessage(data.message);
 
           // Clear success message after 5 seconds
-          setTimeout(() => setSuccessMessage(""), 5000);
+          setTimeout(
+            () => setSuccessMessage("alerts are created successfully"),
+            5000
+          );
         } else {
           const errorData = await response.json();
+          console.log("❌ API Error:", errorData);
           setErrorMessage(errorData.error || "Failed to create alerts");
         }
       } catch (error) {
