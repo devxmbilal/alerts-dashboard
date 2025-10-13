@@ -11,6 +11,7 @@ class RealTimeAlertProcessor {
     this.processedAlerts = new Set(); // Track processed alerts to avoid duplicates
     this.isProcessing = false;
     this.alertIds = new Set(); // Track which alert IDs are currently active
+    this.alertBaselines = new Map(); // Track baseline prices for change calculations
   }
 
   async loadAlertsFromRedis(userId) {
@@ -169,21 +170,57 @@ class RealTimeAlertProcessor {
         conditions.changePercent.percentage
       ) {
         const requiredChange = parseFloat(conditions.changePercent.percentage);
-        const actualChange = Math.abs(parseFloat(priceData.priceChangePercent));
+        const currentPrice = parseFloat(priceData.price);
+        const alertKey = `${alert._id}_${alert.symbol}`;
+
+        // Get or set baseline price for this alert
+        if (!this.alertBaselines.has(alertKey)) {
+          this.alertBaselines.set(alertKey, {
+            price: currentPrice,
+            timestamp: Date.now(),
+            timeframe: conditions.changePercent.timeframe,
+          });
+          console.log(
+            `📊 Setting baseline price for ${alert.symbol}: ${currentPrice} (Alert: ${alert._id})`
+          );
+        }
+
+        const baseline = this.alertBaselines.get(alertKey);
+        const priceChange =
+          ((currentPrice - baseline.price) / baseline.price) * 100;
+        const absolutePriceChange = Math.abs(priceChange);
 
         console.log(
-          `📊 Change % Check: Required=${requiredChange}%, Actual=${actualChange}%`
+          `📊 Change % Check: Required=${requiredChange}%, Current Change=${priceChange.toFixed(
+            3
+          )}%, Absolute=${absolutePriceChange.toFixed(3)}%`
+        );
+        console.log(
+          `📊 Baseline: ${
+            baseline.price
+          }, Current: ${currentPrice}, Change: ${priceChange.toFixed(3)}%`
         );
 
-        if (actualChange < requiredChange) {
+        if (absolutePriceChange < requiredChange) {
           console.log(
-            `❌ Change % condition FAILED: ${actualChange}% < ${requiredChange}%`
+            `❌ Change % condition FAILED: ${absolutePriceChange.toFixed(
+              3
+            )}% < ${requiredChange}%`
           );
           conditionsMet = false;
         } else {
           console.log(
-            `✅ Change % condition PASSED: ${actualChange}% >= ${requiredChange}%`
+            `✅ Change % condition PASSED: ${absolutePriceChange.toFixed(
+              3
+            )}% >= ${requiredChange}%`
           );
+
+          // Reset baseline after trigger for next cycle
+          this.alertBaselines.set(alertKey, {
+            price: currentPrice,
+            timestamp: Date.now(),
+            timeframe: conditions.changePercent.timeframe,
+          });
         }
       } else {
         console.log(`⚠️ Change % condition not set or data missing`);
@@ -579,6 +616,14 @@ class RealTimeAlertProcessor {
       if (!alertExists) {
         this.activeAlerts.get(symbol).push(alert);
         this.alertIds.add(alertId);
+
+        // Reset baseline for this alert (new conditions = new baseline)
+        const alertKey = `${alertId}_${symbol}`;
+        this.alertBaselines.delete(alertKey);
+        console.log(
+          `🔄 Reset baseline for alert ${alertId} (new conditions detected)`
+        );
+
         console.log(
           `✅ Alert ${alertId} for ${alert.symbol} added to active monitoring`
         );
@@ -627,6 +672,15 @@ class RealTimeAlertProcessor {
       // Remove from alertIds set
       this.alertIds.delete(alertId);
 
+      // Clean up baseline data for this alert
+      for (const [key, baseline] of this.alertBaselines.entries()) {
+        if (key.startsWith(`${alertId}_`)) {
+          this.alertBaselines.delete(key);
+          console.log(`🗑️ Cleaned up baseline data for alert ${alertId}`);
+          break;
+        }
+      }
+
       if (!removed) {
         console.log(`⚠️ Alert ${alertId} was not found in active monitoring`);
       }
@@ -655,6 +709,19 @@ class RealTimeAlertProcessor {
       result[symbol] = alerts.length;
     }
     return result;
+  }
+
+  // Force reset baseline for a specific alert (when conditions change)
+  resetAlertBaseline(alertId, symbol) {
+    const alertKey = `${alertId}_${symbol}`;
+    this.alertBaselines.delete(alertKey);
+    console.log(`🔄 Force reset baseline for alert ${alertId} (${symbol})`);
+  }
+
+  // Force reset all baselines (when system restarts or conditions change globally)
+  resetAllBaselines() {
+    this.alertBaselines.clear();
+    console.log(`🔄 Reset all alert baselines`);
   }
 }
 
