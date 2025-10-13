@@ -30,10 +30,10 @@ class RealTimeAlertProcessor {
 
   async loadAllActiveAlerts() {
     try {
-      // Get all active alerts from MongoDB
+      // Get all active alerts from MongoDB (including previously triggered ones)
       const alerts = await Alert.find({
         status: "active",
-        triggered: false,
+        // Don't filter by triggered: false - we want retriggerable alerts
       }).lean();
 
       // Filter alerts to only include those for pairs still in user's favorites
@@ -102,12 +102,7 @@ class RealTimeAlertProcessor {
 
   async checkAlertConditions(alert, priceData) {
     try {
-      // Check if alert is already triggered
-      if (alert.triggered) {
-        return false;
-      }
-
-      // Check if alert is locked
+      // Check if alert is locked (temporary lock due to alert count)
       if (isAlertLocked(alert)) {
         return false;
       }
@@ -231,20 +226,21 @@ class RealTimeAlertProcessor {
 
   async triggerAlert(alert, priceData) {
     try {
-      // Immediately mark alert as triggered in memory to prevent duplicates
-      alert.triggered = true;
-      alert.triggeredAt = new Date();
+      // Check if we already processed this alert recently (prevent spam)
+      const alertKey = `${alert._id}_${Math.floor(priceData.timestamp / 1000)}`;
+      if (this.processedAlerts.has(alertKey)) {
+        return false;
+      }
 
-      // Remove from active alerts to prevent further processing
-      const symbolAlerts = this.activeAlerts.get(alert.symbol);
-      if (symbolAlerts) {
-        const updatedAlerts = symbolAlerts.filter(
-          (a) => a._id.toString() !== alert._id.toString()
-        );
-        if (updatedAlerts.length > 0) {
-          this.activeAlerts.set(alert.symbol, updatedAlerts);
-        } else {
-          this.activeAlerts.delete(alert.symbol);
+      // Mark this alert as processed for this time period
+      this.processedAlerts.add(alertKey);
+
+      // Clean up old processed alerts (keep only last 60 seconds)
+      const currentTime = Math.floor(Date.now() / 1000);
+      for (const key of this.processedAlerts) {
+        const [, timestamp] = key.split("_");
+        if (currentTime - parseInt(timestamp) > 60) {
+          this.processedAlerts.delete(key);
         }
       }
 
@@ -279,27 +275,26 @@ class RealTimeAlertProcessor {
       ) {
         const updatedConditions = updateAlertLock(alert);
 
-        // Update alert in database
+        // Update alert conditions with lock (but keep alert active)
         await Alert.findByIdAndUpdate(alert._id, {
           conditions: updatedConditions,
-          triggered: true,
-          triggeredAt: new Date(),
-          triggeredPrice: priceData.price,
-          triggeredVolume: priceData.volume,
-          triggeredChange: priceData.priceChangePercent,
+          // Don't mark as triggered - keep alert active for future triggers
+          lastTriggeredAt: new Date(),
+          lastTriggeredPrice: priceData.price,
+          lastTriggeredVolume: priceData.volume,
+          lastTriggeredChange: priceData.priceChangePercent,
         });
 
         console.log(
           `🔒 Alert ${alert._id} for ${alert.symbol} locked until ${updatedConditions.alertCount.lockUntil}`
         );
       } else {
-        // Mark as triggered without lock
+        // Update last triggered info but keep alert active
         await Alert.findByIdAndUpdate(alert._id, {
-          triggered: true,
-          triggeredAt: new Date(),
-          triggeredPrice: priceData.price,
-          triggeredVolume: priceData.volume,
-          triggeredChange: priceData.priceChangePercent,
+          lastTriggeredAt: new Date(),
+          lastTriggeredPrice: priceData.price,
+          lastTriggeredVolume: priceData.volume,
+          lastTriggeredChange: priceData.priceChangePercent,
         });
       }
 

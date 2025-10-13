@@ -69,25 +69,24 @@ class AlertService {
     }
   }
 
-  // Mark alert as triggered
+  // Mark alert as triggered (but keep it active for retriggering)
   static async triggerAlert(alertId, marketData) {
     try {
       const alert = await Alert.findByIdAndUpdate(
         alertId,
         {
-          triggered: true,
-          triggeredAt: new Date(),
-          triggeredPrice: parseFloat(marketData.price),
-          triggeredVolume: parseFloat(marketData.volume),
-          triggeredChange: parseFloat(marketData.priceChangePercent),
-          status: "triggered",
+          // Don't mark as permanently triggered - keep alert active
+          lastTriggeredAt: new Date(),
+          lastTriggeredPrice: parseFloat(marketData.price),
+          lastTriggeredVolume: parseFloat(marketData.volume),
+          lastTriggeredChange: parseFloat(marketData.priceChangePercent),
           updatedAt: new Date(),
         },
         { new: true }
       );
 
       console.log(
-        `🚨 Alert triggered for ${alert.symbol} at ${alert.triggeredPrice}`
+        `🚨 Alert triggered for ${alert.symbol} at ${alert.lastTriggeredPrice} (retriggerable)`
       );
       return alert;
     } catch (error) {

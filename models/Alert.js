@@ -108,6 +108,19 @@ const alertSchema = new mongoose.Schema(
     triggeredChange: {
       type: Number,
     },
+    // New fields for tracking last trigger (without marking as permanently triggered)
+    lastTriggeredAt: {
+      type: Date,
+    },
+    lastTriggeredPrice: {
+      type: Number,
+    },
+    lastTriggeredVolume: {
+      type: Number,
+    },
+    lastTriggeredChange: {
+      type: Number,
+    },
     notificationSettings: {
       email: {
         type: Boolean,
