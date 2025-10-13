@@ -3,8 +3,14 @@
 import React, { useEffect } from "react";
 import { Box, Typography } from "@mui/material";
 
-const TradingViewChart = ({ symbol = "BTCUSDT", timeframe = "1h" }) => {
+const TradingViewChart = ({ symbol = "BTCUSDT", timeframe = "15m" }) => {
   useEffect(() => {
+    // Clear existing chart container
+    const container = document.getElementById("tradingview_chart");
+    if (container) {
+      container.innerHTML = "";
+    }
+
     // Check if TradingView script already loaded
     if (document.getElementById("tradingview-widget-script")) {
       createWidget();
@@ -25,11 +31,11 @@ const TradingViewChart = ({ symbol = "BTCUSDT", timeframe = "1h" }) => {
       // Map timeframe to TradingView interval format
       const intervalMap = {
         "1m": "1",
-        "5m": "5", 
+        "5m": "5",
         "15m": "15",
         "1h": "60",
         "4h": "240",
-        "1d": "D"
+        "1d": "D",
       };
 
       new TradingView.widget({
@@ -46,6 +52,7 @@ const TradingViewChart = ({ symbol = "BTCUSDT", timeframe = "1h" }) => {
         hide_top_toolbar: false,
         save_image: false,
         container_id: "tradingview_chart",
+        autosize: true,
       });
     }
   }, [symbol, timeframe]);

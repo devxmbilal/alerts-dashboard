@@ -274,6 +274,7 @@ export default function Dashboard() {
           return (
             <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
               <TradingViewChart
+                key={`${selectedCoin}-${selectedTimeframe}`}
                 symbol={selectedCoin}
                 timeframe={selectedTimeframe}
               />
@@ -308,6 +309,7 @@ export default function Dashboard() {
           return (
             <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
               <TradingViewChart
+                key={`${selectedCoin}-${selectedTimeframe}`}
                 symbol={selectedCoin}
                 timeframe={selectedTimeframe}
               />
@@ -368,6 +370,7 @@ export default function Dashboard() {
               }}
             >
               <TradingViewChart
+                key={`${selectedCoin}-${selectedTimeframe}`}
                 symbol={selectedCoin}
                 timeframe={selectedTimeframe}
               />
@@ -483,17 +486,23 @@ export default function Dashboard() {
                 {chartSwitchNotification && (
                   <Box
                     sx={{
-                      backgroundColor: "#4caf50",
+                      backgroundColor: "#ff6b35",
                       color: "white",
-                      px: 2,
-                      py: 0.5,
-                      borderRadius: 1,
-                      fontSize: "0.75rem",
-                      animation: "fadeInOut 5s ease-in-out",
+                      p: 2,
+                      borderRadius: 2,
+                      fontSize: "1rem",
+                      fontWeight: 700,
+                      textAlign: "center",
+                      animation: "pulse 2s infinite",
+                      border: "2px solid #ff8c42",
+                      boxShadow: "0 0 20px rgba(255, 107, 53, 0.5)",
                     }}
                   >
-                    🚨 Switched to {chartSwitchNotification.symbol} ($
-                    {chartSwitchNotification.price})
+                    🚨 ALERT TRIGGERED! Switched to{" "}
+                    {chartSwitchNotification.symbol}
+                    <br />
+                    Price: ${chartSwitchNotification.price}(
+                    {chartSwitchNotification.priceChangePercent}%)
                   </Box>
                 )}
                 <Typography variant="body2" sx={{ color: "#888" }}>
