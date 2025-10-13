@@ -31,6 +31,32 @@ export async function POST(request) {
 
     console.log(`🗑️ Clearing all alerts for user ${decoded.userId}...`);
 
+    // Get all alert IDs before deleting (for monitoring removal)
+    const alertsToDelete = await Alert.find({
+      userId: decoded.userId,
+    }).select("_id");
+
+    // Remove all alerts from real-time monitoring first
+    try {
+      const RealTimeAlertProcessor = (
+        await import("../../../../services/RealTimeAlertProcessor.js")
+      ).default;
+
+      for (const alert of alertsToDelete) {
+        await RealTimeAlertProcessor.removeAlert(alert._id.toString());
+      }
+
+      console.log(
+        `✅ Removed ${alertsToDelete.length} alerts from real-time monitoring`
+      );
+    } catch (monitoringError) {
+      console.error(
+        "❌ Error removing alerts from monitoring:",
+        monitoringError
+      );
+      // Don't fail the API call if monitoring fails
+    }
+
     // Remove all alerts from MongoDB
     const deleteResult = await Alert.deleteMany({
       userId: decoded.userId,

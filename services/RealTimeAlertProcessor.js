@@ -10,6 +10,7 @@ class RealTimeAlertProcessor {
     this.activeAlerts = new Map(); // symbol -> alert data
     this.processedAlerts = new Set(); // Track processed alerts to avoid duplicates
     this.isProcessing = false;
+    this.alertIds = new Set(); // Track which alert IDs are currently active
   }
 
   async loadAlertsFromRedis(userId) {
@@ -82,9 +83,16 @@ class RealTimeAlertProcessor {
       const symbol = priceData.symbol;
       const alerts = this.activeAlerts.get(symbol);
 
+      console.log(
+        `📡 Price update received for ${symbol}: Price=${priceData.price}, Volume=${priceData.volume}, Change=${priceData.priceChangePercent}%`
+      );
+
       if (!alerts || alerts.length === 0) {
+        console.log(`⚠️ No active alerts found for ${symbol}`);
         return;
       }
+
+      console.log(`🔍 Found ${alerts.length} active alerts for ${symbol}`);
 
       // Process each alert for this symbol
       for (const alert of alerts) {
@@ -102,28 +110,56 @@ class RealTimeAlertProcessor {
 
   async checkAlertConditions(alert, priceData) {
     try {
+      console.log(
+        `🔍 Checking alert conditions for ${alert.symbol} (Alert ID: ${alert._id})`
+      );
+      console.log(
+        `📊 Live data: Price=${priceData.price}, Volume=${priceData.volume}, Change=${priceData.priceChangePercent}%`
+      );
+
       // Check if alert is locked (temporary lock due to alert count)
       if (isAlertLocked(alert)) {
+        console.log(
+          `🔒 Alert ${alert._id} for ${alert.symbol} is LOCKED (Alert Count condition)`
+        );
         return false;
       }
 
       // Check if we already processed this alert recently (avoid spam)
       const alertKey = `${alert._id}_${Math.floor(priceData.timestamp / 1000)}`; // Round to seconds
       if (this.processedAlerts.has(alertKey)) {
+        console.log(
+          `⏭️ Alert ${alert._id} for ${alert.symbol} already processed recently`
+        );
         return false;
       }
 
       const conditions = alert.conditions;
       let conditionsMet = true;
 
+      console.log(`📋 Alert conditions:`, JSON.stringify(conditions, null, 2));
+
       // Check Min Daily volume condition (required)
       if (conditions.minDaily && priceData.volume) {
         const minVolume = parseFloat(conditions.minDaily);
         const actualVolume = parseFloat(priceData.volume);
 
+        console.log(
+          `📈 Min Daily Check: Required=${minVolume}, Actual=${actualVolume}`
+        );
+
         if (actualVolume < minVolume) {
+          console.log(
+            `❌ Min Daily condition FAILED: ${actualVolume} < ${minVolume}`
+          );
           conditionsMet = false;
+        } else {
+          console.log(
+            `✅ Min Daily condition PASSED: ${actualVolume} >= ${minVolume}`
+          );
         }
+      } else {
+        console.log(`⚠️ Min Daily condition not set or volume data missing`);
       }
 
       // Check Change % condition (required)
@@ -135,9 +171,22 @@ class RealTimeAlertProcessor {
         const requiredChange = parseFloat(conditions.changePercent.percentage);
         const actualChange = Math.abs(parseFloat(priceData.priceChangePercent));
 
+        console.log(
+          `📊 Change % Check: Required=${requiredChange}%, Actual=${actualChange}%`
+        );
+
         if (actualChange < requiredChange) {
+          console.log(
+            `❌ Change % condition FAILED: ${actualChange}% < ${requiredChange}%`
+          );
           conditionsMet = false;
+        } else {
+          console.log(
+            `✅ Change % condition PASSED: ${actualChange}% >= ${requiredChange}%`
+          );
         }
+      } else {
+        console.log(`⚠️ Change % condition not set or data missing`);
       }
 
       // Check Candle conditions (optional)
@@ -202,6 +251,13 @@ class RealTimeAlertProcessor {
       }
 
       if (conditionsMet) {
+        console.log(
+          `🚨 ALL CONDITIONS MET! Triggering alert for ${alert.symbol}`
+        );
+        console.log(
+          `🎯 Alert will be triggered with price: ${priceData.price}`
+        );
+
         // Mark as processed immediately to prevent duplicates
         this.processedAlerts.add(alertKey);
 
@@ -212,6 +268,10 @@ class RealTimeAlertProcessor {
           const oldKeys = Array.from(this.processedAlerts).slice(0, 500);
           oldKeys.forEach((key) => this.processedAlerts.delete(key));
         }
+      } else {
+        console.log(
+          `❌ CONDITIONS NOT MET for ${alert.symbol} - Alert will NOT trigger`
+        );
       }
 
       return conditionsMet;
@@ -475,6 +535,126 @@ class RealTimeAlertProcessor {
     } catch (error) {
       console.error(`❌ Error removing alerts for user ${userId}:`, error);
     }
+  }
+
+  // Add a new alert to active monitoring
+  async addAlert(alertId) {
+    try {
+      console.log(`➕ Adding alert ${alertId} to active monitoring...`);
+
+      const alert = await Alert.findById(alertId).lean();
+      if (!alert) {
+        console.log(`❌ Alert ${alertId} not found in database`);
+        return false;
+      }
+
+      if (alert.status !== "active") {
+        console.log(
+          `❌ Alert ${alertId} is not active (status: ${alert.status})`
+        );
+        return false;
+      }
+
+      // Check if user still has this symbol in favorites
+      const userFavorites = await this.getUserFavorites(alert.userId);
+      if (!userFavorites || !userFavorites.includes(alert.symbol)) {
+        console.log(
+          `❌ Alert ${alertId} for ${alert.symbol} not in user favorites`
+        );
+        return false;
+      }
+
+      // Add to active alerts
+      const symbol = alert.symbol;
+      if (!this.activeAlerts.has(symbol)) {
+        this.activeAlerts.set(symbol, []);
+      }
+
+      // Check if alert already exists
+      const existingAlerts = this.activeAlerts.get(symbol);
+      const alertExists = existingAlerts.some(
+        (a) => a._id.toString() === alertId
+      );
+
+      if (!alertExists) {
+        this.activeAlerts.get(symbol).push(alert);
+        this.alertIds.add(alertId);
+        console.log(
+          `✅ Alert ${alertId} for ${alert.symbol} added to active monitoring`
+        );
+        return true;
+      } else {
+        console.log(
+          `⚠️ Alert ${alertId} for ${alert.symbol} already exists in active monitoring`
+        );
+        return false;
+      }
+    } catch (error) {
+      console.error(`❌ Error adding alert ${alertId}:`, error);
+      return false;
+    }
+  }
+
+  // Remove an alert from active monitoring
+  async removeAlert(alertId) {
+    try {
+      console.log(`➖ Removing alert ${alertId} from active monitoring...`);
+
+      // Find and remove from activeAlerts
+      let removed = false;
+      for (const [symbol, alerts] of this.activeAlerts.entries()) {
+        const alertIndex = alerts.findIndex(
+          (a) => a._id.toString() === alertId
+        );
+        if (alertIndex !== -1) {
+          alerts.splice(alertIndex, 1);
+          removed = true;
+          console.log(
+            `✅ Alert ${alertId} for ${symbol} removed from active monitoring`
+          );
+
+          // If no more alerts for this symbol, remove the symbol entry
+          if (alerts.length === 0) {
+            this.activeAlerts.delete(symbol);
+            console.log(
+              `🗑️ No more alerts for ${symbol}, removed from monitoring`
+            );
+          }
+          break;
+        }
+      }
+
+      // Remove from alertIds set
+      this.alertIds.delete(alertId);
+
+      if (!removed) {
+        console.log(`⚠️ Alert ${alertId} was not found in active monitoring`);
+      }
+
+      return removed;
+    } catch (error) {
+      console.error(`❌ Error removing alert ${alertId}:`, error);
+      return false;
+    }
+  }
+
+  // Check if an alert is currently being monitored
+  isAlertActive(alertId) {
+    return this.alertIds.has(alertId);
+  }
+
+  // Get count of active alerts
+  getActiveAlertCount() {
+    return this.alertIds.size;
+  }
+
+  // Get count of alerts per symbol
+  getAlertsBySymbol() {
+    const result = {};
+    for (const [symbol, alerts] of this.activeAlerts.entries()) {
+      result[symbol] = alerts.length;
+    }
+    return result;
   }
 }
 

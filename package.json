@@ -7,9 +7,9 @@
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
-    "worker": "npx cross-env MONGODB_URI=mongodb://127.0.0.1:27017/crypto-alerts REDIS_URL=redis://localhost:6379 JWT_SECRET=your-super-secret-jwt-key-here node workers/binance-worker.js",
-    "alert-worker": "npx cross-env MONGODB_URI=mongodb://127.0.0.1:27017/crypto-alerts REDIS_URL=redis://localhost:6379 JWT_SECRET=your-super-secret-jwt-key-here node workers/alert-worker.js",
-    "real-time-worker": "npx cross-env MONGODB_URI=mongodb://127.0.0.1:27017/crypto-alerts REDIS_URL=redis://localhost:6379 JWT_SECRET=your-super-secret-jwt-key-here node workers/real-time-alert-worker.js",
+    "worker": "node workers/binance-worker.js",
+    "alert-worker": "node workers/alert-worker.js",
+    "real-time-worker": "node workers/real-time-alert-worker.js",
     "dev:all": "concurrently \"npm run dev\" \"npm run worker\" \"npm run alert-worker\"",
     "setup-db": "node scripts/setup-database.js",
     "seed-users": "node scripts/seed-users.js"

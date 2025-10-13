@@ -198,6 +198,24 @@ export async function POST(request) {
       );
     }
 
+    // Add alerts to real-time monitoring
+    try {
+      const RealTimeAlertProcessor = (
+        await import("../../../../services/RealTimeAlertProcessor.js")
+      ).default;
+
+      for (const alert of createdAlerts) {
+        await RealTimeAlertProcessor.addAlert(alert._id.toString());
+      }
+
+      console.log(
+        `✅ Added ${createdAlerts.length} alerts to real-time monitoring`
+      );
+    } catch (monitoringError) {
+      console.error("❌ Error adding alerts to monitoring:", monitoringError);
+      // Don't fail the API call if monitoring fails
+    }
+
     // Force refresh alerts to ensure worker has latest data
     try {
       await RealTimeAlertProcessor.forceRefreshAlerts();

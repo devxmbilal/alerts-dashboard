@@ -8,6 +8,7 @@
 export function calculateLockTime(timeframe) {
   const now = new Date();
   const timeframes = {
+    "5MIN": 5 * 60 * 1000, // 5 minutes
     "15MIN": 15 * 60 * 1000, // 15 minutes
     "30MIN": 30 * 60 * 1000, // 30 minutes
     "1HR": 60 * 60 * 1000, // 1 hour (alternative format)
