@@ -52,7 +52,6 @@ const TradingViewChart = ({ symbol = "BTCUSDT", timeframe = "15m" }) => {
         hide_top_toolbar: false,
         save_image: false,
         container_id: "tradingview_chart",
-        autosize: true,
       });
     }
   }, [symbol, timeframe]);
