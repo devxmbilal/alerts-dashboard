@@ -36,8 +36,6 @@ class RealTimeAlertProcessor {
         triggered: false,
       }).lean();
 
-      console.log(`📊 Loaded ${alerts.length} active alerts from MongoDB`);
-
       // Filter alerts to only include those for pairs still in user's favorites
       const validAlerts = [];
       const userFavoritesMap = new Map(); // Cache user favorites
@@ -54,9 +52,6 @@ class RealTimeAlertProcessor {
         if (userFavorites && userFavorites.includes(alert.symbol)) {
           validAlerts.push(alert);
         } else {
-          console.log(
-            `🗑️ Removing alert for ${alert.symbol} - no longer in favorites`
-          );
           // Mark alert as inactive since pair is no longer favorited
           await Alert.findByIdAndUpdate(alert._id, { status: "inactive" });
         }
@@ -107,13 +102,18 @@ class RealTimeAlertProcessor {
 
   async checkAlertConditions(alert, priceData) {
     try {
+      // Check if alert is already triggered
+      if (alert.triggered) {
+        return false;
+      }
+
       // Check if alert is locked
       if (isAlertLocked(alert)) {
         return false;
       }
 
       // Check if we already processed this alert recently (avoid spam)
-      const alertKey = `${alert._id}_${priceData.timestamp}`;
+      const alertKey = `${alert._id}_${Math.floor(priceData.timestamp / 1000)}`; // Round to seconds
       if (this.processedAlerts.has(alertKey)) {
         return false;
       }
@@ -207,8 +207,10 @@ class RealTimeAlertProcessor {
       }
 
       if (conditionsMet) {
-        await this.triggerAlert(alert, priceData);
+        // Mark as processed immediately to prevent duplicates
         this.processedAlerts.add(alertKey);
+
+        await this.triggerAlert(alert, priceData);
 
         // Clean up old processed alerts (keep only last 1000)
         if (this.processedAlerts.size > 1000) {
@@ -229,9 +231,22 @@ class RealTimeAlertProcessor {
 
   async triggerAlert(alert, priceData) {
     try {
-      console.log(
-        `🚨 ALERT TRIGGERED: ${alert.symbol} - ${alert.conditions.changePercent?.percentage}% change`
-      );
+      // Immediately mark alert as triggered in memory to prevent duplicates
+      alert.triggered = true;
+      alert.triggeredAt = new Date();
+
+      // Remove from active alerts to prevent further processing
+      const symbolAlerts = this.activeAlerts.get(alert.symbol);
+      if (symbolAlerts) {
+        const updatedAlerts = symbolAlerts.filter(
+          (a) => a._id.toString() !== alert._id.toString()
+        );
+        if (updatedAlerts.length > 0) {
+          this.activeAlerts.set(alert.symbol, updatedAlerts);
+        } else {
+          this.activeAlerts.delete(alert.symbol);
+        }
+      }
 
       // Create alert history entry
       const alertHistory = {
@@ -420,6 +435,19 @@ class RealTimeAlertProcessor {
     await this.loadAllActiveAlerts();
   }
 
+  // Force refresh alerts when favorites change
+  async forceRefreshAlerts() {
+    try {
+      console.log("🔄 Force refreshing alerts...");
+      await this.loadAllActiveAlerts();
+      console.log(
+        `✅ Refreshed alerts. Active symbols: ${this.activeAlerts.size}`
+      );
+    } catch (error) {
+      console.error("❌ Error refreshing alerts:", error);
+    }
+  }
+
   // Remove alerts for a specific symbol when it's unfavorited
   async removeAlertsForSymbol(symbol) {
     try {
@@ -448,9 +476,7 @@ class RealTimeAlertProcessor {
           }
         }
       }
-      console.log(
-        `🗑️ Removed all alerts from active processing`
-      );
+      console.log(`🗑️ Removed all alerts from active processing`);
     } catch (error) {
       console.error(`❌ Error removing alerts for user ${userId}:`, error);
     }

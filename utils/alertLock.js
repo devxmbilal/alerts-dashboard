@@ -10,13 +10,13 @@ export function calculateLockTime(timeframe) {
   const timeframes = {
     "15MIN": 15 * 60 * 1000, // 15 minutes
     "30MIN": 30 * 60 * 1000, // 30 minutes
-    "1H": 60 * 60 * 1000, // 1 hour
-    "2H": 2 * 60 * 60 * 1000, // 2 hours
-    "4H": 4 * 60 * 60 * 1000, // 4 hours
-    "6H": 6 * 60 * 60 * 1000, // 6 hours
-    "8H": 8 * 60 * 60 * 1000, // 8 hours
-    "12H": 12 * 60 * 60 * 1000, // 12 hours
-    "1D": 24 * 60 * 60 * 1000, // 1 day
+    "1HR": 60 * 60 * 1000, // 1 hour (alternative format)
+    "2HR": 2 * 60 * 60 * 1000, // 2 hours
+    "4HR": 4 * 60 * 60 * 1000, // 4 hours
+    "6HR": 6 * 60 * 60 * 1000, // 6 hours
+    "8HR": 8 * 60 * 60 * 1000, // 8 hours
+    "12HR": 12 * 60 * 60 * 1000, // 12 hours
+    "D": 24 * 60 * 60 * 1000, // 1 day
     "3D": 3 * 24 * 60 * 60 * 1000, // 3 days
     "1W": 7 * 24 * 60 * 60 * 1000, // 1 week
   };

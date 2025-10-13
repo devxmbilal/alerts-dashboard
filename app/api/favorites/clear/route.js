@@ -103,9 +103,8 @@ export async function POST(request) {
     // Notify RealTimeAlertProcessor to stop processing all alerts for this user
     try {
       await RealTimeAlertProcessor.removeAlertsForUser(decoded.userId);
-      console.log(
-        "✅ Notified RealTimeAlertProcessor to stop processing alerts"
-      );
+      // Force refresh alerts to ensure worker has latest data
+      await RealTimeAlertProcessor.forceRefreshAlerts();
     } catch (processorError) {
       console.warn(
         "⚠️ Error notifying RealTimeAlertProcessor:",

@@ -339,7 +339,7 @@ const isMainModule =
   import.meta.url === `file://${process.argv[1].replace(/\\/g, "/")}` ||
   import.meta.url.includes("alert-worker.js");
 
-console.log("🔍 Debug - isMainModule:", isMainModule);
+console.log("MainModule is running...");
 
 if (isMainModule) {
   const worker = new AlertWorker();

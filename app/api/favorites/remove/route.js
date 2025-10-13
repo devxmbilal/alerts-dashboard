@@ -65,9 +65,8 @@ export async function POST(request) {
     // Notify RealTimeAlertProcessor to stop processing alerts for this symbol
     await RealTimeAlertProcessor.removeAlertsForSymbol(symbol);
 
-    console.log(
-      `✅ Removed ${symbol} from favorites and ${deleteResult.deletedCount} alerts`
-    );
+    // Force refresh alerts to ensure worker has latest data
+    await RealTimeAlertProcessor.forceRefreshAlerts();
 
     return NextResponse.json({
       success: true,

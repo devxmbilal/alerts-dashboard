@@ -5,6 +5,7 @@ import { FavoritesCache, AlertsCache } from "../../../../utils/redis.js";
 import { initializeRedis } from "../../../../utils/init-redis.js";
 import { calculateLockTime } from "../../../../utils/alertLock.js";
 import Alert from "../../../../models/Alert.js";
+import RealTimeAlertProcessor from "../../../../services/RealTimeAlertProcessor.js";
 
 // POST /api/alerts/bulk - Create alerts for all favorite pairs
 export async function POST(request) {
@@ -195,6 +196,13 @@ export async function POST(request) {
         "⚠️ Redis cache update failed, continuing:",
         cacheError.message
       );
+    }
+
+    // Force refresh alerts to ensure worker has latest data
+    try {
+      await RealTimeAlertProcessor.forceRefreshAlerts();
+    } catch (refreshError) {
+      console.warn("⚠️ Error refreshing alerts:", refreshError.message);
     }
 
     return NextResponse.json({
