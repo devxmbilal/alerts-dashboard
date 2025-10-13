@@ -334,13 +334,37 @@ class AlertWorker {
 }
 
 // Start worker if run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+const isMainModule =
+  import.meta.url === `file://${process.argv[1]}` ||
+  import.meta.url === `file://${process.argv[1].replace(/\\/g, "/")}` ||
+  import.meta.url.includes("alert-worker.js");
+
+console.log("🔍 Debug - isMainModule:", isMainModule);
+
+if (isMainModule) {
   const worker = new AlertWorker();
 
   worker.start().catch((error) => {
     console.error("❌ Alert Worker failed to start:", error);
+    console.error("❌ Error details:", error.message);
+    console.error("❌ Error stack:", error.stack);
     process.exit(1);
   });
+
+  // Keep the process alive
+  setInterval(() => {
+    if (worker.isRunning) {
+      console.log("🔄 Worker is running...");
+    } else {
+      console.log("⚠️ Worker is not running, attempting to restart...");
+      worker.start().catch((error) => {
+        console.error("❌ Failed to restart worker:", error);
+      });
+    }
+  }, 30000); // Log every 30 seconds
+
+  // Prevent process from exiting
+  process.stdin.resume();
 
   // Graceful shutdown
   process.on("SIGINT", async () => {

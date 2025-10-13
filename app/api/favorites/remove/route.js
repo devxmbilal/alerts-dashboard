@@ -5,6 +5,7 @@ import { FavoritesCache, AlertsCache } from "../../../../utils/redis.js";
 import { initializeRedis } from "../../../../utils/init-redis.js";
 import User from "../../../../models/User.js";
 import Alert from "../../../../models/Alert.js";
+import RealTimeAlertProcessor from "../../../../services/RealTimeAlertProcessor.js";
 
 // POST /api/favorites/remove - Remove symbol from favorites
 export async function POST(request) {
@@ -60,6 +61,9 @@ export async function POST(request) {
 
     // Remove from Redis alerts cache
     await AlertsCache.removeAlert(decoded.userId, symbol);
+
+    // Notify RealTimeAlertProcessor to stop processing alerts for this symbol
+    await RealTimeAlertProcessor.removeAlertsForSymbol(symbol);
 
     console.log(
       `✅ Removed ${symbol} from favorites and ${deleteResult.deletedCount} alerts`

@@ -248,9 +248,7 @@ const FilterSidebar = forwardRef(
 
     // Handle alert creation for favorites
     const handleCreateAlert = useCallback(async () => {
-      console.log("🔍 Debug - Starting alert creation...");
       const favoriteSymbols = await getFavoriteSymbols();
-      console.log("🔍 Debug - favoriteSymbols:", favoriteSymbols);
 
       if (favoriteSymbols.length === 0) {
         setErrorMessage("Please add some coins to favorites first");
@@ -264,19 +262,6 @@ const FilterSidebar = forwardRef(
       const hasChangePercent =
         Object.values(filters.changePercent).some((value) => value === true) &&
         filters.changePercent.percentage;
-
-      console.log("🔍 Debug - filters.minDaily:", filters.minDaily);
-      console.log("🔍 Debug - filters.changePercent:", filters.changePercent);
-      console.log("🔍 Debug - hasMinDaily:", hasMinDaily);
-      console.log("🔍 Debug - hasChangePercent:", hasChangePercent);
-      console.log(
-        "🔍 Debug - Object.values(filters.minDaily):",
-        Object.values(filters.minDaily)
-      );
-      console.log(
-        "🔍 Debug - Object.values(filters.changePercent):",
-        Object.values(filters.changePercent)
-      );
 
       if (!hasMinDaily || !hasChangePercent) {
         let missingConditions = [];
@@ -305,13 +290,6 @@ const FilterSidebar = forwardRef(
         );
         const changePercentKey = Object.keys(filters.changePercent).find(
           (key) => key !== "percentage" && filters.changePercent[key] === true
-        );
-
-        console.log("🔍 Debug - minDailyKey:", minDailyKey);
-        console.log("🔍 Debug - changePercentKey:", changePercentKey);
-        console.log(
-          "🔍 Debug - changePercent.percentage:",
-          filters.changePercent.percentage
         );
 
         // Validate that required conditions are properly set
@@ -352,12 +330,6 @@ const FilterSidebar = forwardRef(
         const hasEma = Object.values(filters.ema).some(
           (value) => value === true
         );
-
-        console.log("🔍 Debug - hasAlertCount:", hasAlertCount);
-        console.log("🔍 Debug - hasCandle:", hasCandle);
-        console.log("🔍 Debug - hasRsiRange:", hasRsiRange);
-        console.log("🔍 Debug - hasVolume:", hasVolume);
-        console.log("🔍 Debug - hasEma:", hasEma);
 
         if (hasAlertCount) {
           const alertCountKey = Object.keys(filters.alertCount).find(
@@ -432,7 +404,6 @@ const FilterSidebar = forwardRef(
         console.log("🔍 Debug - alertConditions:", alertConditions);
 
         // Single API call to create alerts for all favorite pairs
-        console.log("🔍 Debug - Making API call to /api/alerts/bulk");
         const response = await fetch("/api/alerts/bulk", {
           method: "POST",
           headers: {
@@ -452,9 +423,6 @@ const FilterSidebar = forwardRef(
             },
           }),
         });
-
-        console.log("🔍 Debug - API response status:", response.status);
-        console.log("🔍 Debug - API response ok:", response.ok);
 
         if (response.ok) {
           const data = await response.json();

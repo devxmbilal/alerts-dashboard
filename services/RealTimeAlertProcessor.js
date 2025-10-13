@@ -1,8 +1,9 @@
-import { AlertsCache } from "../utils/redis.js";
+import { AlertsCache, FavoritesCache } from "../utils/redis.js";
 import { isAlertLocked, updateAlertLock } from "../utils/alertLock.js";
 import AlertHistoryService from "./AlertHistoryService.js";
 import NotificationService from "./NotificationService.js";
 import Alert from "../models/Alert.js";
+import User from "../models/User.js";
 
 class RealTimeAlertProcessor {
   constructor() {
@@ -37,16 +38,40 @@ class RealTimeAlertProcessor {
 
       console.log(`📊 Loaded ${alerts.length} active alerts from MongoDB`);
 
-      // Group alerts by symbol for fast lookup
+      // Filter alerts to only include those for pairs still in user's favorites
+      const validAlerts = [];
+      const userFavoritesMap = new Map(); // Cache user favorites
+
+      for (const alert of alerts) {
+        // Get user's current favorites (with caching)
+        let userFavorites = userFavoritesMap.get(alert.userId);
+        if (!userFavorites) {
+          userFavorites = await this.getUserFavorites(alert.userId);
+          userFavoritesMap.set(alert.userId, userFavorites);
+        }
+
+        // Only include alert if the symbol is still in user's favorites
+        if (userFavorites && userFavorites.includes(alert.symbol)) {
+          validAlerts.push(alert);
+        } else {
+          console.log(
+            `🗑️ Removing alert for ${alert.symbol} - no longer in favorites`
+          );
+          // Mark alert as inactive since pair is no longer favorited
+          await Alert.findByIdAndUpdate(alert._id, { status: "inactive" });
+        }
+      }
+
+      // Group valid alerts by symbol for fast lookup
       this.activeAlerts.clear();
-      alerts.forEach((alert) => {
+      validAlerts.forEach((alert) => {
         if (!this.activeAlerts.has(alert.symbol)) {
           this.activeAlerts.set(alert.symbol, []);
         }
         this.activeAlerts.get(alert.symbol).push(alert);
       });
 
-      return alerts;
+      return validAlerts;
     } catch (error) {
       console.error("❌ Error loading active alerts:", error);
       return [];
@@ -368,8 +393,67 @@ class RealTimeAlertProcessor {
     return true;
   }
 
+  async getUserFavorites(userId) {
+    try {
+      // First try to get from Redis cache
+      const cachedFavorites = await FavoritesCache.getUserFavorites(userId);
+      if (cachedFavorites) {
+        return cachedFavorites;
+      }
+
+      // If not in cache, get from database
+      const user = await User.findById(userId).select("favorites").lean();
+      if (user && user.favorites) {
+        // Cache the result for future use
+        await FavoritesCache.setUserFavorites(userId, user.favorites);
+        return user.favorites;
+      }
+
+      return [];
+    } catch (error) {
+      console.error(`❌ Error getting favorites for user ${userId}:`, error);
+      return [];
+    }
+  }
+
   async refreshAlerts() {
     await this.loadAllActiveAlerts();
+  }
+
+  // Remove alerts for a specific symbol when it's unfavorited
+  async removeAlertsForSymbol(symbol) {
+    try {
+      // Remove from active alerts map
+      this.activeAlerts.delete(symbol);
+      console.log(`🗑️ Removed alerts for ${symbol} from active processing`);
+    } catch (error) {
+      console.error(`❌ Error removing alerts for ${symbol}:`, error);
+    }
+  }
+
+  // Remove alerts for a specific user when they clear all favorites
+  async removeAlertsForUser(userId) {
+    try {
+      // Remove all alerts for this user from active processing
+      for (const [symbol, alerts] of this.activeAlerts.entries()) {
+        const userAlerts = alerts.filter((alert) => alert.userId === userId);
+        if (userAlerts.length > 0) {
+          const remainingAlerts = alerts.filter(
+            (alert) => alert.userId !== userId
+          );
+          if (remainingAlerts.length > 0) {
+            this.activeAlerts.set(symbol, remainingAlerts);
+          } else {
+            this.activeAlerts.delete(symbol);
+          }
+        }
+      }
+      console.log(
+        `🗑️ Removed all alerts from active processing`
+      );
+    } catch (error) {
+      console.error(`❌ Error removing alerts for user ${userId}:`, error);
+    }
   }
 }
 

@@ -78,9 +78,11 @@ const MarketPanel = forwardRef(
     const { removeAlert } = useAlert();
     const {
       favorites: userFavorites,
+      favoriteCount,
       isFavorite,
       toggleFavorite: contextToggleFavorite,
       bulkUpdateFavorites,
+      clearAllFavorites,
     } = useFavorites();
 
     // Debug market data
@@ -199,9 +201,6 @@ const MarketPanel = forwardRef(
         data = data.filter((coin) => userFavorites.has(coin.symbol));
       }
 
-      console.log("📊 MarketPanel filteredData updated:", data.length, "items");
-      console.log("📊 MarketPanel marketData size:", marketData.length);
-      console.log("📊 MarketPanel userFavorites:", Array.from(userFavorites));
       return data;
     }, [
       getFilteredMarketData,
@@ -251,27 +250,36 @@ const MarketPanel = forwardRef(
         }
 
         if (symbolsToProcess.length === 0) {
-          console.log("No symbols to process");
           return;
         }
 
-        console.log(
-          `🚀 Bulk ${action}ing ${symbolsToProcess.length} favorites...`
-        );
-
         // Use context bulk update function
-        const success = await bulkUpdateFavorites(symbolsToProcess, action);
-        if (success) {
-          console.log(`✅ Bulk ${action} completed`);
-        } else {
-          console.error(`❌ Bulk ${action} failed`);
-        }
+        await bulkUpdateFavorites(symbolsToProcess, action);
       } catch (error) {
         console.error("Error toggling all favorites:", error);
       } finally {
         setBulkOperationLoading(false);
       }
     }, [filteredData, isFavorite, bulkUpdateFavorites]);
+
+    // Clear ALL favorites handler
+    const handleClearAllFavorites = useCallback(async () => {
+      try {
+        setBulkOperationLoading(true);
+        console.log("🧹 Clearing ALL favorites...");
+
+        const success = await clearAllFavorites();
+        if (success) {
+          console.log("✅ All favorites cleared successfully");
+        } else {
+          console.error("❌ Failed to clear all favorites");
+        }
+      } catch (error) {
+        console.error("Error clearing all favorites:", error);
+      } finally {
+        setBulkOperationLoading(false);
+      }
+    }, [clearAllFavorites]);
 
     // Check if all visible pairs are favorited (for button text)
     const allFavorited = useMemo(() => {
@@ -280,20 +288,6 @@ const MarketPanel = forwardRef(
         filteredData.every((coin) => isFavorite(coin.symbol))
       );
     }, [filteredData, isFavorite]);
-
-    // Debug filtered data
-    useEffect(() => {
-      console.log(
-        "📊 MarketPanel filteredData (USDT spot pairs only):",
-        filteredData.length
-      );
-      if (filteredData.length > 0) {
-        console.log(
-          "📊 Sample filtered pairs:",
-          filteredData.slice(0, 5).map((item) => item.symbol)
-        );
-      }
-    }, [filteredData.length]);
 
     // Update select all checkbox
     useEffect(() => {
@@ -473,6 +467,39 @@ const MarketPanel = forwardRef(
                 ? "Remove All Favorites"
                 : "Add All Favorites"}
             </Button>
+
+            {/* Clear All Favorites Button */}
+            {favoriteCount > 0 && (
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={handleClearAllFavorites}
+                disabled={bulkOperationLoading}
+                startIcon={
+                  bulkOperationLoading ? (
+                    <CircularProgress size={16} />
+                  ) : (
+                    <StarBorderIcon />
+                  )
+                }
+                sx={{
+                  color: "#ff6b6b",
+                  borderColor: "#ff6b6b",
+                  "&:hover": {
+                    borderColor: "#ff6b6b",
+                    backgroundColor: "rgba(255, 107, 107, 0.1)",
+                  },
+                  "&:disabled": {
+                    color: "#666",
+                    borderColor: "#444",
+                  },
+                  fontSize: "0.8rem",
+                  px: 2,
+                }}
+              >
+                {bulkOperationLoading ? "Clearing..." : "Clear All Favorites"}
+              </Button>
+            )}
 
             {checkedPairs.size > 0 && (
               <Button

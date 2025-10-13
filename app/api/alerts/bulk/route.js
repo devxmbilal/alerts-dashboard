@@ -41,13 +41,6 @@ export async function POST(request) {
 
     const { conditions, notificationSettings } = await request.json();
 
-    console.log(
-      "🔍 Debug - Received conditions:",
-      JSON.stringify(conditions, null, 2)
-    );
-    console.log("🔍 Debug - User ID:", decoded.userId);
-    console.log("🔍 Debug - Notification settings:", notificationSettings);
-
     if (!conditions) {
       return NextResponse.json(
         { error: "Conditions are required" },
@@ -56,16 +49,6 @@ export async function POST(request) {
     }
 
     // Validate required conditions
-    console.log("🔍 Debug - minDaily:", conditions.minDaily);
-    console.log("🔍 Debug - changePercent:", conditions.changePercent);
-    console.log(
-      "🔍 Debug - changePercent.timeframe:",
-      conditions.changePercent?.timeframe
-    );
-    console.log(
-      "🔍 Debug - changePercent.percentage:",
-      conditions.changePercent?.percentage
-    );
 
     if (
       !conditions.minDaily ||
@@ -127,10 +110,6 @@ export async function POST(request) {
         { status: 400 }
       );
     }
-
-    console.log(
-      `🚀 Creating alerts for ${favoriteSymbols.length} favorite pairs...`
-    );
 
     // Prepare alert documents for bulk insert
     const alertDocuments = favoriteSymbols.map((symbol) => {
@@ -217,8 +196,6 @@ export async function POST(request) {
         cacheError.message
       );
     }
-
-    console.log(`✅ Created ${createdAlerts.length} alerts for favorite pairs`);
 
     return NextResponse.json({
       success: true,

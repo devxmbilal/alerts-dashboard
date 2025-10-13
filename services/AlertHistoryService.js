@@ -1,4 +1,5 @@
 import AlertHistory from "../models/AlertHistory.js";
+import Alert from "../models/Alert.js";
 
 class AlertHistoryService {
   // Create alert history entry when alert is triggered

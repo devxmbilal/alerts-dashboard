@@ -214,6 +214,40 @@ export const FavoritesProvider = ({ children }) => {
     [updateFavorites]
   );
 
+  // Clear ALL favorites and their alerts
+  const clearAllFavorites = useCallback(async () => {
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        console.error("No authentication token found");
+        return false;
+      }
+
+      console.log("🧹 Clearing ALL favorites...");
+
+      const response = await fetch("/api/favorites/clear", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        updateFavorites([]); // Clear all favorites from state
+        console.log("✅ All favorites cleared:", data.message);
+        return true;
+      } else {
+        console.error("Clear all favorites failed:", await response.text());
+        return false;
+      }
+    } catch (error) {
+      console.error("Error clearing all favorites:", error);
+      return false;
+    }
+  }, [updateFavorites]);
+
   const value = {
     favorites,
     favoriteCount,
@@ -223,6 +257,7 @@ export const FavoritesProvider = ({ children }) => {
     removeFavorite,
     toggleFavorite,
     bulkUpdateFavorites,
+    clearAllFavorites,
     updateFavorites,
     getFavoriteSymbols,
   };
