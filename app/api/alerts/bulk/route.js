@@ -6,6 +6,7 @@ import { initializeRedis } from "../../../../utils/init-redis.js";
 import { calculateLockTime } from "../../../../utils/alertLock.js";
 import Alert from "../../../../models/Alert.js";
 import RealTimeAlertProcessor from "../../../../services/RealTimeAlertProcessor.js";
+import AlertRedisService from "../../../../services/AlertRedisService.js";
 
 // POST /api/alerts/bulk - Create alerts for all favorite pairs
 export async function POST(request) {
@@ -207,6 +208,14 @@ export async function POST(request) {
       for (const alert of createdAlerts) {
         await RealTimeAlertProcessor.addAlert(alert._id.toString());
       }
+
+      // Publish Redis message for bulk alerts created
+      const alertIds = createdAlerts.map((alert) => alert._id.toString());
+      await AlertRedisService.publishBulkAlertsCreated(
+        alertIds,
+        userId,
+        favoriteSymbols
+      );
 
       console.log(
         `✅ Added ${createdAlerts.length} alerts to real-time monitoring`

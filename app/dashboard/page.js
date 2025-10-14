@@ -448,41 +448,41 @@ export default function Dashboard() {
     <SocketProvider>
       <AlertProvider>
         <FavoritesProvider>
+        <Box
+          sx={{
+            minHeight: "100vh",
+            backgroundColor: "#0a0a0a",
+          }}
+        >
+          {/* Header */}
           <Box
             sx={{
-              minHeight: "100vh",
-              backgroundColor: "#0a0a0a",
+              backgroundColor: "#1a1a1a",
+              borderBottom: "1px solid #333",
+              p: 2,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
             }}
           >
-            {/* Header */}
-            <Box
-              sx={{
-                backgroundColor: "#1a1a1a",
-                borderBottom: "1px solid #333",
-                p: 2,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-            >
-              <Box sx={{ display: "flex", alignItems: "center" }}>
-                {isMobile && (
-                  <IconButton
-                    color="inherit"
-                    onClick={() => setMobileDrawerOpen(true)}
-                    sx={{ mr: 2 }}
-                  >
-                    <MenuIcon />
-                  </IconButton>
-                )}
-                <Typography variant="h5" component="h1" sx={{ color: "white" }}>
-                  Crypto Alerts Dashboard
-                </Typography>
-              </Box>
-              <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
-                <Typography variant="body2" sx={{ color: "#888" }}>
-                  {selectedCoin} - {selectedTimeframe}
-                </Typography>
+            <Box sx={{ display: "flex", alignItems: "center" }}>
+              {isMobile && (
+                <IconButton
+                  color="inherit"
+                  onClick={() => setMobileDrawerOpen(true)}
+                  sx={{ mr: 2 }}
+                >
+                  <MenuIcon />
+                </IconButton>
+              )}
+              <Typography variant="h5" component="h1" sx={{ color: "white" }}>
+                Crypto Alerts Dashboard
+              </Typography>
+            </Box>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+              <Typography variant="body2" sx={{ color: "#888" }}>
+                {selectedCoin} - {selectedTimeframe}
+              </Typography>
                 {chartSwitchNotification && (
                   <Box
                     sx={{
@@ -505,62 +505,62 @@ export default function Dashboard() {
                     {chartSwitchNotification.priceChangePercent}%)
                   </Box>
                 )}
-                <Typography variant="body2" sx={{ color: "#888" }}>
-                  Welcome, {user.name}
-                </Typography>
+              <Typography variant="body2" sx={{ color: "#888" }}>
+                Welcome, {user.name}
+              </Typography>
                 <RealTimeNotifications
                   token={localStorage.getItem("token")}
                   onAlertTrigger={handleAlertTrigger}
                 />
-                <IconButton
-                  color="inherit"
-                  onClick={handleLogout}
-                  sx={{ color: "#888" }}
-                  title="Logout"
-                >
-                  <LogoutIcon />
-                </IconButton>
-              </Box>
-            </Box>
-
-            {/* Main Content */}
-            <Box sx={{ p: 2 }}>{renderMainContent()}</Box>
-
-            {/* Mobile Bottom Navigation */}
-            {isMobile && (
-              <BottomNavigation
-                value={mobileBottomNav}
-                onChange={handleMobileNavChange}
-                sx={{
-                  position: "fixed",
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  backgroundColor: "#1a1a1a",
-                  borderTop: "1px solid #333",
-                  "& .MuiBottomNavigationAction-root": {
-                    color: "#888",
-                    "&.Mui-selected": {
-                      color: "#1976d2",
-                    },
-                  },
-                }}
+              <IconButton
+                color="inherit"
+                onClick={handleLogout}
+                sx={{ color: "#888" }}
+                title="Logout"
               >
+                <LogoutIcon />
+              </IconButton>
+            </Box>
+          </Box>
+
+          {/* Main Content */}
+          <Box sx={{ p: 2 }}>{renderMainContent()}</Box>
+
+          {/* Mobile Bottom Navigation */}
+          {isMobile && (
+            <BottomNavigation
+              value={mobileBottomNav}
+              onChange={handleMobileNavChange}
+              sx={{
+                position: "fixed",
+                bottom: 0,
+                left: 0,
+                right: 0,
+                backgroundColor: "#1a1a1a",
+                borderTop: "1px solid #333",
+                "& .MuiBottomNavigationAction-root": {
+                  color: "#888",
+                  "&.Mui-selected": {
+                    color: "#1976d2",
+                  },
+                },
+              }}
+            >
                 <BottomNavigationAction
                   label="Chart"
                   icon={<TrendingUpIcon />}
                 />
-                <BottomNavigationAction
-                  label="Filters"
-                  icon={<FilterListIcon />}
-                />
-                <BottomNavigationAction label="Market" icon={<ListIcon />} />
-              </BottomNavigation>
-            )}
+              <BottomNavigationAction
+                label="Filters"
+                icon={<FilterListIcon />}
+              />
+              <BottomNavigationAction label="Market" icon={<ListIcon />} />
+            </BottomNavigation>
+          )}
 
-            {/* Mobile Drawer */}
-            {renderMobileDrawer()}
-          </Box>
+          {/* Mobile Drawer */}
+          {renderMobileDrawer()}
+        </Box>
         </FavoritesProvider>
       </AlertProvider>
     </SocketProvider>

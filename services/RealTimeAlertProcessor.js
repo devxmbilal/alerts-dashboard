@@ -4,6 +4,7 @@ import AlertHistoryService from "./AlertHistoryService.js";
 import NotificationService from "./NotificationService.js";
 import Alert from "../models/Alert.js";
 import User from "../models/User.js";
+import AlertRedisService from "./AlertRedisService.js";
 
 class RealTimeAlertProcessor {
   constructor() {
@@ -12,6 +13,8 @@ class RealTimeAlertProcessor {
     this.isProcessing = false;
     this.alertIds = new Set(); // Track which alert IDs are currently active
     this.alertBaselines = new Map(); // Track baseline prices for change calculations
+    this.redisSubscribed = false; // Track Redis subscription status
+    this.candleData = new Map(); // Track candle data for timeframe-based changes
   }
 
   async loadAlertsFromRedis(userId) {
@@ -95,6 +98,22 @@ class RealTimeAlertProcessor {
 
       console.log(`🔍 Found ${alerts.length} active alerts for ${symbol}`);
 
+      // Update candle data for all timeframes used by alerts
+      const timeframes = new Set();
+      for (const alert of alerts) {
+        if (
+          alert.conditions.changePercent &&
+          alert.conditions.changePercent.timeframe
+        ) {
+          timeframes.add(alert.conditions.changePercent.timeframe);
+        }
+      }
+
+      // Update candle data for each timeframe
+      for (const timeframe of timeframes) {
+        this.updateCandleData(symbol, timeframe, priceData);
+      }
+
       // Process each alert for this symbol
       for (const alert of alerts) {
         await this.checkAlertConditions(alert, priceData);
@@ -163,64 +182,35 @@ class RealTimeAlertProcessor {
         console.log(`⚠️ Min Daily condition not set or volume data missing`);
       }
 
-      // Check Change % condition (required)
+      // Check Change % condition (required) - Now based on candle timeframe
       if (
         conditionsMet &&
         conditions.changePercent &&
         conditions.changePercent.percentage
       ) {
         const requiredChange = parseFloat(conditions.changePercent.percentage);
-        const currentPrice = parseFloat(priceData.price);
-        const alertKey = `${alert._id}_${alert.symbol}`;
-
-        // Get or set baseline price for this alert
-        if (!this.alertBaselines.has(alertKey)) {
-          this.alertBaselines.set(alertKey, {
-            price: currentPrice,
-            timestamp: Date.now(),
-            timeframe: conditions.changePercent.timeframe,
-          });
-          console.log(
-            `📊 Setting baseline price for ${alert.symbol}: ${currentPrice} (Alert: ${alert._id})`
-          );
-        }
-
-        const baseline = this.alertBaselines.get(alertKey);
-        const priceChange =
-          ((currentPrice - baseline.price) / baseline.price) * 100;
-        const absolutePriceChange = Math.abs(priceChange);
+        const timeframe = conditions.changePercent.timeframe || "5m";
 
         console.log(
-          `📊 Change % Check: Required=${requiredChange}%, Current Change=${priceChange.toFixed(
-            3
-          )}%, Absolute=${absolutePriceChange.toFixed(3)}%`
-        );
-        console.log(
-          `📊 Baseline: ${
-            baseline.price
-          }, Current: ${currentPrice}, Change: ${priceChange.toFixed(3)}%`
+          `📊 Checking candle change condition: ${requiredChange}% in ${timeframe}`
         );
 
-        if (absolutePriceChange < requiredChange) {
+        // Check if candle meets the change requirement
+        const candleChangeMet = this.checkCandleChangeCondition(
+          alert.symbol,
+          timeframe,
+          requiredChange
+        );
+
+        if (!candleChangeMet) {
           console.log(
-            `❌ Change % condition FAILED: ${absolutePriceChange.toFixed(
-              3
-            )}% < ${requiredChange}%`
+            `❌ Candle Change % condition FAILED: Candle change < ${requiredChange}% in ${timeframe}`
           );
           conditionsMet = false;
         } else {
           console.log(
-            `✅ Change % condition PASSED: ${absolutePriceChange.toFixed(
-              3
-            )}% >= ${requiredChange}%`
+            `✅ Candle Change % condition PASSED: Candle change >= ${requiredChange}% in ${timeframe}`
           );
-
-          // Reset baseline after trigger for next cycle
-          this.alertBaselines.set(alertKey, {
-            price: currentPrice,
-            timestamp: Date.now(),
-            timeframe: conditions.changePercent.timeframe,
-          });
         }
       } else {
         console.log(`⚠️ Change % condition not set or data missing`);
@@ -298,7 +288,11 @@ class RealTimeAlertProcessor {
         // Mark as processed immediately to prevent duplicates
         this.processedAlerts.add(alertKey);
 
-        await this.triggerAlert(alert, priceData);
+        console.log(`🔄 Calling triggerAlert for ${alert.symbol}...`);
+        const triggerResult = await this.triggerAlert(alert, priceData);
+        console.log(
+          `🔄 triggerAlert result for ${alert.symbol}: ${triggerResult}`
+        );
 
         // Clean up old processed alerts (keep only last 1000)
         if (this.processedAlerts.size > 1000) {
@@ -323,14 +317,22 @@ class RealTimeAlertProcessor {
 
   async triggerAlert(alert, priceData) {
     try {
+      console.log(
+        `🚀 Starting triggerAlert for ${alert.symbol} (Alert ID: ${alert._id})`
+      );
+
       // Check if we already processed this alert recently (prevent spam)
       const alertKey = `${alert._id}_${Math.floor(priceData.timestamp / 1000)}`;
       if (this.processedAlerts.has(alertKey)) {
-        return false;
+        console.log(
+          `⚠️ Alert ${alert._id} already processed recently, but continuing with history save`
+        );
+        // Don't return false - continue with history saving
+      } else {
+        // Mark this alert as processed for this time period
+        this.processedAlerts.add(alertKey);
+        console.log(`✅ Alert ${alert._id} marked as processed`);
       }
-
-      // Mark this alert as processed for this time period
-      this.processedAlerts.add(alertKey);
 
       // Clean up old processed alerts (keep only last 60 seconds)
       const currentTime = Math.floor(Date.now() / 1000);
@@ -363,7 +365,47 @@ class RealTimeAlertProcessor {
       };
 
       // Save to AlertHistory
-      await AlertHistoryService.createAlertHistory(alertHistory);
+      console.log(`📝 Saving alert history for ${alert.symbol}...`);
+      console.log(
+        `📝 Alert history data:`,
+        JSON.stringify(alertHistory, null, 2)
+      );
+
+      // Check if we already saved this alert recently (prevent duplicate history entries)
+      const historyKey = `history_${alert._id}_${Math.floor(
+        Date.now() / 60000
+      )}`; // 1 minute window
+      if (this.processedAlerts.has(historyKey)) {
+        console.log(
+          `⚠️ Alert history for ${alert._id} already saved recently, skipping duplicate`
+        );
+      } else {
+        try {
+          const savedHistory = await AlertHistoryService.createAlertHistory(
+            alertHistory
+          );
+          console.log(
+            `✅ Alert history saved successfully: ${savedHistory._id}`
+          );
+          console.log(`✅ Alert history details:`, {
+            id: savedHistory._id,
+            symbol: savedHistory.symbol,
+            price: savedHistory.triggerData.price,
+            triggeredAt: savedHistory.triggeredAt,
+          });
+
+          // Mark history as saved
+          this.processedAlerts.add(historyKey);
+        } catch (historyError) {
+          console.error(
+            `❌ Error saving alert history for ${alert.symbol}:`,
+            historyError
+          );
+          console.error(`❌ History error details:`, historyError.message);
+          console.error(`❌ History error stack:`, historyError.stack);
+          // Don't throw error, continue with alert processing
+        }
+      }
 
       // Update alert lock if alert count is set
       if (
@@ -545,6 +587,14 @@ class RealTimeAlertProcessor {
     try {
       // Remove from active alerts map
       this.activeAlerts.delete(symbol);
+
+      // Clean up candle data for this symbol
+      for (const [key, candle] of this.candleData.entries()) {
+        if (key.startsWith(`${symbol}_`)) {
+          this.candleData.delete(key);
+        }
+      }
+
       console.log(`🗑️ Removed alerts for ${symbol} from active processing`);
     } catch (error) {
       console.error(`❌ Error removing alerts for ${symbol}:`, error);
@@ -681,6 +731,14 @@ class RealTimeAlertProcessor {
         }
       }
 
+      // Clean up candle data for this alert's symbol
+      for (const [key, candle] of this.candleData.entries()) {
+        if (key.startsWith(`${symbol}_`)) {
+          this.candleData.delete(key);
+          console.log(`🗑️ Cleaned up candle data for ${symbol}`);
+        }
+      }
+
       if (!removed) {
         console.log(`⚠️ Alert ${alertId} was not found in active monitoring`);
       }
@@ -721,7 +779,218 @@ class RealTimeAlertProcessor {
   // Force reset all baselines (when system restarts or conditions change globally)
   resetAllBaselines() {
     this.alertBaselines.clear();
-    console.log(`🔄 Reset all alert baselines`);
+    this.candleData.clear();
+    console.log(`🔄 Reset all alert baselines and candle data`);
+  }
+
+  // Convert timeframe string to milliseconds
+  getTimeframeMs(timeframe) {
+    const timeframes = {
+      "1m": 1 * 60 * 1000, // 1 minute
+      "2m": 2 * 60 * 1000, // 2 minutes
+      "3m": 3 * 60 * 1000, // 3 minutes
+
+      "5MIN": 5 * 60 * 1000, // 5 minutes (alternative format)
+      "10m": 10 * 60 * 1000, // 10 minutes
+      "15m": 15 * 60 * 1000, // 15 minutes
+      "30m": 30 * 60 * 1000, // 30 minutes
+      "1h": 60 * 60 * 1000, // 1 hour
+      "2h": 2 * 60 * 60 * 1000, // 2 hours
+      "4h": 4 * 60 * 60 * 1000, // 4 hours
+      "6h": 6 * 60 * 60 * 1000, // 6 hours
+      "8h": 8 * 60 * 60 * 1000, // 8 hours
+      "12h": 12 * 60 * 60 * 1000, // 12 hours
+      "1d": 24 * 60 * 60 * 1000, // 1 day
+    };
+
+    return timeframes[timeframe] || timeframes["5m"]; // Default to 5 minutes
+  }
+
+  // Get or create candle data for a symbol and timeframe
+  getCandleData(symbol, timeframe) {
+    const key = `${symbol}_${timeframe}`;
+    if (!this.candleData.has(key)) {
+      this.candleData.set(key, {
+        open: null,
+        high: null,
+        low: null,
+        close: null,
+        volume: 0,
+        startTime: null,
+        endTime: null,
+        isComplete: false,
+      });
+    }
+    return this.candleData.get(key);
+  }
+
+  // Update candle data with new price
+  updateCandleData(symbol, timeframe, priceData) {
+    const candle = this.getCandleData(symbol, timeframe);
+    const currentTime = Date.now();
+    const timeframeMs = this.getTimeframeMs(timeframe);
+
+    // Calculate candle start time (aligned to timeframe)
+    const candleStartTime = Math.floor(currentTime / timeframeMs) * timeframeMs;
+
+    // If this is a new candle, reset the candle data
+    if (candle.startTime !== candleStartTime) {
+      if (candle.startTime !== null) {
+        // Previous candle is complete
+        candle.isComplete = true;
+        console.log(
+          `🕯️ Candle completed for ${symbol} (${timeframe}): Open=${
+            candle.open
+          }, Close=${candle.close}, Change=${this.calculateCandleChange(
+            candle
+          )}%`
+        );
+      }
+
+      // Start new candle
+      candle.open = parseFloat(priceData.price);
+      candle.high = parseFloat(priceData.price);
+      candle.low = parseFloat(priceData.price);
+      candle.close = parseFloat(priceData.price);
+      candle.volume = parseFloat(priceData.volume) || 0;
+      candle.startTime = candleStartTime;
+      candle.endTime = candleStartTime + timeframeMs;
+      candle.isComplete = false;
+
+      console.log(
+        `🕯️ New candle started for ${symbol} (${timeframe}): Open=${candle.open}`
+      );
+    } else {
+      // Update existing candle
+      const price = parseFloat(priceData.price);
+      candle.high = Math.max(candle.high, price);
+      candle.low = Math.min(candle.low, price);
+      candle.close = price;
+      candle.volume += parseFloat(priceData.volume) || 0;
+
+      // Check if current candle meets change requirement (immediate check)
+      const currentChange = this.calculateCandleChange(candle);
+      console.log(
+        `🕯️ Candle updated for ${symbol} (${timeframe}): High=${
+          candle.high
+        }, Low=${candle.low}, Close=${
+          candle.close
+        }, Current Change=${currentChange.toFixed(3)}%`
+      );
+    }
+
+    return candle;
+  }
+
+  // Calculate percentage change for a candle
+  calculateCandleChange(candle) {
+    if (!candle.open || !candle.close) return 0;
+    return ((candle.close - candle.open) / candle.open) * 100;
+  }
+
+  // Check if a candle meets the change percentage requirement
+  checkCandleChangeCondition(symbol, timeframe, requiredChange) {
+    const candle = this.getCandleData(symbol, timeframe);
+
+    console.log(`🔍 Checking candle for ${symbol} (${timeframe}):`);
+    console.log(`   Candle complete: ${candle.isComplete}`);
+    console.log(`   Open: ${candle.open}, Close: ${candle.close}`);
+    console.log(
+      `   Start time: ${candle.startTime}, End time: ${candle.endTime}`
+    );
+
+    // Check if we have valid candle data
+    if (!candle.open || !candle.close) {
+      console.log(
+        `❌ Candle not ready: Open=${candle.open}, Close=${candle.close}`
+      );
+      return false;
+    }
+
+    const changePercent = this.calculateCandleChange(candle);
+    const absoluteChange = Math.abs(changePercent);
+
+    console.log(`📊 Candle Change Check for ${symbol} (${timeframe}):`);
+    console.log(`   Open: ${candle.open}, Close: ${candle.close}`);
+    console.log(
+      `   Change: ${changePercent.toFixed(3)}%, Required: ${requiredChange}%`
+    );
+    console.log(`   Absolute Change: ${absoluteChange.toFixed(3)}%`);
+
+    const meetsRequirement = absoluteChange >= requiredChange;
+    console.log(`   Result: ${meetsRequirement ? "✅ PASSED" : "❌ FAILED"}`);
+
+    return meetsRequirement;
+  }
+
+  // Subscribe to Redis alert management events
+  async subscribeToAlertManagement() {
+    if (this.redisSubscribed) {
+      console.log("⚠️ Already subscribed to alert management events");
+      return;
+    }
+
+    try {
+      await AlertRedisService.subscribeToAlertManagement((data) => {
+        this.handleAlertManagementEvent(data);
+      });
+      this.redisSubscribed = true;
+      console.log("✅ Subscribed to alert management events");
+    } catch (error) {
+      console.error("❌ Error subscribing to alert management:", error);
+    }
+  }
+
+  // Handle Redis alert management events
+  async handleAlertManagementEvent(data) {
+    try {
+      console.log(`📢 Received alert management event:`, data);
+
+      switch (data.type) {
+        case "alert_created":
+          await this.addAlert(data.alertId);
+          break;
+
+        case "alert_removed":
+          await this.removeAlert(data.alertId);
+          break;
+
+        case "bulk_alerts_created":
+          for (const alertId of data.alertIds) {
+            await this.addAlert(alertId);
+          }
+          break;
+
+        case "alerts_cleared":
+          await this.removeAlertsForUser(data.userId);
+          break;
+
+        case "alerts_removed_for_symbol":
+          await this.removeAlertsForSymbol(data.symbol);
+          break;
+
+        default:
+          console.log(`⚠️ Unknown alert management event type: ${data.type}`);
+      }
+    } catch (error) {
+      console.error("❌ Error handling alert management event:", error);
+    }
+  }
+
+  // Unsubscribe from Redis alert management events
+  async unsubscribeFromAlertManagement() {
+    if (!this.redisSubscribed) {
+      console.log("⚠️ Not subscribed to alert management events");
+      return;
+    }
+
+    try {
+      await AlertRedisService.unsubscribeFromAlertManagement();
+      this.redisSubscribed = false;
+      console.log("✅ Unsubscribed from alert management events");
+    } catch (error) {
+      console.error("❌ Error unsubscribing from alert management:", error);
+    }
   }
 }
 

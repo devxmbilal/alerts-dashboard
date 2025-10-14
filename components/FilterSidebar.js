@@ -310,7 +310,7 @@ const FilterSidebar = forwardRef(
           minDaily: minDailyKey,
           changePercent: {
             timeframe: changePercentKey,
-            percentage: filters.changePercent.percentage,
+          percentage: filters.changePercent.percentage,
           },
         };
 

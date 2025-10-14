@@ -5,6 +5,13 @@ class AlertHistoryService {
   // Create alert history entry when alert is triggered
   static async createAlertHistory(alertHistoryData) {
     try {
+      console.log(
+        `📝 Creating alert history for ${alertHistoryData.symbol}...`
+      );
+      console.log(`📝 Alert ID: ${alertHistoryData.alertId}`);
+      console.log(`📝 User ID: ${alertHistoryData.userId}`);
+      console.log(`📝 Trigger Data:`, alertHistoryData.triggerData);
+
       const alertHistory = new AlertHistory({
         alertId: alertHistoryData.alertId,
         userId: alertHistoryData.userId,
@@ -28,11 +35,16 @@ class AlertHistoryService {
         status: "triggered",
       });
 
+      console.log(`📝 Saving alert history to database...`);
       await alertHistory.save();
-      console.log(`📝 Alert history created for ${alertHistoryData.symbol}`);
+      console.log(
+        `✅ Alert history created for ${alertHistoryData.symbol} with ID: ${alertHistory._id}`
+      );
       return alertHistory;
     } catch (error) {
       console.error("❌ Error creating alert history:", error);
+      console.error("❌ Error details:", error.message);
+      console.error("❌ Error stack:", error.stack);
       throw error;
     }
   }

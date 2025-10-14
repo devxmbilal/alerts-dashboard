@@ -4,6 +4,7 @@ import { verifyToken } from "../../../../utils/auth.js";
 import { AlertsCache } from "../../../../utils/redis.js";
 import { initializeRedis } from "../../../../utils/init-redis.js";
 import Alert from "../../../../models/Alert.js";
+import AlertRedisService from "../../../../services/AlertRedisService.js";
 
 // POST /api/alerts/remove - Remove alerts for specific symbols
 export async function POST(request) {
@@ -54,6 +55,15 @@ export async function POST(request) {
 
       for (const alert of alertsToDelete) {
         await RealTimeAlertProcessor.removeAlert(alert._id.toString());
+      }
+
+      // Publish Redis message for alerts removed
+      for (const alert of alertsToDelete) {
+        await AlertRedisService.publishAlertRemoved(
+          alert._id.toString(),
+          decoded.userId,
+          alert.symbol
+        );
       }
 
       console.log(

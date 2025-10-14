@@ -4,6 +4,7 @@ import { verifyToken } from "../../../../utils/auth.js";
 import { AlertsCache } from "../../../../utils/redis.js";
 import { initializeRedis } from "../../../../utils/init-redis.js";
 import Alert from "../../../../models/Alert.js";
+import AlertRedisService from "../../../../services/AlertRedisService.js";
 
 // POST /api/alerts/clear - Clear all alerts for user
 export async function POST(request) {
@@ -45,6 +46,9 @@ export async function POST(request) {
       for (const alert of alertsToDelete) {
         await RealTimeAlertProcessor.removeAlert(alert._id.toString());
       }
+
+      // Publish Redis message for alerts cleared
+      await AlertRedisService.publishAlertsCleared(decoded.userId);
 
       console.log(
         `✅ Removed ${alertsToDelete.length} alerts from real-time monitoring`

@@ -6,6 +6,7 @@ import { isAlertLocked, updateAlertLock } from "../utils/alertLock.js";
 import Alert from "../models/Alert.js";
 import WebSocketService from "../services/WebSocketService.js";
 import RealTimeAlertProcessor from "../services/RealTimeAlertProcessor.js";
+import AlertRedisService from "../services/AlertRedisService.js";
 
 class AlertWorker {
   constructor() {
@@ -32,15 +33,44 @@ class AlertWorker {
       await this.redis.ping();
       console.log("✅ Connected to Redis");
 
+      // Handle Redis connection errors
+      this.redis.on("error", (err) => {
+        console.error("❌ Redis connection error:", err);
+      });
+
       // Load all active alerts into memory
       await RealTimeAlertProcessor.loadAllActiveAlerts();
       console.log("✅ Loaded active alerts into memory");
 
-      // Connect to WebSocket for real-time data
+      // Subscribe to alert management events
+      await RealTimeAlertProcessor.subscribeToAlertManagement();
+      console.log("✅ Subscribed to alert management events");
+
+      // Subscribe to Redis market updates (same as MarketPanel)
+      await this.redis.subscribe("market:updates");
+      console.log("✅ Subscribed to market:updates channel");
+
+      this.redis.on("message", (channel, message) => {
+        if (channel === "market:updates") {
+          try {
+            const data = JSON.parse(message);
+            if (data.type === "market_update") {
+              console.log(
+                `📡 Redis market update: ${data.symbol} = $${data.data.price}`
+              );
+              this.handlePriceUpdate(data.data);
+            }
+          } catch (error) {
+            console.error("❌ Error parsing Redis message:", error);
+          }
+        }
+      });
+
+      // Also connect to WebSocket for backup data
       await WebSocketService.connect();
       console.log("✅ Connected to Binance WebSocket");
 
-      // Subscribe to all price updates
+      // Subscribe to all price updates from WebSocket
       WebSocketService.subscribeToAll((priceData) => {
         this.handlePriceUpdate(priceData);
       });
@@ -56,7 +86,11 @@ class AlertWorker {
 
   async handlePriceUpdate(priceData) {
     try {
-      // Process the price update in real-time
+      console.log(
+        `📡 Price update received for ${priceData.symbol}: Price=${priceData.price}, Volume=${priceData.volume}, Change=${priceData.priceChangePercent}%`
+      );
+
+      // Process the price update in real-time using RealTimeAlertProcessor
       await RealTimeAlertProcessor.processPriceUpdate(priceData);
     } catch (error) {
       console.error(
@@ -324,9 +358,13 @@ class AlertWorker {
     console.log("🛑 Stopping Alert Worker...");
     this.isRunning = false;
 
+    // Unsubscribe from alert management events
+    await RealTimeAlertProcessor.unsubscribeFromAlertManagement();
+
     if (this.redis) {
-      await this.redis.unsubscribe();
+      await this.redis.unsubscribe("market:updates");
       await this.redis.disconnect();
+      console.log("✅ Redis connection closed");
     }
 
     console.log("✅ Alert Worker stopped");
