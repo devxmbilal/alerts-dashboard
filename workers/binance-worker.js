@@ -30,12 +30,93 @@ redis.on("close", () => {
 const BINANCE_WS_BASE = "wss://stream.binance.com:9443/ws";
 const BINANCE_REST_API = "https://api.binance.com/api/v3";
 
+// Fallback API endpoints for better reliability (ordered by reliability)
+const BINANCE_API_ENDPOINTS = [
+  "https://api.binance.com/api/v3",
+  "https://api1.binance.com/api/v3",
+  "https://api3.binance.com/api/v3",
+  "https://api2.binance.com/api/v3", // This one has DNS issues, put last
+];
+
+// Network configuration for better connectivity
+const FETCH_CONFIG = {
+  timeout: 10000, // 10 second timeout
+  headers: {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    Accept: "application/json",
+    Connection: "keep-alive",
+  },
+};
+
 // Track active connections
 const activeConnections = new Map();
 const subscribedPairs = new Set();
 
 // Dynamic USDT pairs - will be fetched from Binance
 let USDT_PAIRS = [];
+
+// Robust fetch function with retry logic
+async function robustFetch(url, options = {}) {
+  const maxRetries = 3;
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`🔄 Attempt ${attempt}/${maxRetries}: ${url}`);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(
+        () => controller.abort(),
+        FETCH_CONFIG.timeout
+      );
+
+      const response = await fetch(url, {
+        ...FETCH_CONFIG,
+        ...options,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      console.log(`✅ Successfully connected to ${url}`);
+      return response;
+    } catch (error) {
+      lastError = error;
+      console.log(`❌ Attempt ${attempt} failed: ${error.message}`);
+
+      if (attempt < maxRetries) {
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+        console.log(`⏳ Waiting ${delay}ms before retry...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  throw lastError;
+}
+
+// Try multiple Binance endpoints
+async function fetchWithFallback(endpoint) {
+  for (const baseUrl of BINANCE_API_ENDPOINTS) {
+    try {
+      const url = `${baseUrl}${endpoint}`;
+      console.log(`🔄 Trying endpoint: ${url}`);
+      const response = await robustFetch(url);
+      return response;
+    } catch (error) {
+      console.log(
+        `❌ Failed to connect to ${baseUrl}${endpoint}: ${error.message}`
+      );
+    }
+  }
+
+  throw new Error("All Binance endpoints failed");
+}
 
 class BinanceWorker {
   constructor() {
@@ -87,7 +168,7 @@ class BinanceWorker {
       console.log("📊 Fetching all USDT spot pairs from Binance...");
 
       // Get exchange info to get all trading pairs
-      const response = await fetch(`${BINANCE_REST_API}/exchangeInfo`);
+      const response = await fetchWithFallback("/exchangeInfo");
       const exchangeInfo = await response.json();
 
       // Filter for USDT spot pairs (not futures, not delisted, not premium)
@@ -141,7 +222,7 @@ class BinanceWorker {
       console.log("📊 Fetching initial market data...");
 
       // Fetch 24hr ticker data for all pairs
-      const response = await fetch(`${BINANCE_REST_API}/ticker/24hr`);
+      const response = await fetchWithFallback("/ticker/24hr");
       const tickers = await response.json();
 
       // Process and cache data
@@ -304,8 +385,8 @@ class BinanceWorker {
       try {
         console.log("🧹 Starting pair cleanup...");
 
-        // Get current valid pairs from Binance
-        const response = await fetch(`${BINANCE_REST_API}/exchangeInfo`);
+        // Get current valid pairs from Binance with fallback
+        const response = await fetchWithFallback("/exchangeInfo");
         const exchangeInfo = await response.json();
 
         const validSymbols = exchangeInfo.symbols
@@ -373,6 +454,8 @@ class BinanceWorker {
         }
       } catch (error) {
         console.error("❌ Error during pair cleanup:", error);
+        console.log("⚠️ Pair cleanup failed, will retry in next cycle");
+        // Don't throw error to prevent interval from stopping
       }
     }, 300000); // Every 5 minutes
   }
