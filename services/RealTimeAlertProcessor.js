@@ -139,8 +139,20 @@ class RealTimeAlertProcessor {
 
       // Check if alert is locked (temporary lock due to alert count)
       if (isAlertLocked(alert)) {
+        const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
+        const now = new Date();
+        const timeRemaining = Math.max(0, lockUntil.getTime() - now.getTime());
+        const minutesRemaining = Math.ceil(timeRemaining / (1000 * 60));
+
         console.log(
-          `🔒 Alert ${alert._id} for ${alert.symbol} is LOCKED (Alert Count condition)`
+          `🔒 Alert ${alert._id} for ${
+            alert.symbol
+          } is LOCKED until ${lockUntil.toISOString()}`
+        );
+        console.log(
+          `⏰ Time remaining: ${minutesRemaining} minutes (${Math.ceil(
+            timeRemaining / 1000
+          )} seconds)`
         );
         return false;
       }
@@ -414,10 +426,10 @@ class RealTimeAlertProcessor {
       ) {
         const updatedConditions = updateAlertLock(alert);
 
-        // Update alert conditions with lock (but keep alert active)
+        // Update alert conditions with new lock time
         await Alert.findByIdAndUpdate(alert._id, {
           conditions: updatedConditions,
-          // Don't mark as triggered - keep alert active for future triggers
+          // Update last triggered info but keep alert active
           lastTriggeredAt: new Date(),
           lastTriggeredPrice: priceData.price,
           lastTriggeredVolume: priceData.volume,
@@ -427,6 +439,9 @@ class RealTimeAlertProcessor {
         console.log(
           `🔒 Alert ${alert._id} for ${alert.symbol} locked until ${updatedConditions.alertCount.lockUntil}`
         );
+        console.log(
+          `⏰ Next trigger allowed after: ${updatedConditions.alertCount.lockUntil}`
+        );
       } else {
         // Update last triggered info but keep alert active
         await Alert.findByIdAndUpdate(alert._id, {
@@ -435,6 +450,10 @@ class RealTimeAlertProcessor {
           lastTriggeredVolume: priceData.volume,
           lastTriggeredChange: priceData.priceChangePercent,
         });
+
+        console.log(
+          `✅ Alert ${alert._id} for ${alert.symbol} updated (no lock period)`
+        );
       }
 
       // Send real-time notification (we'll implement this)
