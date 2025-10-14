@@ -340,7 +340,7 @@ class RealTimeAlertProcessor {
           `⚠️ Alert ${alert._id} already processed recently, but continuing with history save`
         );
         // Don't return false - continue with history saving
-      } else {
+        } else {
         // Mark this alert as processed for this time period
         this.processedAlerts.add(alertKey);
         console.log(`✅ Alert ${alert._id} marked as processed`);
