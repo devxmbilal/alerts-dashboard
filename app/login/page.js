@@ -23,7 +23,6 @@ import {
   VisibilityOff,
   Login as LoginIcon,
 } from "@mui/icons-material";
-import { useRouter } from "next/navigation";
 
 const LoginPage = () => {
   const router = useRouter();
