@@ -86,9 +86,43 @@ class BinanceWorker {
     try {
       console.log("📊 Fetching all USDT spot pairs from Binance...");
 
-      // Get exchange info to get all trading pairs
-      const response = await fetch(`${BINANCE_REST_API}/exchangeInfo`);
-      const exchangeInfo = await response.json();
+      // Try multiple Binance endpoints with retry logic
+      const endpoints = [
+        `${BINANCE_REST_API}/exchangeInfo`,
+        "https://api1.binance.com/api/v3/exchangeInfo",
+        "https://api2.binance.com/api/v3/exchangeInfo",
+        "https://api3.binance.com/api/v3/exchangeInfo",
+      ];
+
+      let response;
+      let exchangeInfo;
+      let success = false;
+
+      for (const endpoint of endpoints) {
+        try {
+          console.log(`🔄 Trying endpoint: ${endpoint}`);
+          response = await fetch(endpoint, {
+            timeout: 10000, // 10 second timeout
+            headers: {
+              "User-Agent": "Mozilla/5.0 (compatible; AlertsDashboard/1.0)",
+            },
+          });
+
+          if (response.ok) {
+            exchangeInfo = await response.json();
+            console.log(`✅ Successfully connected to: ${endpoint}`);
+            success = true;
+            break;
+          }
+        } catch (error) {
+          console.log(`❌ Failed to connect to ${endpoint}:`, error.message);
+          continue;
+        }
+      }
+
+      if (!success) {
+        throw new Error("All Binance endpoints failed");
+      }
 
       // Filter for USDT spot pairs (not futures, not delisted, not premium)
       const usdtPairs = exchangeInfo.symbols
@@ -304,9 +338,45 @@ class BinanceWorker {
       try {
         console.log("🧹 Starting pair cleanup...");
 
-        // Get current valid pairs from Binance
-        const response = await fetch(`${BINANCE_REST_API}/exchangeInfo`);
-        const exchangeInfo = await response.json();
+        // Get current valid pairs from Binance with retry logic
+        let response;
+        let exchangeInfo;
+
+        // Try multiple Binance endpoints
+        const endpoints = [
+          `${BINANCE_REST_API}/exchangeInfo`,
+          "https://api1.binance.com/api/v3/exchangeInfo",
+          "https://api2.binance.com/api/v3/exchangeInfo",
+          "https://api3.binance.com/api/v3/exchangeInfo",
+        ];
+
+        let success = false;
+        for (const endpoint of endpoints) {
+          try {
+            console.log(`🔄 Trying endpoint: ${endpoint}`);
+            response = await fetch(endpoint, {
+              timeout: 10000, // 10 second timeout
+              headers: {
+                "User-Agent": "Mozilla/5.0 (compatible; AlertsDashboard/1.0)",
+              },
+            });
+
+            if (response.ok) {
+              exchangeInfo = await response.json();
+              console.log(`✅ Successfully connected to: ${endpoint}`);
+              success = true;
+              break;
+            }
+          } catch (error) {
+            console.log(`❌ Failed to connect to ${endpoint}:`, error.message);
+            continue;
+          }
+        }
+
+        if (!success) {
+          console.log("⚠️ All Binance endpoints failed, skipping cleanup");
+          return;
+        }
 
         const validSymbols = exchangeInfo.symbols
           .filter(
