@@ -129,7 +129,7 @@ npm start
 
 ### **3.1 Create PM2 Ecosystem File**
 ```bash
-nano ecosystem.config.js
+nano ecosystem.config.cjs
 ```
 
 **Add the following content:**
@@ -181,7 +181,7 @@ module.exports = {
 ### **3.2 Start Applications with PM2**
 ```bash
 # Start all applications
-pm2 start ecosystem.config.js
+pm2 start ecosystem.config.cjs
 
 # Save PM2 configuration
 pm2 save

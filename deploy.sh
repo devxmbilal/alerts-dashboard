@@ -75,7 +75,7 @@ echo "1. Copy your application files to /var/www/alerts-dashboard"
 echo "2. Run 'npm install' in the application directory"
 echo "3. Create .env.production file with your configuration"
 echo "4. Run 'npm run build' to build the application"
-echo "5. Start with PM2: 'pm2 start ecosystem.config.js'"
+echo "5. Start with PM2: 'pm2 start ecosystem.config.cjs'"
 echo "6. Save PM2 configuration: 'pm2 save'"
 echo "7. Setup PM2 startup: 'sudo pm2 startup'"
 
