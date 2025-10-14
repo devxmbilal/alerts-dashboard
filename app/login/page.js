@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Box,
   Paper,
@@ -185,12 +186,6 @@ const LoginPage = () => {
               </Button>
             </form>
           </CardContent>
-
-          <CardActions sx={{ justifyContent: "center", pb: 3 }}>
-            <Typography variant="body2" color="text.secondary">
-              Default credentials: admin / admin123
-            </Typography>
-          </CardActions>
         </Card>
       </Container>
     </Box>

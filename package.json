@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
-    "start": "next start",
+    "start": "next start -p 3000",
     "worker": "node workers/binance-worker.js",
     "alert-worker": "node workers/alert-worker.js",
     "real-time-worker": "node workers/real-time-alert-worker.js",

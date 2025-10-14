@@ -30,7 +30,7 @@ npm install bcryptjs jsonwebtoken
 # Setup database with all indexes
 npm run setup-db
 
-# Seed default users
+# Check user statistics
 npm run seed-users
 ```
 
@@ -55,19 +55,9 @@ npm run worker       # Binance data worker
 npm run alert-worker # Alert evaluation worker
 ```
 
-## 👤 **Default Users**
+## 👤 **User Management**
 
-### **Admin User**
-- **Username:** `admin`
-- **Password:** `admin123`
-- **Name:** Admin User
-- **Email:** admin@alerts.com
-
-### **Test User**
-- **Username:** `testuser`
-- **Password:** `test123`
-- **Name:** Test User
-- **Email:** test@alerts.com
+Users can be created through the registration system or by administrators.
 
 ## 🔐 **Authentication Flow**
 
