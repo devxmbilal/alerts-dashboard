@@ -337,6 +337,7 @@ const MarketPanel = forwardRef(
 
     // Format volume - exact same as client
     const formatVolume = (volume) => {
+      if (!volume || volume === undefined || volume === null) return "0";
       if (volume >= 1e9) return `${(volume / 1e9).toFixed(1)}B`;
       if (volume >= 1e6) return `${(volume / 1e6).toFixed(1)}M`;
       if (volume >= 1e3) return `${(volume / 1e3).toFixed(1)}K`;
@@ -660,7 +661,7 @@ const MarketPanel = forwardRef(
                           variant="caption"
                           sx={{ color: "#888", fontSize: "0.75rem" }}
                         >
-                          Vol: {formatVolume(coin.volume)}
+                          Vol: {formatVolume(coin.volume24h)}
                         </Typography>
                       </Box>
 

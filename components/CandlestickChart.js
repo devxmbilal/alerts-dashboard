@@ -26,12 +26,13 @@ import {
 const generateMockCandlestickData = (symbol, timeframe) => {
   const data = [];
   const now = Date.now();
-  let basePrice = symbol === "BTCUSDT" ? 45000 : symbol === "ETHUSDT" ? 3000 : 100;
-  
+  let basePrice =
+    symbol === "BTCUSDT" ? 45000 : symbol === "ETHUSDT" ? 3000 : 100;
+
   // Generate 100 candles
   const candleCount = 100;
   const intervalMs = getIntervalMs(timeframe);
-  
+
   for (let i = 0; i < candleCount; i++) {
     const time = now - (candleCount - i) * intervalMs;
     const open = basePrice + (Math.random() - 0.5) * basePrice * 0.02;
@@ -39,7 +40,7 @@ const generateMockCandlestickData = (symbol, timeframe) => {
     const high = Math.max(open, close) + Math.random() * basePrice * 0.01;
     const low = Math.min(open, close) - Math.random() * basePrice * 0.01;
     const volume = Math.random() * 1000000;
-    
+
     data.push({
       time: Math.floor(time / 1000), // Convert to seconds
       open: Number(open.toFixed(2)),
@@ -48,45 +49,52 @@ const generateMockCandlestickData = (symbol, timeframe) => {
       close: Number(close.toFixed(2)),
       volume: Number(volume.toFixed(0)),
     });
-    
+
     basePrice = close; // Use close price as base for next candle
   }
-  
+
   return data;
 };
 
 const getIntervalMs = (timeframe) => {
   switch (timeframe) {
-    case "1m": return 60 * 1000;
-    case "5m": return 5 * 60 * 1000;
-    case "15m": return 15 * 60 * 1000;
-    case "1h": return 60 * 60 * 1000;
-    case "4h": return 4 * 60 * 60 * 1000;
-    case "1d": return 24 * 60 * 60 * 1000;
-    default: return 60 * 1000;
+    case "1m":
+      return 60 * 1000;
+    case "5m":
+      return 5 * 60 * 1000;
+    case "15m":
+      return 15 * 60 * 1000;
+    case "1h":
+      return 60 * 60 * 1000;
+    case "4h":
+      return 4 * 60 * 60 * 1000;
+    case "1d":
+      return 24 * 60 * 60 * 1000;
+    default:
+      return 60 * 1000;
   }
 };
 
 const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("md"));
-  
+
   // Socket context for real-time data
   const { getSymbolData, isConnected } = useSocket();
-  
+
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [priceChange, setPriceChange] = useState(0);
   const [currentPrice, setCurrentPrice] = useState(0);
   const [volume, setVolume] = useState(0);
   const [isClient, setIsClient] = useState(false);
-  
+
   // Chart references
   const chartContainerRef = useRef(null);
   const chartRef = useRef(null);
   const candlestickSeriesRef = useRef(null);
   const volumeSeriesRef = useRef(null);
-  
+
   // Timeframe options
   const timeframeOptions = [
     { value: "1m", label: "1M" },
@@ -96,7 +104,7 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
     { value: "4h", label: "4H" },
     { value: "1d", label: "1D" },
   ];
-  
+
   // Set client-side flag
   useEffect(() => {
     setIsClient(true);
@@ -105,7 +113,7 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
   // Initialize chart
   useEffect(() => {
     if (!isClient || !chartContainerRef.current) return;
-    
+
     // Create chart
     const chart = createChart(chartContainerRef.current, {
       width: chartContainerRef.current.clientWidth,
@@ -130,7 +138,7 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
         secondsVisible: false,
       },
     });
-    
+
     // Create candlestick series
     const candlestickSeries = chart.addCandlestickSeries({
       upColor: "#4caf50",
@@ -140,7 +148,7 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
       wickDownColor: "#f44336",
       wickUpColor: "#4caf50",
     });
-    
+
     // Create volume series
     const volumeSeries = chart.addHistogramSeries({
       color: "#26a69a",
@@ -149,11 +157,11 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
       },
       priceScaleId: "volume",
     });
-    
+
     chartRef.current = chart;
     candlestickSeriesRef.current = candlestickSeries;
     volumeSeriesRef.current = volumeSeries;
-    
+
     // Configure volume scale
     chart.priceScale("volume").applyOptions({
       scaleMargins: {
@@ -161,7 +169,7 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
         bottom: 0,
       },
     });
-    
+
     // Handle resize
     const handleResize = () => {
       if (chartContainerRef.current) {
@@ -170,91 +178,95 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
         });
       }
     };
-    
+
     window.addEventListener("resize", handleResize);
-    
+
     return () => {
       window.removeEventListener("resize", handleResize);
       chart.remove();
     };
   }, [isClient]);
-  
+
   // Load data from real API
   const loadData = async () => {
     setLoading(true);
     try {
       console.log(`📊 Loading candlestick data for ${symbol} ${timeframe}`);
-      
+
       // Fetch real candlestick data from our API
       const response = await fetch(
         `/api/market/klines?symbol=${symbol}&timeframe=${timeframe}&limit=100`
       );
-      
+
       if (!response.ok) {
         throw new Error(`API error: ${response.status}`);
       }
-      
+
       const result = await response.json();
-      
-      if (result.success && Array.isArray(result.data) && result.data.length > 0) {
+
+      if (
+        result.success &&
+        Array.isArray(result.data) &&
+        result.data.length > 0
+      ) {
         const newData = result.data;
         setData(newData);
-        
+
         // Update chart
         if (candlestickSeriesRef.current) {
           candlestickSeriesRef.current.setData(newData);
         }
-        
+
         if (volumeSeriesRef.current) {
-          const volumeData = newData.map(candle => ({
+          const volumeData = newData.map((candle) => ({
             time: candle.time,
             value: candle.volume,
             color: candle.close >= candle.open ? "#4caf50" : "#f44336",
           }));
           volumeSeriesRef.current.setData(volumeData);
         }
-        
+
         // Fit content to show all data
         if (chartRef.current) {
           chartRef.current.timeScale().fitContent();
         }
-        
+
         const latest = newData[newData.length - 1];
         const first = newData[0];
-        
+
         if (latest && first) {
           setCurrentPrice(latest.close);
           setVolume(latest.volume || 0);
           setPriceChange(((latest.close - first.open) / first.open) * 100);
         }
-        
+
         console.log(`✅ Loaded ${newData.length} candles for ${symbol}`);
       } else {
         console.warn("No valid data received from API, using mock data");
         // Fallback to mock data if API fails
         const mockData = generateMockCandlestickData(symbol, timeframe);
         setData(mockData);
-        
+
         if (candlestickSeriesRef.current) {
           candlestickSeriesRef.current.setData(mockData);
         }
-        
+
         if (volumeSeriesRef.current) {
-          const volumeData = mockData.map(candle => ({
+          const volumeData = mockData.map((candle) => ({
             time: candle.time,
             value: candle.volume,
             color: candle.close >= candle.open ? "#4caf50" : "#f44336",
           }));
           volumeSeriesRef.current.setData(volumeData);
         }
-        
+
         if (chartRef.current) {
           chartRef.current.timeScale().fitContent();
         }
-        
+
         const latest = mockData[mockData.length - 1];
         const first = mockData[0];
-        
+
         if (latest && first) {
           setCurrentPrice(latest.close);
           setVolume(latest.volume || 0);
@@ -264,31 +276,31 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
     } catch (error) {
       console.error("Error loading chart data:", error);
       console.log("Falling back to mock data");
-      
+
       // Fallback to mock data on error
       const mockData = generateMockCandlestickData(symbol, timeframe);
       setData(mockData);
-      
+
       if (candlestickSeriesRef.current) {
         candlestickSeriesRef.current.setData(mockData);
       }
-      
+
       if (volumeSeriesRef.current) {
-        const volumeData = mockData.map(candle => ({
+        const volumeData = mockData.map((candle) => ({
           time: candle.time,
           value: candle.volume,
           color: candle.close >= candle.open ? "#4caf50" : "#f44336",
         }));
         volumeSeriesRef.current.setData(volumeData);
       }
-      
+
       if (chartRef.current) {
         chartRef.current.timeScale().fitContent();
       }
-      
+
       const latest = mockData[mockData.length - 1];
       const first = mockData[0];
-      
+
       if (latest && first) {
         setCurrentPrice(latest.close);
         setVolume(latest.volume || 0);
@@ -298,24 +310,24 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
       setLoading(false);
     }
   };
-  
+
   // Load data when symbol or timeframe changes
   useEffect(() => {
     if (isClient) {
       loadData();
     }
   }, [symbol, timeframe, isClient]);
-  
+
   // Update chart with real-time data
   useEffect(() => {
     if (!isClient) return;
-    
+
     const symbolData = getSymbolData(symbol);
     if (symbolData && candlestickSeriesRef.current) {
       setCurrentPrice(symbolData.price);
       setVolume(symbolData.volume);
       setPriceChange(symbolData.change);
-      
+
       // Create a new candle from real-time data
       const now = Math.floor(Date.now() / 1000);
       const newCandle = {
@@ -326,12 +338,12 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
         close: symbolData.price,
         volume: symbolData.volume,
       };
-      
+
       // Update the last candle or add new one
       setData((prev) => {
         const newData = [...prev];
         const lastCandle = newData[newData.length - 1];
-        
+
         if (lastCandle && lastCandle.time === now) {
           // Update existing candle
           newData[newData.length - 1] = {
@@ -349,39 +361,40 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
             newData.shift();
           }
         }
-        
+
         // Update chart
         candlestickSeriesRef.current.setData(newData);
-        
+
         if (volumeSeriesRef.current) {
-          const volumeData = newData.map(candle => ({
+          const volumeData = newData.map((candle) => ({
             time: candle.time,
             value: candle.volume,
             color: candle.close >= candle.open ? "#4caf50" : "#f44336",
           }));
           volumeSeriesRef.current.setData(volumeData);
         }
-        
+
         return newData;
       });
     }
   }, [getSymbolData, symbol, isClient]);
-  
+
   // Format price
   const formatPrice = (price) => {
     if (price >= 1000) return `$${price.toLocaleString()}`;
     if (price >= 1) return `$${price.toFixed(2)}`;
     return `$${price.toFixed(4)}`;
   };
-  
+
   // Format volume
   const formatVolume = (vol) => {
+    if (!vol || vol === undefined || vol === null) return "0";
     if (vol >= 1e9) return `${(vol / 1e9).toFixed(1)}B`;
     if (vol >= 1e6) return `${(vol / 1e6).toFixed(1)}M`;
     if (vol >= 1e3) return `${(vol / 1e3).toFixed(1)}K`;
     return vol.toFixed(0);
   };
-  
+
   // Format percentage
   const formatPercentage = (percent) => {
     const isPositive = percent >= 0;
@@ -390,7 +403,7 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
       color: isPositive ? "#4caf50" : "#f44336",
     };
   };
-  
+
   return (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
       {/* Header */}
@@ -417,7 +430,7 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
               Volume (24h): {formatVolume(volume)}
             </Typography>
           </Box>
-          
+
           {/* Timeframe Selector */}
           <ButtonGroup
             variant="outlined"
@@ -455,7 +468,7 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
           </ButtonGroup>
         </Box>
       </Box>
-      
+
       {/* Chart Area */}
       <Box sx={{ flex: 1, p: 1.5, position: "relative", minHeight: "400px" }}>
         {!isClient || loading ? (
@@ -470,7 +483,7 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
                 minHeight: "400px",
               }}
             />
-            
+
             {/* Connection Status */}
             <Box
               sx={{
@@ -500,7 +513,7 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
                 {isConnected ? "Live" : "Offline"}
               </Typography>
             </Box>
-            
+
             {/* Current Price */}
             {currentPrice > 0 && (
               <Box
@@ -532,7 +545,7 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
           </Box>
         )}
       </Box>
-      
+
       {/* Footer Stats */}
       <Box
         sx={{ p: 2, borderTop: "1px solid #333", backgroundColor: "#1a1a1a" }}
@@ -569,10 +582,10 @@ const CandlestickChart = ({ symbol, timeframe, onTimeframeChange }) => {
               </Typography>
               <Typography
                 variant="body2"
-                sx={{ 
-                  color: formatPercentage(priceChange).color, 
-                  fontWeight: 600, 
-                  fontSize: "0.9rem" 
+                sx={{
+                  color: formatPercentage(priceChange).color,
+                  fontWeight: 600,
+                  fontSize: "0.9rem",
                 }}
               >
                 {formatPercentage(priceChange).value}

@@ -41,6 +41,7 @@ export async function POST(request) {
       );
     }
 
+    const userId = decoded.userId;
     const { conditions, notificationSettings } = await request.json();
 
     if (!conditions) {
@@ -127,11 +128,19 @@ export async function POST(request) {
           );
           if (priceData) {
             const data = JSON.parse(priceData);
+            console.log(`🔍 Debug - Fetched data for ${symbol}:`, data);
             currentPrices[symbol] = {
               price: parseFloat(data.price),
               volume: parseFloat(data.volume24h) || 0, // Use volume24h as baseline volume
+              change: parseFloat(data.priceChangePercent) || 0, // Add baseline change percentage
               timestamp: Date.now(),
             };
+            console.log(
+              `🔍 Debug - Set currentPrices[${symbol}]:`,
+              currentPrices[symbol]
+            );
+          } else {
+            console.log(`⚠️ No price data found for ${symbol}`);
           }
         } catch (error) {
           console.warn(`⚠️ Could not get price for ${symbol}:`, error.message);
@@ -165,6 +174,15 @@ export async function POST(request) {
       // Get current price for baseline
       const currentPrice = currentPrices[symbol]?.price || 0;
       const currentVolume = currentPrices[symbol]?.volume || 0;
+      const currentChange = currentPrices[symbol]?.change || 0;
+
+      console.log(
+        `🔍 Debug - ${symbol}: currentPrice=${currentPrice}, currentVolume=${currentVolume}, currentChange=${currentChange}%`
+      );
+      console.log(
+        `🔍 Debug - currentPrices[${symbol}]:`,
+        currentPrices[symbol]
+      );
 
       return {
         symbol: symbol,
@@ -174,6 +192,7 @@ export async function POST(request) {
         triggered: false,
         baselinePrice: currentPrice,
         baselineVolume: currentVolume,
+        baselineChange: currentChange,
         baselineTimestamp: new Date(),
         notificationSettings: notificationSettings || {
           email: false,
@@ -246,9 +265,19 @@ export async function POST(request) {
 
       // Publish Redis message for bulk alerts created
       const alertIds = createdAlerts.map((alert) => alert._id.toString());
+      console.log("🔍 Debug - userId:", userId, "type:", typeof userId);
+      console.log(
+        "🔍 Debug - decoded.userId:",
+        decoded.userId,
+        "type:",
+        typeof decoded.userId
+      );
+      console.log("🔍 Debug - alertIds:", alertIds);
+      console.log("🔍 Debug - favoriteSymbols:", favoriteSymbols);
+
       await AlertRedisService.publishBulkAlertsCreated(
         alertIds,
-        userId,
+        decoded.userId, // Use decoded.userId directly
         favoriteSymbols
       );
 

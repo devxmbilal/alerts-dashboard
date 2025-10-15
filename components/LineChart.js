@@ -237,6 +237,7 @@ const LineChart = ({ symbol, timeframe, onTimeframeChange }) => {
 
   // Format volume
   const formatVolume = (vol) => {
+    if (!vol || vol === undefined || vol === null) return "0";
     if (vol >= 1e9) return `${(vol / 1e9).toFixed(1)}B`;
     if (vol >= 1e6) return `${(vol / 1e6).toFixed(1)}M`;
     if (vol >= 1e3) return `${(vol / 1e3).toFixed(1)}K`;

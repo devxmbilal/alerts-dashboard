@@ -88,7 +88,7 @@ class RealTimeAlertProcessor {
       const alerts = this.activeAlerts.get(symbol);
 
       console.log(
-        `📡 Price update received for ${symbol}: Price=${priceData.price}, Volume=${priceData.volume}, Change=${priceData.priceChangePercent}%`
+        `📡 Price update received for ${symbol}: Price=${priceData.price}, Volume=${priceData.volume24h}, Change=${priceData.priceChangePercent}%`
       );
 
       if (!alerts || alerts.length === 0) {
@@ -134,10 +134,18 @@ class RealTimeAlertProcessor {
         `🔍 Checking alert conditions for ${alert.symbol} (Alert ID: ${alert._id})`
       );
       console.log(
-        `📊 Live data: Price=${priceData.price}, Volume=${priceData.volume}, Change=${priceData.priceChangePercent}%`
+        `📊 Live data: Price=${priceData.price}, Volume=${priceData.volume24h}, Change=${priceData.priceChangePercent}%`
       );
       console.log(
-        `📊 Baseline: Price=${alert.baselinePrice}, Volume=${alert.baselineVolume}, Timestamp=${alert.baselineTimestamp}`
+        `📊 Baseline: Price=${alert.baselinePrice}, Volume=${alert.baselineVolume}, Change=${alert.baselineChange}%, Timestamp=${alert.baselineTimestamp}`
+      );
+      console.log(
+        `🔍 Debug - priceData keys: ${Object.keys(priceData).join(", ")}`
+      );
+      console.log(
+        `🔍 Debug - priceData.volume24h: ${
+          priceData.volume24h
+        }, type: ${typeof priceData.volume24h}`
       );
 
       // Check if alert is locked (temporary lock due to alert count)
@@ -175,9 +183,9 @@ class RealTimeAlertProcessor {
       console.log(`📋 Alert conditions:`, JSON.stringify(conditions, null, 2));
 
       // Check Min Daily volume condition (required)
-      if (conditions.minDaily && priceData.volume) {
+      if (conditions.minDaily && priceData.volume24h) {
         const minVolume = parseFloat(conditions.minDaily);
-        const actualVolume = parseFloat(priceData.volume);
+        const actualVolume = parseFloat(priceData.volume24h);
 
         console.log(
           `📈 Min Daily Check: Required=${minVolume}, Actual=${actualVolume}`
@@ -211,22 +219,29 @@ class RealTimeAlertProcessor {
         );
 
         // Check if candle meets the change requirement using baseline price
-        const candleChangeMet = this.checkCandleChangeCondition(
-          alert.symbol,
-          timeframe,
-          requiredChange,
-          alert.baselinePrice
-        );
-
-        if (!candleChangeMet) {
+        if (!alert.baselinePrice || alert.baselinePrice === 0) {
           console.log(
-            `❌ Candle Change % condition FAILED: Candle change < ${requiredChange}% in ${timeframe}`
+            `❌ Candle Change % condition FAILED: Baseline price is 0 or missing`
           );
           conditionsMet = false;
         } else {
-          console.log(
-            `✅ Candle Change % condition PASSED: Candle change >= ${requiredChange}% in ${timeframe}`
+          const candleChangeMet = this.checkCandleChangeCondition(
+            alert.symbol,
+            timeframe,
+            requiredChange,
+            alert.baselinePrice
           );
+
+          if (!candleChangeMet) {
+            console.log(
+              `❌ Candle Change % condition FAILED: Candle change < ${requiredChange}% in ${timeframe}`
+            );
+            conditionsMet = false;
+          } else {
+            console.log(
+              `✅ Candle Change % condition PASSED: Candle change >= ${requiredChange}% in ${timeframe}`
+            );
+          }
         }
       } else {
         console.log(`⚠️ Change % condition not set or data missing`);
@@ -439,6 +454,7 @@ class RealTimeAlertProcessor {
           // Update baseline to current price to prevent re-triggering on same price
           baselinePrice: priceData.price,
           baselineVolume: priceData.volume,
+          baselineChange: priceData.priceChangePercent,
           baselineTimestamp: new Date(),
         });
 
@@ -459,6 +475,7 @@ class RealTimeAlertProcessor {
           // Update baseline to current price to prevent re-triggering on same price
           baselinePrice: priceData.price,
           baselineVolume: priceData.volume,
+          baselineChange: priceData.priceChangePercent,
           baselineTimestamp: new Date(),
         });
 

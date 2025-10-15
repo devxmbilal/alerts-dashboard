@@ -72,7 +72,7 @@ function suggestNetworkFixes() {
   log('   - Use alternative API endpoints', 'yellow');
 }
 
-function createNetworkTestScript() {
+async function createNetworkTestScript() {
   log('\n🧪 Creating Network Test Script...', 'blue');
   
   const testScript = `#!/usr/bin/env node
