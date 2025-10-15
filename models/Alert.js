@@ -92,21 +92,18 @@ const alertSchema = new mongoose.Schema(
       default: "active",
       index: true,
     },
-    triggered: {
-      type: Boolean,
-      default: false,
+
+    // Price tracking fields
+    baselinePrice: {
+      type: Number,
+      required: true,
     },
-    triggeredAt: {
+    baselineVolume: {
+      type: Number,
+    },
+    baselineTimestamp: {
       type: Date,
-    },
-    triggeredPrice: {
-      type: Number,
-    },
-    triggeredVolume: {
-      type: Number,
-    },
-    triggeredChange: {
-      type: Number,
+      default: Date.now,
     },
     // New fields for tracking last trigger (without marking as permanently triggered)
     lastTriggeredAt: {
@@ -135,14 +132,6 @@ const alertSchema = new mongoose.Schema(
         default: false,
       },
     },
-    createdAt: {
-      type: Date,
-      default: Date.now,
-    },
-    updatedAt: {
-      type: Date,
-      default: Date.now,
-    },
   },
   {
     timestamps: true,
@@ -155,9 +144,5 @@ alertSchema.index({ userId: 1, status: 1 });
 alertSchema.index({ createdAt: -1 });
 
 // Update the updatedAt field before saving
-alertSchema.pre("save", function (next) {
-  this.updatedAt = new Date();
-  next();
-});
 
 export default mongoose.models.Alert || mongoose.model("Alert", alertSchema);

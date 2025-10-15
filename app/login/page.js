@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
-import { useRouter } from "next/navigation";
+import React, { useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Box,
   Paper,
@@ -26,6 +26,7 @@ import {
 
 const LoginPage = () => {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [formData, setFormData] = useState({
     username: "",
     password: "",
@@ -33,6 +34,30 @@ const LoginPage = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showSecurityWarning, setShowSecurityWarning] = useState(false);
+
+  // Handle URL parameters (for development/testing only)
+  useEffect(() => {
+    const username = searchParams.get("username");
+    const password = searchParams.get("password");
+
+    if (username || password) {
+      setShowSecurityWarning(true);
+      setFormData({
+        username: username || "",
+        password: password || "",
+      });
+
+      // Clear URL parameters for security
+      if (typeof window !== "undefined") {
+        window.history.replaceState(
+          {},
+          document.title,
+          window.location.pathname
+        );
+      }
+    }
+  }, [searchParams]);
 
   const handleChange = (e) => {
     setFormData({
@@ -108,6 +133,15 @@ const LoginPage = () => {
                 Sign in to your alerts dashboard
               </Typography>
             </Box>
+
+            {showSecurityWarning && (
+              <Alert severity="warning" sx={{ mb: 2 }}>
+                <Typography variant="body2">
+                  <strong>Security Warning:</strong> Credentials in URL are not
+                  secure. Please use the form below instead of URL parameters.
+                </Typography>
+              </Alert>
+            )}
 
             {error && (
               <Alert severity="error" sx={{ mb: 2 }}>

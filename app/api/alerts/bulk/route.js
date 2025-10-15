@@ -113,6 +113,34 @@ export async function POST(request) {
       );
     }
 
+    // Fetch current prices for baseline
+    console.log("📊 Fetching current prices for baseline...");
+    let currentPrices = {};
+
+    try {
+      // Get current prices from Redis or API
+      const redis = await import("../../../../utils/redis.js");
+      for (const symbol of favoriteSymbols) {
+        try {
+          const priceData = await redis.default.get(
+            `crypto:${symbol.toLowerCase()}`
+          );
+          if (priceData) {
+            const data = JSON.parse(priceData);
+            currentPrices[symbol] = {
+              price: parseFloat(data.price),
+              volume: parseFloat(data.volume24h) || 0, // Use volume24h as baseline volume
+              timestamp: Date.now(),
+            };
+          }
+        } catch (error) {
+          console.warn(`⚠️ Could not get price for ${symbol}:`, error.message);
+        }
+      }
+    } catch (error) {
+      console.warn("⚠️ Error fetching current prices:", error.message);
+    }
+
     // Prepare alert documents for bulk insert
     const alertDocuments = favoriteSymbols.map((symbol) => {
       let alertConditions = { ...conditions };
@@ -134,12 +162,19 @@ export async function POST(request) {
         }
       }
 
+      // Get current price for baseline
+      const currentPrice = currentPrices[symbol]?.price || 0;
+      const currentVolume = currentPrices[symbol]?.volume || 0;
+
       return {
         symbol: symbol,
         userId: decoded.userId,
         conditions: alertConditions,
         status: "active",
         triggered: false,
+        baselinePrice: currentPrice,
+        baselineVolume: currentVolume,
+        baselineTimestamp: new Date(),
         notificationSettings: notificationSettings || {
           email: false,
           telegram: false,

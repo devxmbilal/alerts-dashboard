@@ -70,7 +70,7 @@ const alertHistorySchema = new mongoose.Schema(
         type: Number,
         required: true,
       },
-      volume: {
+      volume24h: {
         type: Number,
         required: true,
       },
@@ -91,6 +91,28 @@ const alertHistorySchema = new mongoose.Schema(
         required: true,
       },
       timestamp: {
+        type: Number,
+        required: true,
+      },
+    },
+    baselineData: {
+      // Baseline data when alert was created
+      baselinePrice: {
+        type: Number,
+        required: true,
+      },
+      baselineVolume: {
+        type: Number,
+      },
+      baselineTimestamp: {
+        type: Date,
+        required: true,
+      },
+      changeFromBaseline: {
+        type: Number,
+        required: true,
+      },
+      changeFromBaselinePercent: {
         type: Number,
         required: true,
       },
@@ -126,10 +148,6 @@ const alertHistorySchema = new mongoose.Schema(
     dismissedAt: {
       type: Date,
     },
-    createdAt: {
-      type: Date,
-      default: Date.now,
-    },
   },
   {
     timestamps: true,
@@ -142,12 +160,6 @@ alertHistorySchema.index({ symbol: 1, createdAt: -1 });
 alertHistorySchema.index({ status: 1, createdAt: -1 });
 alertHistorySchema.index({ triggeredAt: -1 });
 alertHistorySchema.index({ alertId: 1, triggeredAt: -1 });
-
-// Update the updatedAt field before saving
-alertHistorySchema.pre("save", function (next) {
-  this.updatedAt = new Date();
-  next();
-});
 
 export default mongoose.models.AlertHistory ||
   mongoose.model("AlertHistory", alertHistorySchema);

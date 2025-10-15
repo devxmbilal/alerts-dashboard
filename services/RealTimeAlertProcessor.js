@@ -136,6 +136,9 @@ class RealTimeAlertProcessor {
       console.log(
         `📊 Live data: Price=${priceData.price}, Volume=${priceData.volume}, Change=${priceData.priceChangePercent}%`
       );
+      console.log(
+        `📊 Baseline: Price=${alert.baselinePrice}, Volume=${alert.baselineVolume}, Timestamp=${alert.baselineTimestamp}`
+      );
 
       // Check if alert is locked (temporary lock due to alert count)
       if (isAlertLocked(alert)) {
@@ -207,11 +210,12 @@ class RealTimeAlertProcessor {
           `📊 Checking candle change condition: ${requiredChange}% in ${timeframe}`
         );
 
-        // Check if candle meets the change requirement
+        // Check if candle meets the change requirement using baseline price
         const candleChangeMet = this.checkCandleChangeCondition(
           alert.symbol,
           timeframe,
-          requiredChange
+          requiredChange,
+          alert.baselinePrice
         );
 
         if (!candleChangeMet) {
@@ -337,14 +341,14 @@ class RealTimeAlertProcessor {
       const alertKey = `${alert._id}_${Math.floor(priceData.timestamp / 1000)}`;
       if (this.processedAlerts.has(alertKey)) {
         console.log(
-          `⚠️ Alert ${alert._id} already processed recently, but continuing with history save`
+          `⚠️ Alert ${alert._id} already processed recently, skipping duplicate trigger`
         );
-        // Don't return false - continue with history saving
-        } else {
-        // Mark this alert as processed for this time period
-        this.processedAlerts.add(alertKey);
-        console.log(`✅ Alert ${alert._id} marked as processed`);
+        return false; // Don't process same alert multiple times
       }
+
+      // Mark this alert as processed for this time period
+      this.processedAlerts.add(alertKey);
+      console.log(`✅ Alert ${alert._id} marked as processed`);
 
       // Clean up old processed alerts (keep only last 60 seconds)
       const currentTime = Math.floor(Date.now() / 1000);
@@ -354,6 +358,11 @@ class RealTimeAlertProcessor {
           this.processedAlerts.delete(key);
         }
       }
+
+      // Calculate change from baseline
+      const changeFromBaseline = priceData.price - alert.baselinePrice;
+      const changeFromBaselinePercent =
+        (changeFromBaseline / alert.baselinePrice) * 100;
 
       // Create alert history entry
       const alertHistory = {
@@ -365,12 +374,19 @@ class RealTimeAlertProcessor {
           price: priceData.price,
           priceChange: priceData.priceChange,
           priceChangePercent: priceData.priceChangePercent,
-          volume: priceData.volume,
+          volume24h: priceData.volume24h,
           high: priceData.high,
           low: priceData.low,
           open: priceData.open,
           close: priceData.close,
           timestamp: priceData.timestamp,
+        },
+        baselineData: {
+          baselinePrice: alert.baselinePrice,
+          baselineVolume: alert.baselineVolume,
+          baselineTimestamp: alert.baselineTimestamp,
+          changeFromBaseline: changeFromBaseline,
+          changeFromBaselinePercent: changeFromBaselinePercent,
         },
         triggeredAt: new Date(),
         conditions: this.getAlertConditionsText(alert.conditions),
@@ -383,40 +399,26 @@ class RealTimeAlertProcessor {
         JSON.stringify(alertHistory, null, 2)
       );
 
-      // Check if we already saved this alert recently (prevent duplicate history entries)
-      const historyKey = `history_${alert._id}_${Math.floor(
-        Date.now() / 60000
-      )}`; // 1 minute window
-      if (this.processedAlerts.has(historyKey)) {
-        console.log(
-          `⚠️ Alert history for ${alert._id} already saved recently, skipping duplicate`
+      // Save alert history (only once per trigger)
+      try {
+        const savedHistory = await AlertHistoryService.createAlertHistory(
+          alertHistory
         );
-      } else {
-        try {
-          const savedHistory = await AlertHistoryService.createAlertHistory(
-            alertHistory
-          );
-          console.log(
-            `✅ Alert history saved successfully: ${savedHistory._id}`
-          );
-          console.log(`✅ Alert history details:`, {
-            id: savedHistory._id,
-            symbol: savedHistory.symbol,
-            price: savedHistory.triggerData.price,
-            triggeredAt: savedHistory.triggeredAt,
-          });
-
-          // Mark history as saved
-          this.processedAlerts.add(historyKey);
-        } catch (historyError) {
-          console.error(
-            `❌ Error saving alert history for ${alert.symbol}:`,
-            historyError
-          );
-          console.error(`❌ History error details:`, historyError.message);
-          console.error(`❌ History error stack:`, historyError.stack);
-          // Don't throw error, continue with alert processing
-        }
+        console.log(`✅ Alert history saved successfully: ${savedHistory._id}`);
+        console.log(`✅ Alert history details:`, {
+          id: savedHistory._id,
+          symbol: savedHistory.symbol,
+          price: savedHistory.triggerData.price,
+          triggeredAt: savedHistory.triggeredAt,
+        });
+      } catch (historyError) {
+        console.error(
+          `❌ Error saving alert history for ${alert.symbol}:`,
+          historyError
+        );
+        console.error(`❌ History error details:`, historyError.message);
+        console.error(`❌ History error stack:`, historyError.stack);
+        // Don't throw error, continue with alert processing
       }
 
       // Update alert lock if alert count is set
@@ -426,7 +428,7 @@ class RealTimeAlertProcessor {
       ) {
         const updatedConditions = updateAlertLock(alert);
 
-        // Update alert conditions with new lock time
+        // Update alert conditions with new lock time and new baseline
         await Alert.findByIdAndUpdate(alert._id, {
           conditions: updatedConditions,
           // Update last triggered info but keep alert active
@@ -434,6 +436,10 @@ class RealTimeAlertProcessor {
           lastTriggeredPrice: priceData.price,
           lastTriggeredVolume: priceData.volume,
           lastTriggeredChange: priceData.priceChangePercent,
+          // Update baseline to current price to prevent re-triggering on same price
+          baselinePrice: priceData.price,
+          baselineVolume: priceData.volume,
+          baselineTimestamp: new Date(),
         });
 
         console.log(
@@ -442,18 +448,24 @@ class RealTimeAlertProcessor {
         console.log(
           `⏰ Next trigger allowed after: ${updatedConditions.alertCount.lockUntil}`
         );
+        console.log(`📊 Baseline updated to current price: ${priceData.price}`);
       } else {
-        // Update last triggered info but keep alert active
+        // Update last triggered info and baseline but keep alert active
         await Alert.findByIdAndUpdate(alert._id, {
           lastTriggeredAt: new Date(),
           lastTriggeredPrice: priceData.price,
           lastTriggeredVolume: priceData.volume,
           lastTriggeredChange: priceData.priceChangePercent,
+          // Update baseline to current price to prevent re-triggering on same price
+          baselinePrice: priceData.price,
+          baselineVolume: priceData.volume,
+          baselineTimestamp: new Date(),
         });
 
         console.log(
           `✅ Alert ${alert._id} for ${alert.symbol} updated (no lock period)`
         );
+        console.log(`📊 Baseline updated to current price: ${priceData.price}`);
       }
 
       // Send real-time notification (we'll implement this)
@@ -908,12 +920,13 @@ class RealTimeAlertProcessor {
   }
 
   // Check if a candle meets the change percentage requirement
-  checkCandleChangeCondition(symbol, timeframe, requiredChange) {
+  checkCandleChangeCondition(symbol, timeframe, requiredChange, baselinePrice) {
     const candle = this.getCandleData(symbol, timeframe);
 
     console.log(`🔍 Checking candle for ${symbol} (${timeframe}):`);
     console.log(`   Candle complete: ${candle.isComplete}`);
     console.log(`   Open: ${candle.open}, Close: ${candle.close}`);
+    console.log(`   Baseline Price: ${baselinePrice}`);
     console.log(
       `   Start time: ${candle.startTime}, End time: ${candle.endTime}`
     );
@@ -926,13 +939,18 @@ class RealTimeAlertProcessor {
       return false;
     }
 
-    const changePercent = this.calculateCandleChange(candle);
-    const absoluteChange = Math.abs(changePercent);
+    // Calculate change from baseline price instead of candle open
+    const currentPrice = candle.close;
+    const changeFromBaseline =
+      ((currentPrice - baselinePrice) / baselinePrice) * 100;
+    const absoluteChange = Math.abs(changeFromBaseline);
 
     console.log(`📊 Candle Change Check for ${symbol} (${timeframe}):`);
-    console.log(`   Open: ${candle.open}, Close: ${candle.close}`);
+    console.log(`   Baseline: ${baselinePrice}, Current: ${currentPrice}`);
     console.log(
-      `   Change: ${changePercent.toFixed(3)}%, Required: ${requiredChange}%`
+      `   Change from Baseline: ${changeFromBaseline.toFixed(
+        3
+      )}%, Required: ${requiredChange}%`
     );
     console.log(`   Absolute Change: ${absoluteChange.toFixed(3)}%`);
 
