@@ -123,9 +123,14 @@ export async function POST(request) {
       const redis = await import("../../../../utils/redis.js");
       for (const symbol of favoriteSymbols) {
         try {
-          const priceData = await redis.default.get(
-            `crypto:${symbol.toLowerCase()}`
-          );
+          // Try both formats: original case and lowercase
+          let priceData = await redis.default.get(`crypto:${symbol}`);
+          if (!priceData) {
+            priceData = await redis.default.get(
+              `crypto:${symbol.toLowerCase()}`
+            );
+          }
+
           if (priceData) {
             const data = JSON.parse(priceData);
             console.log(`🔍 Debug - Fetched data for ${symbol}:`, data);
@@ -140,7 +145,9 @@ export async function POST(request) {
               currentPrices[symbol]
             );
           } else {
-            console.log(`⚠️ No price data found for ${symbol}`);
+            console.log(
+              `⚠️ No price data found for ${symbol} (tried both formats)`
+            );
           }
         } catch (error) {
           console.warn(`⚠️ Could not get price for ${symbol}:`, error.message);
@@ -148,6 +155,35 @@ export async function POST(request) {
       }
     } catch (error) {
       console.warn("⚠️ Error fetching current prices:", error.message);
+    }
+
+    // Fallback: If no Redis data, fetch from Binance API directly
+    if (Object.keys(currentPrices).length === 0) {
+      console.log("📊 No Redis data found, fetching from Binance API...");
+      try {
+        const response = await fetch(
+          "https://api.binance.com/api/v3/ticker/24hr"
+        );
+        const tickers = await response.json();
+
+        for (const symbol of favoriteSymbols) {
+          const ticker = tickers.find((t) => t.symbol === symbol);
+          if (ticker) {
+            currentPrices[symbol] = {
+              price: parseFloat(ticker.lastPrice),
+              volume: parseFloat(ticker.volume),
+              change: parseFloat(ticker.priceChangePercent),
+              timestamp: Date.now(),
+            };
+            console.log(
+              `✅ Fetched ${symbol} from Binance API:`,
+              currentPrices[symbol]
+            );
+          }
+        }
+      } catch (apiError) {
+        console.warn("⚠️ Error fetching from Binance API:", apiError.message);
+      }
     }
 
     // Prepare alert documents for bulk insert
