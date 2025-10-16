@@ -160,6 +160,26 @@ class RealTimeAlertProcessor {
         `📊 Baseline: ${alert.baselinePrice}, Live: ${liveData.price}`
       );
 
+      // FIRST: Check if alert is locked (prevent duplicate triggers)
+      if (isAlertLocked(alert)) {
+        const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
+        const now = new Date();
+        const timeRemaining = Math.max(0, lockUntil.getTime() - now.getTime());
+        const minutesRemaining = Math.ceil(timeRemaining / (1000 * 60));
+
+        console.log(
+          `🔒 Alert ${alert._id} for ${
+            alert.symbol
+          } is LOCKED until ${lockUntil.toISOString()}`
+        );
+        console.log(
+          `⏰ Lock time remaining: ${minutesRemaining} minutes (${Math.ceil(
+            timeRemaining / 1000
+          )} seconds)`
+        );
+        return { triggered: false, reason: "alert_locked" };
+      }
+
       // Check if live price is greater than baseline price
       if (liveData.price <= alert.baselinePrice) {
         console.log(
@@ -183,7 +203,7 @@ class RealTimeAlertProcessor {
           `🚨 Alert ${alert._id} conditions met! Triggering alert...`
         );
 
-        // Trigger the alert
+        // Trigger the alert (this will apply the lock)
         await this.triggerAlertWithLiveData(alert, liveData);
 
         return { triggered: true, reason: "conditions_met" };
@@ -298,33 +318,60 @@ class RealTimeAlertProcessor {
       const changeFromBaselinePercent =
         (changeFromBaseline / alert.baselinePrice) * 100;
 
-      // Create alert history entry
+      // Debug: Log live data and alert data
+      console.log(`🔍 Debug - Live Data for ${alert.symbol}:`, {
+        price: liveData.price,
+        volume: liveData.volume,
+        volume24h: liveData.volume24h,
+        priceChange: liveData.priceChange,
+        priceChangePercent: liveData.priceChangePercent,
+        high: liveData.high,
+        low: liveData.low,
+        open: liveData.open,
+        close: liveData.close,
+        timestamp: liveData.timestamp,
+      });
+
+      console.log(`🔍 Debug - Alert Data for ${alert.symbol}:`, {
+        baselinePrice: alert.baselinePrice,
+        baselineVolume: alert.baselineVolume,
+        baselineTimestamp: alert.baselineTimestamp,
+        changeFromBaseline: changeFromBaseline,
+        changeFromBaselinePercent: changeFromBaselinePercent,
+      });
+
+      // Create alert history entry with all required fields
       const alertHistory = {
         alertId: alert._id,
         userId: alert.userId,
         symbol: alert.symbol,
         alertConditions: alert.conditions,
         triggerData: {
-          price: liveData.price,
-          priceChange: liveData.priceChange,
-          priceChangePercent: liveData.priceChangePercent,
-          volume24h: liveData.volume || liveData.volume24h,
-          high: liveData.high,
-          low: liveData.low,
-          open: liveData.open,
-          close: liveData.close,
-          timestamp: liveData.timestamp,
+          price: liveData.price || 0,
+          priceChange: liveData.priceChange || 0,
+          priceChangePercent: liveData.priceChangePercent || 0,
+          volume24h: liveData.volume || liveData.volume24h || 0,
+          high: liveData.high || liveData.price || 0,
+          low: liveData.low || liveData.price || 0,
+          open: liveData.open || liveData.price || 0,
+          close: liveData.close || liveData.price || 0,
+          timestamp: liveData.timestamp || Date.now(),
         },
         baselineData: {
-          baselinePrice: alert.baselinePrice,
-          baselineVolume: alert.baselineVolume,
-          baselineTimestamp: alert.baselineTimestamp,
-          changeFromBaseline: changeFromBaseline,
-          changeFromBaselinePercent: changeFromBaselinePercent,
+          baselinePrice: alert.baselinePrice || 0,
+          baselineVolume: alert.baselineVolume || 0,
+          baselineTimestamp: alert.baselineTimestamp || new Date(),
+          changeFromBaseline: changeFromBaseline || 0,
+          changeFromBaselinePercent: changeFromBaselinePercent || 0,
         },
         triggeredAt: new Date(),
         conditions: this.getAlertConditionsText(alert.conditions),
       };
+
+      console.log(
+        `🔍 Debug - Alert History Data:`,
+        JSON.stringify(alertHistory, null, 2)
+      );
 
       // Save to AlertHistory
       console.log(`📝 Saving alert history for ${alert.symbol}...`);
@@ -348,6 +395,13 @@ class RealTimeAlertProcessor {
       ) {
         const updatedConditions = updateAlertLock(alert);
         updateData.conditions = updatedConditions;
+
+        console.log(
+          `🔒 Alert ${alert._id} LOCKED for ${alert.conditions.alertCount.timeframe} until ${updatedConditions.alertCount.lockUntil}`
+        );
+        console.log(
+          `⏰ Next trigger allowed after: ${updatedConditions.alertCount.lockUntil}`
+        );
       }
 
       await Alert.findByIdAndUpdate(alert._id, updateData);
