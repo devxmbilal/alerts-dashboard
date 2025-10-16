@@ -139,14 +139,6 @@ class RealTimeAlertProcessor {
       console.log(
         `📊 Baseline: Price=${alert.baselinePrice}, Volume=${alert.baselineVolume}, Change=${alert.baselineChange}%, Timestamp=${alert.baselineTimestamp}`
       );
-      console.log(
-        `🔍 Debug - priceData keys: ${Object.keys(priceData).join(", ")}`
-      );
-      console.log(
-        `🔍 Debug - priceData.volume24h: ${
-          priceData.volume24h
-        }, type: ${typeof priceData.volume24h}`
-      );
 
       // Check if alert is locked (temporary lock due to alert count)
       if (isAlertLocked(alert)) {
