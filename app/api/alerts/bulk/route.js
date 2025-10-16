@@ -137,7 +137,6 @@ export async function POST(request) {
             currentPrices[symbol] = {
               price: parseFloat(data.price),
               volume: parseFloat(data.volume24h) || 0, // Use volume24h as baseline volume
-              change: parseFloat(data.priceChangePercent) || 0, // Add baseline change percentage
               timestamp: Date.now(),
             };
             console.log(
@@ -172,7 +171,6 @@ export async function POST(request) {
             currentPrices[symbol] = {
               price: parseFloat(ticker.lastPrice),
               volume: parseFloat(ticker.volume),
-              change: parseFloat(ticker.priceChangePercent),
               timestamp: Date.now(),
             };
             console.log(
@@ -210,10 +208,9 @@ export async function POST(request) {
       // Get current price for baseline
       const currentPrice = currentPrices[symbol]?.price || 0;
       const currentVolume = currentPrices[symbol]?.volume || 0;
-      const currentChange = currentPrices[symbol]?.change || 0;
 
       console.log(
-        `🔍 Debug - ${symbol}: currentPrice=${currentPrice}, currentVolume=${currentVolume}, currentChange=${currentChange}%`
+        `🔍 Debug - ${symbol}: currentPrice=${currentPrice}, currentVolume=${currentVolume}`
       );
       console.log(
         `🔍 Debug - currentPrices[${symbol}]:`,
@@ -228,7 +225,6 @@ export async function POST(request) {
         triggered: false,
         baselinePrice: currentPrice,
         baselineVolume: currentVolume,
-        baselineChange: currentChange,
         baselineTimestamp: new Date(),
         notificationSettings: notificationSettings || {
           email: false,

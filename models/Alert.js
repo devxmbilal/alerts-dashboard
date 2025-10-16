@@ -105,9 +105,6 @@ const alertSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
-    baselineChange: {
-      type: Number,
-    },
     // New fields for tracking last trigger (without marking as permanently triggered)
     lastTriggeredAt: {
       type: Date,
@@ -116,9 +113,6 @@ const alertSchema = new mongoose.Schema(
       type: Number,
     },
     lastTriggeredVolume: {
-      type: Number,
-    },
-    lastTriggeredChange: {
       type: Number,
     },
     notificationSettings: {

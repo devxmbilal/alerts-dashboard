@@ -15,6 +15,9 @@ class RealTimeAlertProcessor {
     this.alertBaselines = new Map(); // Track baseline prices for change calculations
     this.redisSubscribed = false; // Track Redis subscription status
     this.candleData = new Map(); // Track candle data for timeframe-based changes
+    this.currentRound = 0; // Track current processing round
+    this.isRoundProcessing = false; // Prevent overlapping rounds
+    this.roundInterval = null; // Round processing interval
   }
 
   async loadAlertsFromRedis(userId) {
@@ -78,6 +81,372 @@ class RealTimeAlertProcessor {
     }
   }
 
+  // Task 1: Round-based processing - fetch all alerts from database and process them
+  async startRoundBasedProcessing() {
+    console.log("🔄 Starting round-based alert processing...");
+
+    // Process every 30 seconds
+    this.roundInterval = setInterval(async () => {
+      await this.processRound();
+    }, 30000); // 30 seconds interval
+
+    // Also process immediately
+    await this.processRound();
+  }
+
+  async processRound() {
+    if (this.isRoundProcessing) {
+      console.log("⏳ Round processing already in progress, skipping...");
+      return;
+    }
+
+    this.isRoundProcessing = true;
+    this.currentRound++;
+
+    try {
+      console.log(
+        `🔄 Starting Round ${this.currentRound} - Fetching fresh alerts from database...`
+      );
+
+      // Step 1: Fetch ALL active alerts from database with latest data
+      const freshAlerts = await this.loadAllActiveAlerts();
+      console.log(
+        `📊 Round ${this.currentRound}: Loaded ${freshAlerts.length} active alerts from database`
+      );
+
+      if (freshAlerts.length === 0) {
+        console.log("⚠️ No active alerts found, skipping round");
+        return;
+      }
+
+      // Step 2: Get current live prices for all symbols
+      const livePrices = await this.getCurrentLivePrices();
+      console.log(
+        `📡 Round ${this.currentRound}: Fetched live prices for ${
+          Object.keys(livePrices).length
+        } symbols`
+      );
+
+      // Step 3: Process each alert with live data
+      let processedCount = 0;
+      let triggeredCount = 0;
+
+      for (const alert of freshAlerts) {
+        const liveData = livePrices[alert.symbol];
+        if (liveData) {
+          const result = await this.processAlertWithLiveData(alert, liveData);
+          processedCount++;
+          if (result.triggered) {
+            triggeredCount++;
+          }
+        }
+      }
+
+      console.log(
+        `✅ Round ${this.currentRound} completed: Processed ${processedCount} alerts, ${triggeredCount} triggered`
+      );
+    } catch (error) {
+      console.error(`❌ Error in Round ${this.currentRound}:`, error);
+    } finally {
+      this.isRoundProcessing = false;
+    }
+  }
+
+  // Task 2: Process alert with live data - check baseline price comparison
+  async processAlertWithLiveData(alert, liveData) {
+    try {
+      console.log(`🔍 Processing alert ${alert._id} for ${alert.symbol}`);
+      console.log(
+        `📊 Baseline: ${alert.baselinePrice}, Live: ${liveData.price}`
+      );
+
+      // Check if live price is greater than baseline price
+      if (liveData.price <= alert.baselinePrice) {
+        console.log(
+          `❌ Live price ${liveData.price} <= baseline ${alert.baselinePrice}, skipping alert`
+        );
+        return { triggered: false, reason: "price_not_increased" };
+      }
+
+      console.log(
+        `✅ Live price ${liveData.price} > baseline ${alert.baselinePrice}, checking conditions...`
+      );
+
+      // Check alert conditions
+      const conditionsMet = await this.checkAlertConditionsWithLiveData(
+        alert,
+        liveData
+      );
+
+      if (conditionsMet) {
+        console.log(
+          `🚨 Alert ${alert._id} conditions met! Triggering alert...`
+        );
+
+        // Trigger the alert
+        await this.triggerAlertWithLiveData(alert, liveData);
+
+        return { triggered: true, reason: "conditions_met" };
+      } else {
+        console.log(`❌ Alert ${alert._id} conditions not met`);
+        return { triggered: false, reason: "conditions_not_met" };
+      }
+    } catch (error) {
+      console.error(`❌ Error processing alert ${alert._id}:`, error);
+      return { triggered: false, reason: "error", error: error.message };
+    }
+  }
+
+  // Check conditions with live data
+  async checkAlertConditionsWithLiveData(alert, liveData) {
+    try {
+      const conditions = alert.conditions;
+      let conditionsMet = true;
+
+      console.log(
+        `📋 Checking conditions for ${alert.symbol}:`,
+        JSON.stringify(conditions, null, 2)
+      );
+
+      // Check Min Daily volume condition (required)
+      if (conditions.minDaily && (liveData.volume || liveData.volume24h)) {
+        const minVolume = parseFloat(conditions.minDaily);
+        const actualVolume = parseFloat(liveData.volume || liveData.volume24h);
+
+        console.log(
+          `📈 Min Daily Check: Required=${minVolume}, Actual=${actualVolume}`
+        );
+
+        if (actualVolume < minVolume) {
+          console.log(
+            `❌ Min Daily condition FAILED: ${actualVolume} < ${minVolume}`
+          );
+          conditionsMet = false;
+        } else {
+          console.log(
+            `✅ Min Daily condition PASSED: ${actualVolume} >= ${minVolume}`
+          );
+        }
+      } else {
+        console.log(`⚠️ Min Daily condition not set or volume data missing`);
+      }
+
+      // Check Change % condition (required) - based on baseline price
+      if (
+        conditionsMet &&
+        conditions.changePercent &&
+        conditions.changePercent.percentage
+      ) {
+        const requiredChange = parseFloat(conditions.changePercent.percentage);
+        const timeframe = conditions.changePercent.timeframe || "5m";
+
+        console.log(
+          `📊 Checking change condition: ${requiredChange}% in ${timeframe}`
+        );
+
+        // Calculate change from baseline price
+        const changeFromBaseline =
+          ((liveData.price - alert.baselinePrice) / alert.baselinePrice) * 100;
+        const absoluteChange = Math.abs(changeFromBaseline);
+
+        console.log(
+          `📊 Change Check: Baseline=${alert.baselinePrice}, Live=${liveData.price}`
+        );
+        console.log(
+          `📊 Change from baseline: ${changeFromBaseline.toFixed(
+            3
+          )}%, Required: ${requiredChange}%`
+        );
+
+        if (absoluteChange < requiredChange) {
+          console.log(
+            `❌ Change % condition FAILED: ${absoluteChange.toFixed(
+              3
+            )}% < ${requiredChange}%`
+          );
+          conditionsMet = false;
+        } else {
+          console.log(
+            `✅ Change % condition PASSED: ${absoluteChange.toFixed(
+              3
+            )}% >= ${requiredChange}%`
+          );
+        }
+      } else {
+        console.log(`⚠️ Change % condition not set or data missing`);
+      }
+
+      // Check other conditions (candle, RSI, volume, EMA) if needed
+      // ... (implement other condition checks as needed)
+
+      return conditionsMet;
+    } catch (error) {
+      console.error(`❌ Error checking conditions for ${alert.symbol}:`, error);
+      return false;
+    }
+  }
+
+  // Trigger alert with live data and update baseline
+  async triggerAlertWithLiveData(alert, liveData) {
+    try {
+      console.log(
+        `🚀 Triggering alert ${alert._id} for ${alert.symbol} with live data`
+      );
+
+      // Calculate change from baseline
+      const changeFromBaseline = liveData.price - alert.baselinePrice;
+      const changeFromBaselinePercent =
+        (changeFromBaseline / alert.baselinePrice) * 100;
+
+      // Create alert history entry
+      const alertHistory = {
+        alertId: alert._id,
+        userId: alert.userId,
+        symbol: alert.symbol,
+        alertConditions: alert.conditions,
+        triggerData: {
+          price: liveData.price,
+          priceChange: liveData.priceChange,
+          priceChangePercent: liveData.priceChangePercent,
+          volume24h: liveData.volume || liveData.volume24h,
+          high: liveData.high,
+          low: liveData.low,
+          open: liveData.open,
+          close: liveData.close,
+          timestamp: liveData.timestamp,
+        },
+        baselineData: {
+          baselinePrice: alert.baselinePrice,
+          baselineVolume: alert.baselineVolume,
+          baselineTimestamp: alert.baselineTimestamp,
+          changeFromBaseline: changeFromBaseline,
+          changeFromBaselinePercent: changeFromBaselinePercent,
+        },
+        triggeredAt: new Date(),
+        conditions: this.getAlertConditionsText(alert.conditions),
+      };
+
+      // Save to AlertHistory
+      console.log(`📝 Saving alert history for ${alert.symbol}...`);
+      await AlertHistoryService.createAlertHistory(alertHistory);
+
+      // Update alert with latest price and new baseline
+      const updateData = {
+        lastTriggeredAt: new Date(),
+        lastTriggeredPrice: liveData.price,
+        lastTriggeredVolume: liveData.volume || liveData.volume24h,
+        // Update baseline to current live price for next round
+        baselinePrice: liveData.price,
+        baselineVolume: liveData.volume || liveData.volume24h,
+        baselineTimestamp: new Date(),
+      };
+
+      // Update alert lock if alert count is set
+      if (
+        alert.conditions.alertCount &&
+        alert.conditions.alertCount.timeframe
+      ) {
+        const updatedConditions = updateAlertLock(alert);
+        updateData.conditions = updatedConditions;
+      }
+
+      await Alert.findByIdAndUpdate(alert._id, updateData);
+
+      console.log(
+        `✅ Alert ${alert._id} updated with new baseline price: ${liveData.price}`
+      );
+
+      // Send real-time notification
+      await this.sendRealTimeNotification(alert, liveData, alertHistory);
+
+      return true;
+    } catch (error) {
+      console.error(`❌ Error triggering alert ${alert._id}:`, error);
+      return false;
+    }
+  }
+
+  // Get current live prices for all active symbols
+  async getCurrentLivePrices() {
+    try {
+      const livePrices = {};
+      const symbols = Array.from(this.activeAlerts.keys());
+
+      // Try to get from Redis cache first
+      const redis = await import("../utils/redis.js");
+
+      for (const symbol of symbols) {
+        try {
+          let priceData = await redis.default.get(`crypto:${symbol}`);
+          if (!priceData) {
+            priceData = await redis.default.get(
+              `crypto:${symbol.toLowerCase()}`
+            );
+          }
+
+          if (priceData) {
+            const data = JSON.parse(priceData);
+            livePrices[symbol] = {
+              price: parseFloat(data.price),
+              volume:
+                parseFloat(data.volume) || parseFloat(data.volume24h) || 0,
+              volume24h:
+                parseFloat(data.volume24h) || parseFloat(data.volume) || 0,
+              priceChange: parseFloat(data.priceChange) || 0,
+              priceChangePercent: parseFloat(data.priceChangePercent) || 0,
+              high: parseFloat(data.high) || parseFloat(data.price),
+              low: parseFloat(data.low) || parseFloat(data.price),
+              open: parseFloat(data.open) || parseFloat(data.price),
+              close: parseFloat(data.close) || parseFloat(data.price),
+              timestamp: data.timestamp || Date.now(),
+            };
+          }
+        } catch (error) {
+          console.warn(
+            `⚠️ Could not get live price for ${symbol}:`,
+            error.message
+          );
+        }
+      }
+
+      // Fallback: If no Redis data, fetch from Binance API
+      if (Object.keys(livePrices).length === 0) {
+        console.log("📊 No Redis data found, fetching from Binance API...");
+        try {
+          const response = await fetch(
+            "https://api.binance.com/api/v3/ticker/24hr"
+          );
+          const tickers = await response.json();
+
+          for (const symbol of symbols) {
+            const ticker = tickers.find((t) => t.symbol === symbol);
+            if (ticker) {
+              livePrices[symbol] = {
+                price: parseFloat(ticker.lastPrice),
+                volume: parseFloat(ticker.volume),
+                volume24h: parseFloat(ticker.volume),
+                priceChange: parseFloat(ticker.priceChange),
+                priceChangePercent: parseFloat(ticker.priceChangePercent),
+                high: parseFloat(ticker.highPrice),
+                low: parseFloat(ticker.lowPrice),
+                open: parseFloat(ticker.openPrice),
+                close: parseFloat(ticker.lastPrice),
+                timestamp: Date.now(),
+              };
+            }
+          }
+        } catch (apiError) {
+          console.warn("⚠️ Error fetching from Binance API:", apiError.message);
+        }
+      }
+
+      return livePrices;
+    } catch (error) {
+      console.error("❌ Error getting current live prices:", error);
+      return {};
+    }
+  }
+
   async processPriceUpdate(priceData) {
     if (this.isProcessing) return;
 
@@ -88,7 +457,11 @@ class RealTimeAlertProcessor {
       const alerts = this.activeAlerts.get(symbol);
 
       console.log(
-        `📡 Price update received for ${symbol}: Price=${priceData.price}, Volume=${priceData.volume24h}, Change=${priceData.priceChangePercent}%`
+        `📡 Price update received for ${symbol}: Price=${
+          priceData.price
+        }, Volume=${priceData.volume || priceData.volume24h}, Change=${
+          priceData.priceChangePercent
+        }%`
       );
 
       if (!alerts || alerts.length === 0) {
@@ -137,7 +510,7 @@ class RealTimeAlertProcessor {
         `📊 Live data: Price=${priceData.price}, Volume=${priceData.volume24h}, Change=${priceData.priceChangePercent}%`
       );
       console.log(
-        `📊 Baseline: Price=${alert.baselinePrice}, Volume=${alert.baselineVolume}, Change=${alert.baselineChange}%, Timestamp=${alert.baselineTimestamp}`
+        `📊 Baseline: Price=${alert.baselinePrice}, Volume=${alert.baselineVolume}, Timestamp=${alert.baselineTimestamp}`
       );
 
       // Check if alert is locked (temporary lock due to alert count)
@@ -175,9 +548,11 @@ class RealTimeAlertProcessor {
       console.log(`📋 Alert conditions:`, JSON.stringify(conditions, null, 2));
 
       // Check Min Daily volume condition (required)
-      if (conditions.minDaily && priceData.volume24h) {
+      if (conditions.minDaily && (priceData.volume || priceData.volume24h)) {
         const minVolume = parseFloat(conditions.minDaily);
-        const actualVolume = parseFloat(priceData.volume24h);
+        const actualVolume = parseFloat(
+          priceData.volume || priceData.volume24h
+        );
 
         console.log(
           `📈 Min Daily Check: Required=${minVolume}, Actual=${actualVolume}`
@@ -381,7 +756,7 @@ class RealTimeAlertProcessor {
           price: priceData.price,
           priceChange: priceData.priceChange,
           priceChangePercent: priceData.priceChangePercent,
-          volume24h: priceData.volume24h,
+          volume24h: priceData.volume || priceData.volume24h,
           high: priceData.high,
           low: priceData.low,
           open: priceData.open,
@@ -442,11 +817,9 @@ class RealTimeAlertProcessor {
           lastTriggeredAt: new Date(),
           lastTriggeredPrice: priceData.price,
           lastTriggeredVolume: priceData.volume,
-          lastTriggeredChange: priceData.priceChangePercent,
           // Update baseline to current price to prevent re-triggering on same price
           baselinePrice: priceData.price,
           baselineVolume: priceData.volume,
-          baselineChange: priceData.priceChangePercent,
           baselineTimestamp: new Date(),
         });
 
@@ -463,11 +836,9 @@ class RealTimeAlertProcessor {
           lastTriggeredAt: new Date(),
           lastTriggeredPrice: priceData.price,
           lastTriggeredVolume: priceData.volume,
-          lastTriggeredChange: priceData.priceChangePercent,
           // Update baseline to current price to prevent re-triggering on same price
           baselinePrice: priceData.price,
           baselineVolume: priceData.volume,
-          baselineChange: priceData.priceChangePercent,
           baselineTimestamp: new Date(),
         });
 
@@ -533,7 +904,7 @@ class RealTimeAlertProcessor {
         price: priceData.price,
         priceChange: priceData.priceChange,
         priceChangePercent: priceData.priceChangePercent,
-        volume: priceData.volume,
+        volume: priceData.volume || priceData.volume24h,
         high: priceData.high,
         low: priceData.low,
         open: priceData.open,
@@ -550,7 +921,7 @@ class RealTimeAlertProcessor {
       console.log(`📢 Notification: ${alert.symbol} alert triggered!`);
       console.log(`   Price: $${priceData.price}`);
       console.log(`   Change: ${priceData.priceChangePercent}%`);
-      console.log(`   Volume: ${priceData.volume}`);
+      console.log(`   Volume: ${priceData.volume || priceData.volume24h}`);
       console.log(`   Conditions: ${alertHistory.conditions}`);
     } catch (error) {
       console.error("❌ Error sending real-time notification:", error);

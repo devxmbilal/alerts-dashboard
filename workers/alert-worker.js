@@ -42,6 +42,10 @@ class AlertWorker {
       await RealTimeAlertProcessor.loadAllActiveAlerts();
       console.log("✅ Loaded active alerts into memory");
 
+      // Start round-based processing (Task 1 & 2)
+      await RealTimeAlertProcessor.startRoundBasedProcessing();
+      console.log("✅ Started round-based alert processing");
+
       // Subscribe to alert management events
       await RealTimeAlertProcessor.subscribeToAlertManagement();
       console.log("✅ Subscribed to alert management events");
