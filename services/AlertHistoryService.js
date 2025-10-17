@@ -24,7 +24,7 @@ class AlertHistoryService {
           priceChangePercent: parseFloat(
             alertHistoryData.triggerData.priceChangePercent
           ),
-          volume: parseFloat(alertHistoryData.triggerData.volume),
+          volume24h: parseFloat(alertHistoryData.triggerData.volume24h || alertHistoryData.triggerData.volume || 0),
           high: parseFloat(alertHistoryData.triggerData.high),
           low: parseFloat(alertHistoryData.triggerData.low),
           open: parseFloat(alertHistoryData.triggerData.open),

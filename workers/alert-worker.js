@@ -91,7 +91,7 @@ class AlertWorker {
   async handlePriceUpdate(priceData) {
     try {
       console.log(
-        `📡 Price update received for ${priceData.symbol}: Price=${priceData.price}, Volume=${priceData.volume}, Change=${priceData.priceChangePercent}%`
+        `📡 Price update received for ${priceData.symbol}: Price=${priceData.price}, Volume=${priceData.volume24h || priceData.volume || 'N/A'}, Change=${priceData.priceChangePercent}%`
       );
 
       // Process the price update in real-time using RealTimeAlertProcessor

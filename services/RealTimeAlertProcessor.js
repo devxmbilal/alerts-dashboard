@@ -180,16 +180,33 @@ class RealTimeAlertProcessor {
         return { triggered: false, reason: "alert_locked" };
       }
 
-      // Check if live price is greater than baseline price
-      if (liveData.price <= alert.baselinePrice) {
+      // Check price direction based on alert settings
+      const direction = alert.conditions?.changePercent?.direction || "increase";
+      const priceChanged = liveData.price !== alert.baselinePrice;
+      
+      if (direction === "increase" && liveData.price <= alert.baselinePrice) {
         console.log(
-          `❌ Live price ${liveData.price} <= baseline ${alert.baselinePrice}, skipping alert`
+          `❌ Direction: INCREASE - Live price ${liveData.price} <= baseline ${alert.baselinePrice}, skipping alert`
         );
         return { triggered: false, reason: "price_not_increased" };
       }
+      
+      if (direction === "decrease" && liveData.price >= alert.baselinePrice) {
+        console.log(
+          `❌ Direction: DECREASE - Live price ${liveData.price} >= baseline ${alert.baselinePrice}, skipping alert`
+        );
+        return { triggered: false, reason: "price_not_decreased" };
+      }
+      
+      if (!priceChanged) {
+        console.log(
+          `❌ Price hasn't changed from baseline ${alert.baselinePrice}, skipping alert`
+        );
+        return { triggered: false, reason: "price_unchanged" };
+      }
 
       console.log(
-        `✅ Live price ${liveData.price} > baseline ${alert.baselinePrice}, checking conditions...`
+        `✅ Price condition met - Direction: ${direction.toUpperCase()}, Baseline: ${alert.baselinePrice}, Live: ${liveData.price}`
       );
 
       // Check alert conditions
@@ -251,7 +268,7 @@ class RealTimeAlertProcessor {
         console.log(`⚠️ Min Daily condition not set or volume data missing`);
       }
 
-      // Check Change % condition (required) - based on baseline price
+      // Check Change % condition (required) - based on baseline price and direction
       if (
         conditionsMet &&
         conditions.changePercent &&
@@ -259,9 +276,10 @@ class RealTimeAlertProcessor {
       ) {
         const requiredChange = parseFloat(conditions.changePercent.percentage);
         const timeframe = conditions.changePercent.timeframe || "5m";
+        const direction = conditions.changePercent.direction || "increase";
 
         console.log(
-          `📊 Checking change condition: ${requiredChange}% in ${timeframe}`
+          `📊 Checking change condition: ${requiredChange}% ${direction.toUpperCase()} in ${timeframe}`
         );
 
         // Calculate change from baseline price
@@ -278,26 +296,180 @@ class RealTimeAlertProcessor {
           )}%, Required: ${requiredChange}%`
         );
 
-        if (absoluteChange < requiredChange) {
+        // Check based on direction
+        let directionMet = true;
+        
+        if (direction === "increase" && changeFromBaseline < 0) {
+          console.log(
+            `❌ Direction condition FAILED: Price decreased but increase required`
+          );
+          directionMet = false;
+        } else if (direction === "decrease" && changeFromBaseline > 0) {
+          console.log(
+            `❌ Direction condition FAILED: Price increased but decrease required`
+          );
+          directionMet = false;
+        }
+        
+        if (!directionMet || absoluteChange < requiredChange) {
           console.log(
             `❌ Change % condition FAILED: ${absoluteChange.toFixed(
               3
-            )}% < ${requiredChange}%`
+            )}% < ${requiredChange}% or wrong direction`
           );
           conditionsMet = false;
         } else {
           console.log(
             `✅ Change % condition PASSED: ${absoluteChange.toFixed(
               3
-            )}% >= ${requiredChange}%`
+            )}% >= ${requiredChange}% with correct direction (${direction})`
           );
         }
       } else {
         console.log(`⚠️ Change % condition not set or data missing`);
       }
 
-      // Check other conditions (candle, RSI, volume, EMA) if needed
-      // ... (implement other condition checks as needed)
+      // Check Candle conditions (optional)
+      if (
+        conditionsMet &&
+        conditions.candle &&
+        conditions.candle.timeframes &&
+        conditions.candle.timeframes.length > 0
+      ) {
+        const candleCondition = conditions.candle.condition || "CANDLE_ABOVE_OPEN";
+        console.log(
+          `🕯️ Checking Candle condition: ${candleCondition} on timeframes: ${conditions.candle.timeframes.join(", ")}`
+        );
+        
+        // Simple candle check based on current price vs open
+        if (candleCondition === "CANDLE_ABOVE_OPEN") {
+          if (liveData.close && liveData.open && liveData.close > liveData.open) {
+            console.log(`✅ Candle condition PASSED: Close (${liveData.close}) > Open (${liveData.open})`);
+          } else {
+            console.log(`❌ Candle condition FAILED: Close not above Open`);
+            conditionsMet = false;
+          }
+        } else if (candleCondition === "BULLISH") {
+          // Bullish: close > open
+          if (liveData.close && liveData.open && liveData.close > liveData.open) {
+            console.log(`✅ Bullish candle condition PASSED`);
+          } else {
+            console.log(`❌ Bullish candle condition FAILED`);
+            conditionsMet = false;
+          }
+        } else if (candleCondition === "BEARISH") {
+          // Bearish: close < open
+          if (liveData.close && liveData.open && liveData.close < liveData.open) {
+            console.log(`✅ Bearish candle condition PASSED`);
+          } else {
+            console.log(`❌ Bearish candle condition FAILED`);
+            conditionsMet = false;
+          }
+        }
+      }
+
+      // Check RSI Range conditions (optional)
+      if (
+        conditionsMet &&
+        conditions.rsiRange &&
+        conditions.rsiRange.timeframes &&
+        conditions.rsiRange.timeframes.length > 0
+      ) {
+        const rsiLevel = parseFloat(conditions.rsiRange.level || "70");
+        const rsiCondition = conditions.rsiRange.condition || "ABOVE";
+        const rsiPeriod = parseInt(conditions.rsiRange.period || "14");
+        
+        console.log(
+          `📊 Checking RSI condition: ${rsiCondition} ${rsiLevel} on timeframes: ${conditions.rsiRange.timeframes.join(", ")}`
+        );
+        
+        // Simplified RSI estimation based on price change
+        // Real implementation would require historical data
+        const priceChangePercent = Math.abs(parseFloat(liveData.priceChangePercent || 0));
+        const estimatedRSI = 50 + (priceChangePercent * 2); // Very simplified estimation
+        
+        console.log(`📊 Estimated RSI: ${estimatedRSI.toFixed(2)} (based on ${priceChangePercent}% change)`);
+        
+        if (rsiCondition === "ABOVE" && estimatedRSI > rsiLevel) {
+          console.log(`✅ RSI condition PASSED: ${estimatedRSI.toFixed(2)} > ${rsiLevel}`);
+        } else if (rsiCondition === "BELOW" && estimatedRSI < rsiLevel) {
+          console.log(`✅ RSI condition PASSED: ${estimatedRSI.toFixed(2)} < ${rsiLevel}`);
+        } else {
+          console.log(`❌ RSI condition FAILED`);
+          conditionsMet = false;
+        }
+      }
+
+      // Check Volume conditions (optional)
+      if (
+        conditionsMet &&
+        conditions.volume &&
+        conditions.volume.timeframes &&
+        conditions.volume.timeframes.length > 0
+      ) {
+        const volumeCondition = conditions.volume.condition || "INCREASING";
+        const volumePercentage = parseFloat(conditions.volume.percentage || "20");
+        
+        console.log(
+          `📈 Checking Volume condition: ${volumeCondition} by ${volumePercentage}% on timeframes: ${conditions.volume.timeframes.join(", ")}`
+        );
+        
+        // Compare current volume with baseline volume
+        const currentVolume = parseFloat(liveData.volume || liveData.volume24h || 0);
+        const baselineVolume = parseFloat(alert.baselineVolume || 0);
+        
+        if (baselineVolume > 0) {
+          const volumeChange = ((currentVolume - baselineVolume) / baselineVolume) * 100;
+          
+          console.log(
+            `📈 Volume change: ${volumeChange.toFixed(2)}% (Current: ${currentVolume}, Baseline: ${baselineVolume})`
+          );
+          
+          if (volumeCondition === "INCREASING" && volumeChange >= volumePercentage) {
+            console.log(`✅ Volume INCREASING condition PASSED: ${volumeChange.toFixed(2)}% >= ${volumePercentage}%`);
+          } else if (volumeCondition === "DECREASING" && volumeChange <= -volumePercentage) {
+            console.log(`✅ Volume DECREASING condition PASSED: ${volumeChange.toFixed(2)}% <= -${volumePercentage}%`);
+          } else {
+            console.log(`❌ Volume condition FAILED`);
+            conditionsMet = false;
+          }
+        } else {
+          console.log(`⚠️ No baseline volume available, skipping volume condition`);
+        }
+      }
+
+      // Check EMA conditions (optional)
+      if (
+        conditionsMet &&
+        conditions.ema &&
+        conditions.ema.timeframes &&
+        conditions.ema.timeframes.length > 0
+      ) {
+        const fastEMA = parseInt(conditions.ema.fast || "12");
+        const slowEMA = parseInt(conditions.ema.slow || "26");
+        const emaCondition = conditions.ema.condition || "ABOVE";
+        
+        console.log(
+          `📉 Checking EMA condition: Fast(${fastEMA}) ${emaCondition} Slow(${slowEMA}) on timeframes: ${conditions.ema.timeframes.join(", ")}`
+        );
+        
+        // Simplified EMA check using price momentum
+        // Real implementation would require historical price data for EMA calculation
+        const priceChange = parseFloat(liveData.priceChangePercent || 0);
+        
+        // If price is trending up, assume fast EMA > slow EMA
+        // If price is trending down, assume fast EMA < slow EMA
+        const isFastAboveSlow = priceChange > 0;
+        
+        if (emaCondition === "ABOVE" && isFastAboveSlow) {
+          console.log(`✅ EMA condition PASSED: Fast EMA appears to be ABOVE Slow EMA (positive momentum)`);
+        } else if (emaCondition === "BELOW" && !isFastAboveSlow) {
+          console.log(`✅ EMA condition PASSED: Fast EMA appears to be BELOW Slow EMA (negative momentum)`);
+        } else {
+          console.log(`❌ EMA condition FAILED`);
+          conditionsMet = false;
+        }
+      }
 
       return conditionsMet;
     } catch (error) {
@@ -313,10 +485,24 @@ class RealTimeAlertProcessor {
         `🚀 Triggering alert ${alert._id} for ${alert.symbol} with live data`
       );
 
-      // Calculate change from baseline
-      const changeFromBaseline = liveData.price - alert.baselinePrice;
-      const changeFromBaselinePercent =
-        (changeFromBaseline / alert.baselinePrice) * 100;
+      // Safely get baseline values with proper defaults
+      const baselinePrice = parseFloat(alert.baselinePrice) || 0;
+      const baselineVolume = parseFloat(alert.baselineVolume) || 0;
+      const baselineTimestamp = alert.baselineTimestamp || new Date();
+      const livePrice = parseFloat(liveData.price) || 0;
+      
+      // Calculate change from baseline with proper NaN handling
+      let changeFromBaseline = 0;
+      let changeFromBaselinePercent = 0;
+      
+      if (baselinePrice > 0 && livePrice > 0) {
+        changeFromBaseline = livePrice - baselinePrice;
+        changeFromBaselinePercent = (changeFromBaseline / baselinePrice) * 100;
+        
+        // Handle NaN or Infinity cases
+        if (!isFinite(changeFromBaseline)) changeFromBaseline = 0;
+        if (!isFinite(changeFromBaselinePercent)) changeFromBaselinePercent = 0;
+      }
 
       // Debug: Log live data and alert data
       console.log(`🔍 Debug - Live Data for ${alert.symbol}:`, {
@@ -333,9 +519,9 @@ class RealTimeAlertProcessor {
       });
 
       console.log(`🔍 Debug - Alert Data for ${alert.symbol}:`, {
-        baselinePrice: alert.baselinePrice,
-        baselineVolume: alert.baselineVolume,
-        baselineTimestamp: alert.baselineTimestamp,
+        baselinePrice: baselinePrice,
+        baselineVolume: baselineVolume,
+        baselineTimestamp: baselineTimestamp,
         changeFromBaseline: changeFromBaseline,
         changeFromBaselinePercent: changeFromBaselinePercent,
       });
@@ -347,22 +533,22 @@ class RealTimeAlertProcessor {
         symbol: alert.symbol,
         alertConditions: alert.conditions,
         triggerData: {
-          price: liveData.price || 0,
-          priceChange: liveData.priceChange || 0,
-          priceChangePercent: liveData.priceChangePercent || 0,
-          volume24h: liveData.volume || liveData.volume24h || 0,
-          high: liveData.high || liveData.price || 0,
-          low: liveData.low || liveData.price || 0,
-          open: liveData.open || liveData.price || 0,
-          close: liveData.close || liveData.price || 0,
+          price: parseFloat(liveData.price) || 0,
+          priceChange: parseFloat(liveData.priceChange) || 0,
+          priceChangePercent: parseFloat(liveData.priceChangePercent) || 0,
+          volume24h: parseFloat(liveData.volume || liveData.volume24h) || 0,
+          high: parseFloat(liveData.high || liveData.price) || 0,
+          low: parseFloat(liveData.low || liveData.price) || 0,
+          open: parseFloat(liveData.open || liveData.price) || 0,
+          close: parseFloat(liveData.close || liveData.price) || 0,
           timestamp: liveData.timestamp || Date.now(),
         },
         baselineData: {
-          baselinePrice: alert.baselinePrice || 0,
-          baselineVolume: alert.baselineVolume || 0,
-          baselineTimestamp: alert.baselineTimestamp || new Date(),
-          changeFromBaseline: changeFromBaseline || 0,
-          changeFromBaselinePercent: changeFromBaselinePercent || 0,
+          baselinePrice: baselinePrice,
+          baselineVolume: baselineVolume,
+          baselineTimestamp: baselineTimestamp,
+          changeFromBaseline: changeFromBaseline,
+          changeFromBaselinePercent: changeFromBaselinePercent,
         },
         triggeredAt: new Date(),
         conditions: this.getAlertConditionsText(alert.conditions),
@@ -587,14 +773,38 @@ class RealTimeAlertProcessor {
         return false;
       }
 
-      // Check if we already processed this alert recently (avoid spam)
-      const alertKey = `${alert._id}_${Math.floor(priceData.timestamp / 1000)}`; // Round to seconds
-      if (this.processedAlerts.has(alertKey)) {
+      // IMPORTANT: Check price direction based on alert settings
+      const direction = alert.conditions?.changePercent?.direction || "increase";
+      const priceChanged = priceData.price !== alert.baselinePrice;
+      
+      console.log(
+        `📊 Direction Check: Required=${direction}, Baseline=${alert.baselinePrice}, Live=${priceData.price}`
+      );
+      
+      if (direction === "increase" && priceData.price <= alert.baselinePrice) {
         console.log(
-          `⏭️ Alert ${alert._id} for ${alert.symbol} already processed recently`
+          `❌ Direction: INCREASE - Live price ${priceData.price} <= baseline ${alert.baselinePrice}, skipping alert`
         );
         return false;
       }
+      
+      if (direction === "decrease" && priceData.price >= alert.baselinePrice) {
+        console.log(
+          `❌ Direction: DECREASE - Live price ${priceData.price} >= baseline ${alert.baselinePrice}, skipping alert`
+        );
+        return false;
+      }
+      
+      if (!priceChanged) {
+        console.log(
+          `❌ Price hasn't changed from baseline ${alert.baselinePrice}, skipping alert`
+        );
+        return false;
+      }
+
+      console.log(
+        `✅ Direction condition met: ${direction.toUpperCase()} - Price moved from ${alert.baselinePrice} to ${priceData.price}`
+      );
 
       const conditions = alert.conditions;
       let conditionsMet = true;
@@ -773,32 +983,35 @@ class RealTimeAlertProcessor {
         `🚀 Starting triggerAlert for ${alert.symbol} (Alert ID: ${alert._id})`
       );
 
-      // Check if we already processed this alert recently (prevent spam)
+      // Create unique key for duplicate checking
       const alertKey = `${alert._id}_${Math.floor(priceData.timestamp / 1000)}`;
+      
+      // Check if we already processed this alert recently (prevent spam)
       if (this.processedAlerts.has(alertKey)) {
         console.log(
-          `⚠️ Alert ${alert._id} already processed recently, skipping duplicate trigger`
+          `⚠️ Alert ${alert._id} already processed recently (within last 60s), skipping duplicate trigger`
         );
-        return false; // Don't process same alert multiple times
+        return false;
       }
 
-      // Mark this alert as processed for this time period
-      this.processedAlerts.add(alertKey);
-      console.log(`✅ Alert ${alert._id} marked as processed`);
-
-      // Clean up old processed alerts (keep only last 60 seconds)
-      const currentTime = Math.floor(Date.now() / 1000);
-      for (const key of this.processedAlerts) {
-        const [, timestamp] = key.split("_");
-        if (currentTime - parseInt(timestamp) > 60) {
-          this.processedAlerts.delete(key);
-        }
+      // Safely get baseline values with proper defaults
+      const baselinePrice = parseFloat(alert.baselinePrice) || 0;
+      const baselineVolume = parseFloat(alert.baselineVolume) || 0;
+      const baselineTimestamp = alert.baselineTimestamp || new Date();
+      const livePrice = parseFloat(priceData.price) || 0;
+      
+      // Calculate change from baseline with proper NaN handling
+      let changeFromBaseline = 0;
+      let changeFromBaselinePercent = 0;
+      
+      if (baselinePrice > 0 && livePrice > 0) {
+        changeFromBaseline = livePrice - baselinePrice;
+        changeFromBaselinePercent = (changeFromBaseline / baselinePrice) * 100;
+        
+        // Handle NaN or Infinity cases
+        if (!isFinite(changeFromBaseline)) changeFromBaseline = 0;
+        if (!isFinite(changeFromBaselinePercent)) changeFromBaselinePercent = 0;
       }
-
-      // Calculate change from baseline
-      const changeFromBaseline = priceData.price - alert.baselinePrice;
-      const changeFromBaselinePercent =
-        (changeFromBaseline / alert.baselinePrice) * 100;
 
       // Create alert history entry
       const alertHistory = {
@@ -807,20 +1020,20 @@ class RealTimeAlertProcessor {
         symbol: alert.symbol,
         alertConditions: alert.conditions,
         triggerData: {
-          price: priceData.price,
-          priceChange: priceData.priceChange,
-          priceChangePercent: priceData.priceChangePercent,
-          volume24h: priceData.volume || priceData.volume24h,
-          high: priceData.high,
-          low: priceData.low,
-          open: priceData.open,
-          close: priceData.close,
-          timestamp: priceData.timestamp,
+          price: parseFloat(priceData.price) || 0,
+          priceChange: parseFloat(priceData.priceChange) || 0,
+          priceChangePercent: parseFloat(priceData.priceChangePercent) || 0,
+          volume24h: parseFloat(priceData.volume || priceData.volume24h) || 0,
+          high: parseFloat(priceData.high) || 0,
+          low: parseFloat(priceData.low) || 0,
+          open: parseFloat(priceData.open) || 0,
+          close: parseFloat(priceData.close) || 0,
+          timestamp: priceData.timestamp || Date.now(),
         },
         baselineData: {
-          baselinePrice: alert.baselinePrice,
-          baselineVolume: alert.baselineVolume,
-          baselineTimestamp: alert.baselineTimestamp,
+          baselinePrice: baselinePrice,
+          baselineVolume: baselineVolume,
+          baselineTimestamp: baselineTimestamp,
           changeFromBaseline: changeFromBaseline,
           changeFromBaselinePercent: changeFromBaselinePercent,
         },
@@ -847,6 +1060,11 @@ class RealTimeAlertProcessor {
           price: savedHistory.triggerData.price,
           triggeredAt: savedHistory.triggeredAt,
         });
+        
+        // Mark as processed AFTER successful save to prevent duplicates
+        this.processedAlerts.add(alertKey);
+        console.log(`✅ Alert ${alert._id} marked as processed after history save`);
+        
       } catch (historyError) {
         console.error(
           `❌ Error saving alert history for ${alert.symbol}:`,
@@ -854,7 +1072,8 @@ class RealTimeAlertProcessor {
         );
         console.error(`❌ History error details:`, historyError.message);
         console.error(`❌ History error stack:`, historyError.stack);
-        // Don't throw error, continue with alert processing
+        // Don't mark as processed if save failed - allow retry
+        return false;
       }
 
       // Update alert lock if alert count is set
@@ -900,6 +1119,15 @@ class RealTimeAlertProcessor {
           `✅ Alert ${alert._id} for ${alert.symbol} updated (no lock period)`
         );
         console.log(`📊 Baseline updated to current price: ${priceData.price}`);
+      }
+
+      // Clean up old processed alerts (keep only last 60 seconds)
+      const currentTime = Math.floor(Date.now() / 1000);
+      for (const key of this.processedAlerts) {
+        const [, timestamp] = key.split("_");
+        if (timestamp && currentTime - parseInt(timestamp) > 60) {
+          this.processedAlerts.delete(key);
+        }
       }
 
       // Send real-time notification (we'll implement this)

@@ -27,6 +27,11 @@ const alertSchema = new mongoose.Schema(
           type: String,
           required: true,
         },
+        direction: {
+          type: String,
+          enum: ["increase", "decrease", "both"],
+          default: "increase",
+        },
       },
       alertCount: {
         timeframe: {

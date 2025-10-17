@@ -151,7 +151,7 @@ const FilterSidebar = forwardRef(
 
       // Price filters
       minDaily: {},
-      changePercent: {},
+      changePercent: { direction: "increase" }, // Default to increase
       alertCount: {},
 
       // Technical filters
@@ -185,7 +185,7 @@ const FilterSidebar = forwardRef(
           exchange: { BINANCE: true },
           pair: { USDT: true },
           minDaily: {},
-          changePercent: {},
+          changePercent: { direction: "increase" },
           alertCount: {},
           candle: {},
           rsiRange: {},
@@ -310,7 +310,8 @@ const FilterSidebar = forwardRef(
           minDaily: minDailyKey,
           changePercent: {
             timeframe: changePercentKey,
-          percentage: filters.changePercent.percentage,
+            percentage: filters.changePercent.percentage,
+            direction: filters.changePercent.direction || "increase", // Include direction
           },
         };
 
@@ -791,7 +792,55 @@ const FilterSidebar = forwardRef(
                     <InputAdornment position="end">%</InputAdornment>
                   ),
                 }}
+                sx={{ mt: 2 }}
               />
+              <CustomTextField
+                fullWidth
+                select
+                size="small"
+                label="Direction"
+                value={filters.changePercent.direction || "increase"}
+                onChange={(e) =>
+                  handleInputChange(
+                    "changePercent",
+                    "direction",
+                    e.target.value
+                  )
+                }
+                sx={{ mt: 2 }}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      {filters.changePercent.direction === "increase" ? (
+                        <TrendingUpIcon sx={{ fontSize: 18, color: "#4caf50" }} />
+                      ) : filters.changePercent.direction === "decrease" ? (
+                        <TrendingDownIcon sx={{ fontSize: 18, color: "#f44336" }} />
+                      ) : (
+                        <ShowChartIcon sx={{ fontSize: 18, color: "#ff9800" }} />
+                      )}
+                    </InputAdornment>
+                  ),
+                }}
+              >
+                <MenuItem value="increase">
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <TrendingUpIcon sx={{ fontSize: 18, color: "#4caf50" }} />
+                    Increase Only
+                  </Box>
+                </MenuItem>
+                <MenuItem value="decrease">
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <TrendingDownIcon sx={{ fontSize: 18, color: "#f44336" }} />
+                    Decrease Only
+                  </Box>
+                </MenuItem>
+                <MenuItem value="both">
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <ShowChartIcon sx={{ fontSize: 18, color: "#ff9800" }} />
+                    Both Directions
+                  </Box>
+                </MenuItem>
+              </CustomTextField>
             </AccordionDetails>
           </DarkAccordion>
 

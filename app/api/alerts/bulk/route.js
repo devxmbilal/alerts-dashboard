@@ -188,21 +188,17 @@ export async function POST(request) {
     const alertDocuments = favoriteSymbols.map((symbol) => {
       let alertConditions = { ...conditions };
 
-      // If alert count is set, calculate initial lock time
+      // Don't apply initial lock - lock should only be set after first trigger
+      // Just preserve the alertCount timeframe setting
       if (conditions.alertCount && conditions.alertCount.timeframe) {
-        try {
-          const lockUntil = calculateLockTime(conditions.alertCount.timeframe);
-          alertConditions = {
-            ...alertConditions,
-            alertCount: {
-              ...alertConditions.alertCount,
-              lockUntil: lockUntil,
-              lastTriggered: null,
-            },
-          };
-        } catch (error) {
-          console.error(`❌ Error calculating lock time for ${symbol}:`, error);
-        }
+        alertConditions = {
+          ...alertConditions,
+          alertCount: {
+            ...alertConditions.alertCount,
+            lockUntil: null, // No lock on creation
+            lastTriggered: null,
+          },
+        };
       }
 
       // Get current price for baseline
