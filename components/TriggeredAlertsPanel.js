@@ -141,6 +141,9 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll, onAlertTrigger }) => {
             low: alert.triggerData?.low,
             open: alert.triggerData?.open,
             close: alert.triggerData?.close,
+            // Baseline data for comparison
+            baselinePrice: alert.baselineData?.baselinePrice,
+            changeFromBaselinePercent: alert.baselineData?.changeFromBaselinePercent,
             notificationType: "both",
             notificationSent: true,
           };

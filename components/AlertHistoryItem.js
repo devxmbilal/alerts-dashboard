@@ -11,7 +11,7 @@ import {
 const AlertHistoryItem = ({ alert, onClear, onEmail }) => {
   const formatPrice = (price) => {
     if (!price) return "$0.00";
-    return `$${parseFloat(price).toFixed(3)}`;
+    return `$${parseFloat(price).toFixed(4)}`;
   };
 
   const formatTime = (date) => {
@@ -68,27 +68,27 @@ const AlertHistoryItem = ({ alert, onClear, onEmail }) => {
         variant="body2"
         sx={{ color: "#888", mb: 1, fontSize: "0.85rem" }}
       >
-        Target: {alert.targetValue || 1} | Actual:{" "}
-        {alert.actualValue?.toFixed(6) || "N/A"} | {alert.timeframe || "5MIN"}
+        Target: {alert.targetValue || 1} | Actual 24h change :{" "} {alert.price24hChange
+            ? `${parseFloat(alert.price24hChange).toFixed(3)}%`
+            : "N/A"} | {alert.timeframe || "5MIN"}
       </Typography>
 
-      {/* Price and 24h Change */}
+      {/* Price and Baseline Comparison */}
       <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
         <Typography variant="body2" sx={{ color: "white" }}>
           Price: {formatPrice(alert.triggeredPrice)}
-        </Typography>
+        </Typography> |
         <Typography variant="body2" sx={{ color: "white" }}>
-          24h Change:{" "}
-          {alert.price24hChange
-            ? `${parseFloat(alert.price24hChange).toFixed(3)}%`
+          Last Price: {formatPrice(alert.baselinePrice )}
+        </Typography> |
+        <Typography variant="body2" sx={{ color: "white" }}>
+         Change in price:{" "}
+          {alert.changeFromBaselinePercent !== undefined
+            ? `${parseFloat(alert.changeFromBaselinePercent).toFixed(3)}%`
             : "N/A"}
-        </Typography>
-      </Box>
-
-      {/* Volume */}
-      <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
+        </Typography> |
         <Typography variant="body2" sx={{ color: "white" }}>
-          Volume:{" "}
+         24h Volume:{" "}
           {alert.volume24h
             ? new Intl.NumberFormat("en-US").format(alert.volume24h)
             : alert.triggeredVolume
@@ -97,10 +97,11 @@ const AlertHistoryItem = ({ alert, onClear, onEmail }) => {
         </Typography>
       </Box>
 
+
       {/* Time and Date */}
       <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
         <Typography variant="body2" sx={{ color: "#888" }}>
-          Time: {formatTime(alert.triggeredAt)}
+          Time: {formatTime(alert.triggeredAt)} 
         </Typography>
         <Typography variant="body2" sx={{ color: "#888" }}>
           Date:{" "}
