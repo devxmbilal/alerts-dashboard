@@ -31,6 +31,13 @@ class AlertHistoryService {
           close: parseFloat(alertHistoryData.triggerData.close),
           timestamp: alertHistoryData.triggerData.timestamp,
         },
+        baselineData: {
+          baselinePrice: parseFloat(alertHistoryData.baselineData.baselinePrice),
+          baselineVolume: parseFloat(alertHistoryData.baselineData.baselineVolume || 0),
+          baselineTimestamp: alertHistoryData.baselineData.baselineTimestamp,
+          changeFromBaseline: parseFloat(alertHistoryData.baselineData.changeFromBaseline),
+          changeFromBaselinePercent: parseFloat(alertHistoryData.baselineData.changeFromBaselinePercent),
+        },
         triggeredAt: alertHistoryData.triggeredAt,
         status: "triggered",
       });
