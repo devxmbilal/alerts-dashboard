@@ -1212,27 +1212,282 @@ class RealTimeAlertProcessor {
 
   // Technical analysis helper methods
   evaluateCandleConditions(candleConditions, priceData) {
-    // Simple candle evaluation - can be enhanced
-    if (candleConditions.condition === "CANDLE_ABOVE_OPEN") {
-      return priceData.close > priceData.open;
+    const { open, high, low, close } = priceData;
+    
+    // Validate OHLC data
+    if (!open || !high || !low || !close) {
+      console.log("⚠️ Missing OHLC data for candle evaluation");
+      return true; // Skip if data missing
     }
-    return true;
+
+    const condition = candleConditions.condition;
+    const body = Math.abs(close - open);
+    const range = high - low;
+    const upperWick = high - Math.max(close, open);
+    const lowerWick = Math.min(close, open) - low;
+
+    console.log(`🕯️ Candle Evaluation: ${condition}`);
+    console.log(`   OHLC: O=${open}, H=${high}, L=${low}, C=${close}`);
+    console.log(`   Body=${body.toFixed(6)}, Range=${range.toFixed(6)}`);
+
+    switch (condition) {
+      case "CANDLE_ABOVE_OPEN":
+      case "BULLISH":
+        // Bullish candle: Close > Open
+        const isBullish = close > open;
+        console.log(`   Bullish check: ${isBullish} (Close ${close} > Open ${open})`);
+        return isBullish;
+
+      case "CANDLE_BELOW_OPEN":
+      case "BEARISH":
+        // Bearish candle: Close < Open
+        const isBearish = close < open;
+        console.log(`   Bearish check: ${isBearish} (Close ${close} < Open ${open})`);
+        return isBearish;
+
+      case "DOJI":
+        // Doji: Very small body (< 0.1% of range)
+        const isDoji = body < (range * 0.001);
+        console.log(`   Doji check: ${isDoji} (Body ${body.toFixed(6)} < ${(range * 0.001).toFixed(6)})`);
+        return isDoji;
+
+      case "HAMMER":
+        // Hammer: Small upper wick, long lower wick, small body at top
+        const isHammer = 
+          close > open && // Bullish
+          lowerWick > (body * 2) && // Long lower wick
+          upperWick < (body * 0.5); // Small upper wick
+        console.log(`   Hammer check: ${isHammer}`);
+        return isHammer;
+
+      case "SHOOTING_STAR":
+        // Shooting Star: Long upper wick, small body at bottom
+        const isShootingStar = 
+          close < open && // Bearish
+          upperWick > (body * 2) && // Long upper wick
+          lowerWick < (body * 0.5); // Small lower wick
+        console.log(`   Shooting Star check: ${isShootingStar}`);
+        return isShootingStar;
+
+      case "ENGULFING_BULLISH":
+        // Need previous candle data - skip for now
+        console.log(`   Engulfing patterns need historical data - skipping`);
+        return true;
+
+      default:
+        console.log(`   Unknown candle condition: ${condition}`);
+        return true;
+    }
   }
 
   evaluateRSIConditions(rsiConditions, priceData) {
-    // RSI evaluation - simplified for now
-    // In real implementation, you'd calculate RSI from historical data
-    return true;
+    const { condition, level } = rsiConditions;
+    const targetLevel = parseFloat(level) || 50;
+    
+    // Estimate RSI based on 24h price change
+    // This is a simplified approximation - real RSI needs 14 periods of data
+    const priceChangePercent = parseFloat(priceData.priceChangePercent) || 0;
+    
+    // Map price change to RSI estimate:
+    // -10% or less -> RSI ~30 (oversold)
+    // 0% -> RSI ~50 (neutral)
+    // +10% or more -> RSI ~70 (overbought)
+    let estimatedRSI = 50 + (priceChangePercent * 2);
+    estimatedRSI = Math.max(0, Math.min(100, estimatedRSI)); // Clamp between 0-100
+
+    console.log(`📈 RSI Evaluation: ${condition} ${targetLevel}`);
+    console.log(`   Price Change: ${priceChangePercent}%`);
+    console.log(`   Estimated RSI: ${estimatedRSI.toFixed(2)}`);
+
+    switch (condition) {
+      case "ABOVE":
+        const isAbove = estimatedRSI > targetLevel;
+        console.log(`   Check: RSI ${estimatedRSI.toFixed(2)} > ${targetLevel}? ${isAbove}`);
+        return isAbove;
+
+      case "BELOW":
+        const isBelow = estimatedRSI < targetLevel;
+        console.log(`   Check: RSI ${estimatedRSI.toFixed(2)} < ${targetLevel}? ${isBelow}`);
+        return isBelow;
+
+      case "OVERBOUGHT":
+        // RSI > 70 is typically overbought
+        const isOverbought = estimatedRSI > 70;
+        console.log(`   Overbought check: RSI ${estimatedRSI.toFixed(2)} > 70? ${isOverbought}`);
+        return isOverbought;
+
+      case "OVERSOLD":
+        // RSI < 30 is typically oversold
+        const isOversold = estimatedRSI < 30;
+        console.log(`   Oversold check: RSI ${estimatedRSI.toFixed(2)} < 30? ${isOversold}`);
+        return isOversold;
+
+      default:
+        console.log(`   Unknown RSI condition: ${condition}`);
+        return true;
+    }
   }
 
   evaluateVolumeConditions(volumeConditions, priceData) {
-    // Volume evaluation - simplified for now
-    return true;
+    const { condition, percentage } = volumeConditions;
+    const currentVolume = parseFloat(priceData.volume || priceData.volume24h) || 0;
+    
+    if (currentVolume === 0) {
+      console.log("⚠️ Volume data missing, skipping volume condition");
+      return true;
+    }
+
+    console.log(`📉 Volume Evaluation: ${condition}`);
+    console.log(`   Current Volume: ${currentVolume.toLocaleString()}`);
+
+    // For INCREASING/DECREASING, we need historical volume data
+    // As a workaround, we'll use the alert's baseline volume if available
+    const baselineVolume = this.alertBaselines.get(`volume_${priceData.symbol}`);
+    
+    switch (condition) {
+      case "INCREASING":
+        if (baselineVolume && baselineVolume > 0) {
+          const volumeChange = ((currentVolume - baselineVolume) / baselineVolume) * 100;
+          const isIncreasing = volumeChange > 5; // 5% increase threshold
+          console.log(`   Baseline Volume: ${baselineVolume.toLocaleString()}`);
+          console.log(`   Volume Change: ${volumeChange.toFixed(2)}%`);
+          console.log(`   Increasing check: ${isIncreasing} (change > 5%)`);
+          return isIncreasing;
+        }
+        // If no baseline, assume true
+        console.log(`   No baseline volume, assuming INCREASING`);
+        return true;
+
+      case "DECREASING":
+        if (baselineVolume && baselineVolume > 0) {
+          const volumeChange = ((currentVolume - baselineVolume) / baselineVolume) * 100;
+          const isDecreasing = volumeChange < -5; // 5% decrease threshold
+          console.log(`   Baseline Volume: ${baselineVolume.toLocaleString()}`);
+          console.log(`   Volume Change: ${volumeChange.toFixed(2)}%`);
+          console.log(`   Decreasing check: ${isDecreasing} (change < -5%)`);
+          return isDecreasing;
+        }
+        // If no baseline, assume true
+        console.log(`   No baseline volume, assuming DECREASING`);
+        return true;
+
+      case "ABOVE_AVERAGE":
+        // Use a simple heuristic: if volume is significantly higher than typical
+        // We'll use 150% of baseline as "above average"
+        if (baselineVolume && baselineVolume > 0) {
+          const isAboveAverage = currentVolume > (baselineVolume * 1.5);
+          console.log(`   Baseline Volume: ${baselineVolume.toLocaleString()}`);
+          console.log(`   Above Average check: ${isAboveAverage} (${currentVolume} > ${baselineVolume * 1.5})`);
+          return isAboveAverage;
+        }
+        return true;
+
+      case "SPIKE":
+        // Volume spike: 200% or more of baseline
+        if (baselineVolume && baselineVolume > 0) {
+          const isSpike = currentVolume > (baselineVolume * 2);
+          console.log(`   Baseline Volume: ${baselineVolume.toLocaleString()}`);
+          console.log(`   Spike check: ${isSpike} (${currentVolume} > ${baselineVolume * 2})`);
+          return isSpike;
+        }
+        return true;
+
+      case "PERCENTAGE":
+        // Custom percentage change
+        if (percentage && baselineVolume && baselineVolume > 0) {
+          const targetPercentage = parseFloat(percentage);
+          const volumeChange = ((currentVolume - baselineVolume) / baselineVolume) * 100;
+          const meetsPercentage = volumeChange >= targetPercentage;
+          console.log(`   Target: ${targetPercentage}% change`);
+          console.log(`   Actual: ${volumeChange.toFixed(2)}% change`);
+          console.log(`   Percentage check: ${meetsPercentage}`);
+          return meetsPercentage;
+        }
+        return true;
+
+      default:
+        console.log(`   Unknown volume condition: ${condition}`);
+        return true;
+    }
   }
 
   evaluateEMAConditions(emaConditions, priceData) {
-    // EMA evaluation - simplified for now
-    return true;
+    const { condition, fast, slow } = emaConditions;
+    const currentPrice = parseFloat(priceData.close || priceData.price) || 0;
+    const priceChangePercent = parseFloat(priceData.priceChangePercent) || 0;
+    
+    if (currentPrice === 0) {
+      console.log("⚠️ Price data missing, skipping EMA condition");
+      return true;
+    }
+
+    const fastPeriod = parseInt(fast) || 12;
+    const slowPeriod = parseInt(slow) || 26;
+
+    console.log(`📊 EMA Evaluation: ${condition}`);
+    console.log(`   Fast EMA: ${fastPeriod}, Slow EMA: ${slowPeriod}`);
+    console.log(`   Current Price: ${currentPrice}`);
+    console.log(`   Price Change: ${priceChangePercent}%`);
+
+    // Simplified EMA estimation based on price trends
+    // In a real implementation, you'd calculate actual EMAs from historical data
+    // Here we use price change as a proxy for EMA positioning
+    
+    // Estimate: If price is rising, fast EMA is likely above slow EMA
+    // If price is falling, fast EMA is likely below slow EMA
+    const estimatedFastEMA = currentPrice * (1 + (priceChangePercent / 100) * 0.7);
+    const estimatedSlowEMA = currentPrice * (1 + (priceChangePercent / 100) * 0.3);
+
+    console.log(`   Estimated Fast EMA (${fastPeriod}): ${estimatedFastEMA.toFixed(6)}`);
+    console.log(`   Estimated Slow EMA (${slowPeriod}): ${estimatedSlowEMA.toFixed(6)}`);
+
+    switch (condition) {
+      case "ABOVE":
+      case "BULLISH_CROSSOVER":
+        // Fast EMA above Slow EMA (bullish)
+        const isBullish = estimatedFastEMA > estimatedSlowEMA;
+        console.log(`   Bullish check: Fast EMA ${estimatedFastEMA.toFixed(6)} > Slow EMA ${estimatedSlowEMA.toFixed(6)}? ${isBullish}`);
+        return isBullish;
+
+      case "BELOW":
+      case "BEARISH_CROSSOVER":
+        // Fast EMA below Slow EMA (bearish)
+        const isBearish = estimatedFastEMA < estimatedSlowEMA;
+        console.log(`   Bearish check: Fast EMA ${estimatedFastEMA.toFixed(6)} < Slow EMA ${estimatedSlowEMA.toFixed(6)}? ${isBearish}`);
+        return isBearish;
+
+      case "PRICE_ABOVE_EMA":
+        // Price above both EMAs
+        const priceAbove = currentPrice > estimatedSlowEMA;
+        console.log(`   Price Above EMA check: ${currentPrice} > ${estimatedSlowEMA}? ${priceAbove}`);
+        return priceAbove;
+
+      case "PRICE_BELOW_EMA":
+        // Price below both EMAs
+        const priceBelow = currentPrice < estimatedSlowEMA;
+        console.log(`   Price Below EMA check: ${currentPrice} < ${estimatedSlowEMA}? ${priceBelow}`);
+        return priceBelow;
+
+      case "CONVERGING":
+        // EMAs are getting closer (difference < 1%)
+        const difference = Math.abs(estimatedFastEMA - estimatedSlowEMA);
+        const percentDiff = (difference / estimatedSlowEMA) * 100;
+        const isConverging = percentDiff < 1;
+        console.log(`   Converging check: ${percentDiff.toFixed(2)}% difference < 1%? ${isConverging}`);
+        return isConverging;
+
+      case "DIVERGING":
+        // EMAs are moving apart (difference > 2%)
+        const diff = Math.abs(estimatedFastEMA - estimatedSlowEMA);
+        const pctDiff = (diff / estimatedSlowEMA) * 100;
+        const isDiverging = pctDiff > 2;
+        console.log(`   Diverging check: ${pctDiff.toFixed(2)}% difference > 2%? ${isDiverging}`);
+        return isDiverging;
+
+      default:
+        console.log(`   Unknown EMA condition: ${condition}`);
+        return true;
+    }
   }
 
   async getUserFavorites(userId) {

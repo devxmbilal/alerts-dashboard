@@ -85,54 +85,78 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll, onAlertTrigger }) => {
       const user = JSON.parse(localStorage.getItem("user") || "{}");
       const userId = user._id || user.id;
 
+      console.log("🔍 Debug - User from localStorage:", user);
+      console.log("🔍 Debug - User ID:", userId);
+
       if (!userId) {
-        console.log("No user ID found");
+        console.error("❌ No user ID found in localStorage");
         return;
       }
 
       // Fetch triggered alerts from database
-      const response = await fetch(
-        `/api/alerts/history?userId=${userId}&limit=50`
-      );
+      const url = `/api/alerts/history?userId=${userId}&limit=50`;
+      console.log("🔍 Fetching alerts from:", url);
+      
+      const response = await fetch(url);
+      console.log("🔍 API Response status:", response.status);
+      
       const data = await response.json();
+      console.log("🔍 API Response data:", data);
+      console.log("🔍 data.success:", data.success);
+      console.log("🔍 data.data type:", Array.isArray(data.data));
+      console.log("🔍 data.data length:", data.data?.length);
 
       if (data.success) {
-        // Transform database alerts to display format
-        const triggeredAlerts = data.data.map((alert) => ({
-          id: alert._id,
-          symbol: alert.symbol,
-          type: "triggered",
-          triggered: true,
-          triggeredAt: new Date(alert.triggeredAt || alert.createdAt),
-          triggeredPrice: alert.triggerData.price,
-          triggeredVolume: alert.triggerData.volume,
-          priceChangePercent: alert.triggerData.priceChangePercent,
-          conditions: alert.alertConditions,
-          conditionsText:
-            alert.conditions ||
-            `Volume: ${alert.triggerData.volume?.toLocaleString()} | Change: ${alert.triggerData.priceChangePercent?.toFixed(
-              3
-            )}%`,
-          targetValue: alert.alertConditions.changePercent?.percentage,
-          actualValue: Math.abs(alert.triggerData.priceChangePercent || 0),
-          timeframe: alert.alertConditions.changePercent?.timeframe,
-          volume24h: alert.triggerData.volume,
-          price24hChange: alert.triggerData.priceChangePercent,
-          high: alert.triggerData.high,
-          low: alert.triggerData.low,
-          open: alert.triggerData.open,
-          close: alert.triggerData.close,
-          notificationType: "both",
-          notificationSent: true,
-        }));
+        if (!data.data || !Array.isArray(data.data)) {
+          console.error("❌ data.data is not an array:", data.data);
+          return;
+        }
 
+        console.log("🔍 First alert sample:", data.data[0]);
+
+        // Transform database alerts to display format
+        const triggeredAlerts = data.data.map((alert) => {
+          console.log("🔍 Transforming alert:", alert._id, alert.symbol);
+          return {
+            id: alert._id,
+            symbol: alert.symbol,
+            type: "triggered",
+            triggered: true,
+            triggeredAt: new Date(alert.triggeredAt || alert.createdAt),
+            triggeredPrice: alert.triggerData?.price,
+            triggeredVolume: alert.triggerData?.volume24h || alert.triggerData?.volume,
+            priceChangePercent: alert.triggerData?.priceChangePercent,
+            conditions: alert.alertConditions,
+            conditionsText:
+              alert.conditions ||
+              `Volume: ${(alert.triggerData?.volume24h || alert.triggerData?.volume)?.toLocaleString()} | Change: ${alert.triggerData?.priceChangePercent?.toFixed(
+                3
+              )}%`,
+            targetValue: alert.alertConditions?.changePercent?.percentage,
+            actualValue: Math.abs(alert.triggerData?.priceChangePercent || 0),
+            timeframe: alert.alertConditions?.changePercent?.timeframe,
+            volume24h: alert.triggerData?.volume24h || alert.triggerData?.volume,
+            price24hChange: alert.triggerData?.priceChangePercent,
+            high: alert.triggerData?.high,
+            low: alert.triggerData?.low,
+            open: alert.triggerData?.open,
+            close: alert.triggerData?.close,
+            notificationType: "both",
+            notificationSent: true,
+          };
+        });
+
+        console.log("✅ Transformed alerts:", triggeredAlerts.length);
+        console.log("🔍 First transformed alert:", triggeredAlerts[0]);
+        
         setAlerts(triggeredAlerts);
         console.log("📊 Loaded triggered alerts:", triggeredAlerts.length);
       } else {
-        console.error("Failed to load alerts:", data.error);
+        console.error("❌ Failed to load alerts:", data.error);
       }
     } catch (error) {
-      console.error("Error loading alerts:", error);
+      console.error("❌ Error loading alerts:", error);
+      console.error("❌ Error stack:", error.stack);
     } finally {
       setLoading(false);
     }
@@ -341,38 +365,14 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll, onAlertTrigger }) => {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            mb: 1,
           }}
         >
           <Typography variant="h6" sx={{ color: "white" }}>
-            Triggered Alerts
+            Triggered Alerts History
           </Typography>
           <Badge badgeContent={alerts.length} color="primary">
             <NotificationsActiveIcon sx={{ color: "#1976d2" }} />
           </Badge>
-        </Box>
-
-        <Box sx={{ display: "flex", gap: 1 }}>
-          <Button
-            size="small"
-            variant="outlined"
-            onClick={loadAlerts}
-            disabled={loading}
-            startIcon={<RefreshIcon />}
-            sx={{ fontSize: "0.75rem" }}
-          >
-            Refresh
-          </Button>
-          <Button
-            size="small"
-            variant="outlined"
-            onClick={handleClearAll}
-            disabled={alerts.length === 0}
-            startIcon={<ClearIcon />}
-            sx={{ fontSize: "0.75rem" }}
-          >
-            Clear All
-          </Button>
         </Box>
       </Box>
 
@@ -405,172 +405,15 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll, onAlertTrigger }) => {
             </Typography>
           </Box>
         ) : (
-          <List sx={{ p: 0 }}>
-            {alerts.map((alert, index) => (
-              <React.Fragment key={alert.id}>
-                <ListItem
-                  sx={{
-                    backgroundColor: "#2a2a2a",
-                    borderBottom: "1px solid #333",
-                    "&:hover": {
-                      backgroundColor: "#333",
-                    },
-                  }}
-                >
-                  <ListItemIcon sx={{ minWidth: 40 }}>
-                    <Box
-                      sx={{
-                        color: getAlertTypeColor(alert.type),
-                        display: "flex",
-                        alignItems: "center",
-                      }}
-                    >
-                      {getAlertTypeIcon(alert.type)}
-                    </Box>
-                  </ListItemIcon>
-
-                  <ListItemText
-                    primary={
-                      <Box
-                        sx={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 1,
-                          mb: 0.5,
-                        }}
-                      >
-                        <Typography
-                          variant="body2"
-                          sx={{ color: "white", fontWeight: 600 }}
-                        >
-                          {alert.symbol}
-                        </Typography>
-                        <Chip
-                          label={
-                            alert.type ? alert.type.toUpperCase() : "ALERT"
-                          }
-                          size="small"
-                          sx={{
-                            backgroundColor: getAlertTypeColor(
-                              alert.type || "alert"
-                            ),
-                            color: "white",
-                            fontSize: "0.65rem",
-                            height: 20,
-                          }}
-                        />
-                        <Chip
-                          label={`${alert.conditions?.changePercent || "N/A"} ${
-                            alert.conditions?.percentage || "0"
-                          }%`}
-                          size="small"
-                          variant="outlined"
-                          sx={{
-                            color: "#888",
-                            borderColor: "#444",
-                            fontSize: "0.65rem",
-                            height: 20,
-                          }}
-                        />
-                      </Box>
-                    }
-                    secondary={
-                      <span>
-                        <Typography
-                          variant="caption"
-                          sx={{ color: "#888", display: "block", mb: 1 }}
-                        >
-                          {alert.conditionsText || "Conditions met"}
-                        </Typography>
-                        <Typography
-                          variant="caption"
-                          sx={{ color: "#888", display: "block" }}
-                        >
-                          Target: {alert.targetValue || 1} | Actual:{" "}
-                          {alert.actualValue?.toFixed(6) || "N/A"} |{" "}
-                          {alert.timeframe || "5MIN"}
-                        </Typography>
-                        <Typography
-                          variant="caption"
-                          sx={{ color: "white", display: "block" }}
-                        >
-                          Price: {formatPrice(alert.triggeredPrice || 0)} | 24h
-                          Change:{" "}
-                          {alert.price24hChange
-                            ? `${parseFloat(alert.price24hChange).toFixed(3)}%`
-                            : "N/A"}
-                        </Typography>
-                        <span
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "8px",
-                            marginTop: "4px",
-                          }}
-                        >
-                          <Typography variant="caption" sx={{ color: "#888" }}>
-                            {mounted
-                              ? formatTimeAgo(alert.triggeredAt)
-                              : "Loading..."}
-                          </Typography>
-                          <span
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "4px",
-                            }}
-                          >
-                            {getNotificationIcon(
-                              alert.notificationType || "both"
-                            )}
-                            {alert.notificationSent ? (
-                              <CheckCircleIcon
-                                sx={{ fontSize: 12, color: "#4caf50" }}
-                              />
-                            ) : (
-                              <ErrorIcon
-                                sx={{ fontSize: 12, color: "#f44336" }}
-                              />
-                            )}
-                          </span>
-                        </span>
-                      </span>
-                    }
-                  />
-
-                  <Box
-                    sx={{
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "flex-end",
-                      gap: 1,
-                    }}
-                  >
-                    <Chip
-                      label="TRIGGERED"
-                      size="small"
-                      sx={{
-                        backgroundColor: "#f44336",
-                        color: "white",
-                        fontSize: "0.65rem",
-                        height: 20,
-                      }}
-                    />
-                    <IconButton
-                      size="small"
-                      onClick={() => handleClearAlert(alert.id)}
-                      sx={{ color: "#888" }}
-                    >
-                      <ClearIcon />
-                    </IconButton>
-                  </Box>
-                </ListItem>
-                {index < alerts.length - 1 && (
-                  <Divider sx={{ backgroundColor: "#333" }} />
-                )}
-              </React.Fragment>
+          <Box sx={{ p: 2 }}>
+            {alerts.map((alert) => (
+              <AlertHistoryItem
+                key={alert.id}
+                alert={alert}
+                onClear={handleClearAlert}
+              />
             ))}
-          </List>
+          </Box>
         )}
       </Box>
 

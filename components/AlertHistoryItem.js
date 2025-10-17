@@ -36,12 +36,23 @@ const AlertHistoryItem = ({ alert, onClear, onEmail }) => {
         border: "1px solid #333",
       }}
     >
-      {/* Header with condition met indicator */}
+      {/* Header with symbol/pair name */}
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
         <CheckCircleIcon sx={{ color: "#2196f3", fontSize: 20 }} />
-        <Typography variant="body2" sx={{ color: "white", fontWeight: 600 }}>
-          Combined conditions met
+        <Typography variant="h6" sx={{ color: "white", fontWeight: 700 }}>
+          {alert.symbol}
         </Typography>
+        <Chip
+          label="TRIGGERED"
+          size="small"
+          sx={{
+            backgroundColor: "#f44336",
+            color: "white",
+            fontSize: "0.7rem",
+            height: 22,
+            fontWeight: 600
+          }}
+        />
       </Box>
 
       {/* Conditions Applied */}
@@ -70,6 +81,18 @@ const AlertHistoryItem = ({ alert, onClear, onEmail }) => {
           24h Change:{" "}
           {alert.price24hChange
             ? `${parseFloat(alert.price24hChange).toFixed(3)}%`
+            : "N/A"}
+        </Typography>
+      </Box>
+
+      {/* Volume */}
+      <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
+        <Typography variant="body2" sx={{ color: "white" }}>
+          Volume:{" "}
+          {alert.volume24h
+            ? new Intl.NumberFormat("en-US").format(alert.volume24h)
+            : alert.triggeredVolume
+            ? new Intl.NumberFormat("en-US").format(alert.triggeredVolume)
             : "N/A"}
         </Typography>
       </Box>
