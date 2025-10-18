@@ -48,6 +48,20 @@ const userSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+    telegramChatId: {
+      type: String,
+      default: null,
+    },
+    notificationPreferences: {
+      email: {
+        type: Boolean,
+        default: true,
+      },
+      telegram: {
+        type: Boolean,
+        default: false,
+      },
+    },
   },
   {
     timestamps: true,

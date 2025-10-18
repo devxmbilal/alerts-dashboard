@@ -96,10 +96,10 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll, onAlertTrigger }) => {
       // Fetch triggered alerts from database
       const url = `/api/alerts/history?userId=${userId}&limit=50`;
       console.log("🔍 Fetching alerts from:", url);
-      
+
       const response = await fetch(url);
       console.log("🔍 API Response status:", response.status);
-      
+
       const data = await response.json();
       console.log("🔍 API Response data:", data);
       console.log("🔍 data.success:", data.success);
@@ -124,18 +124,23 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll, onAlertTrigger }) => {
             triggered: true,
             triggeredAt: new Date(alert.triggeredAt || alert.createdAt),
             triggeredPrice: alert.triggerData?.price,
-            triggeredVolume: alert.triggerData?.volume24h || alert.triggerData?.volume,
+            triggeredVolume:
+              alert.triggerData?.volume24h || alert.triggerData?.volume,
             priceChangePercent: alert.triggerData?.priceChangePercent,
             conditions: alert.alertConditions,
             conditionsText:
               alert.conditions ||
-              `Volume: ${(alert.triggerData?.volume24h || alert.triggerData?.volume)?.toLocaleString()} | Change: ${alert.triggerData?.priceChangePercent?.toFixed(
+              `Volume: ${(
+                alert.triggerData?.volume24h || alert.triggerData?.volume
+              )?.toLocaleString()} | Change: ${alert.triggerData?.priceChangePercent?.toFixed(
                 3
               )}%`,
             targetValue: alert.alertConditions?.changePercent?.percentage,
             actualValue: Math.abs(alert.triggerData?.priceChangePercent || 0),
             timeframe: alert.alertConditions?.changePercent?.timeframe,
-            volume24h: alert.triggerData?.volume24h || alert.triggerData?.volume,
+            direction: alert.alertConditions?.changePercent?.direction,
+            volume24h:
+              alert.triggerData?.volume24h || alert.triggerData?.volume,
             price24hChange: alert.triggerData?.priceChangePercent,
             high: alert.triggerData?.high,
             low: alert.triggerData?.low,
@@ -143,7 +148,8 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll, onAlertTrigger }) => {
             close: alert.triggerData?.close,
             // Baseline data for comparison
             baselinePrice: alert.baselineData?.baselinePrice,
-            changeFromBaselinePercent: alert.baselineData?.changeFromBaselinePercent,
+            changeFromBaselinePercent:
+              alert.baselineData?.changeFromBaselinePercent,
             notificationType: "both",
             notificationSent: true,
           };
@@ -151,7 +157,7 @@ const TriggeredAlertsPanel = ({ onRefresh, onClearAll, onAlertTrigger }) => {
 
         console.log("✅ Transformed alerts:", triggeredAlerts.length);
         console.log("🔍 First transformed alert:", triggeredAlerts[0]);
-        
+
         setAlerts(triggeredAlerts);
         console.log("📊 Loaded triggered alerts:", triggeredAlerts.length);
       } else {

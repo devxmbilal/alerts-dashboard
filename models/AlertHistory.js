@@ -24,6 +24,7 @@ const alertHistorySchema = new mongoose.Schema(
       changePercent: {
         timeframe: String,
         percentage: String,
+        direction: String,
       },
       alertCount: {
         timeframe: String,
