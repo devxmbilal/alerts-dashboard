@@ -50,5 +50,21 @@ module.exports = {
       log_file: "./logs/alert-worker-combined.log",
       time: true,
     },
+    {
+      name: "cleanup-worker",
+      script: "workers/cleanup-worker.js",
+      cwd: "/var/www/alerts-dashboard",
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      max_memory_restart: "200M",
+      env: {
+        NODE_ENV: "production",
+      },
+      error_file: "./logs/cleanup-worker-error.log",
+      out_file: "./logs/cleanup-worker-out.log",
+      log_file: "./logs/cleanup-worker-combined.log",
+      time: true,
+    },
   ],
 };

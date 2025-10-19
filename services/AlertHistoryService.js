@@ -24,7 +24,11 @@ class AlertHistoryService {
           priceChangePercent: parseFloat(
             alertHistoryData.triggerData.priceChangePercent
           ),
-          volume24h: parseFloat(alertHistoryData.triggerData.volume24h || alertHistoryData.triggerData.volume || 0),
+          volume24h: parseFloat(
+            alertHistoryData.triggerData.volume24h ||
+              alertHistoryData.triggerData.volume ||
+              0
+          ),
           high: parseFloat(alertHistoryData.triggerData.high),
           low: parseFloat(alertHistoryData.triggerData.low),
           open: parseFloat(alertHistoryData.triggerData.open),
@@ -32,11 +36,19 @@ class AlertHistoryService {
           timestamp: alertHistoryData.triggerData.timestamp,
         },
         baselineData: {
-          baselinePrice: parseFloat(alertHistoryData.baselineData.baselinePrice),
-          baselineVolume: parseFloat(alertHistoryData.baselineData.baselineVolume || 0),
+          baselinePrice: parseFloat(
+            alertHistoryData.baselineData.baselinePrice
+          ),
+          baselineVolume: parseFloat(
+            alertHistoryData.baselineData.baselineVolume || 0
+          ),
           baselineTimestamp: alertHistoryData.baselineData.baselineTimestamp,
-          changeFromBaseline: parseFloat(alertHistoryData.baselineData.changeFromBaseline),
-          changeFromBaselinePercent: parseFloat(alertHistoryData.baselineData.changeFromBaselinePercent),
+          changeFromBaseline: parseFloat(
+            alertHistoryData.baselineData.changeFromBaseline
+          ),
+          changeFromBaselinePercent: parseFloat(
+            alertHistoryData.baselineData.changeFromBaselinePercent
+          ),
         },
         triggeredAt: alertHistoryData.triggeredAt,
         status: "triggered",
@@ -220,6 +232,58 @@ class AlertHistoryService {
       };
     } catch (error) {
       console.error("❌ Error fetching paginated alert history:", error);
+      throw error;
+    }
+  }
+
+  // Get the latest triggered alert for a user (for chart switching)
+  static async getLatestTriggeredAlert(userId) {
+    try {
+      console.log(`🔍 Getting latest triggered alert for user: ${userId}`);
+
+      const latestAlert = await AlertHistory.findOne({ userId })
+        .sort({ triggeredAt: -1 })
+        .populate("alertId", "symbol conditions status")
+        .lean();
+
+      if (!latestAlert) {
+        console.log(`📭 No triggered alerts found for user: ${userId}`);
+        return null;
+      }
+
+      console.log(`✅ Latest triggered alert found:`, {
+        id: latestAlert._id,
+        symbol: latestAlert.symbol,
+        triggeredAt: latestAlert.triggeredAt,
+        price: latestAlert.triggerData?.price,
+      });
+
+      return latestAlert;
+    } catch (error) {
+      console.error("❌ Error fetching latest triggered alert:", error);
+      throw error;
+    }
+  }
+
+  // Clean up old alert history entries (older than 24 hours)
+  static async cleanupOldAlerts() {
+    try {
+      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+      console.log(
+        `🧹 Cleaning up alert history older than: ${twentyFourHoursAgo.toISOString()}`
+      );
+
+      const result = await AlertHistory.deleteMany({
+        triggeredAt: { $lt: twentyFourHoursAgo },
+      });
+
+      console.log(
+        `✅ Cleaned up ${result.deletedCount} old alert history entries`
+      );
+      return result.deletedCount;
+    } catch (error) {
+      console.error("❌ Error cleaning up old alerts:", error);
       throw error;
     }
   }
