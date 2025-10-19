@@ -13,17 +13,24 @@ import {
   BottomNavigation,
   BottomNavigationAction,
   CircularProgress,
+  Menu,
+  MenuItem,
+  ListItemIcon,
+  ListItemText,
 } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import TrendingUpIcon from "@mui/icons-material/TrendingUp";
 import ListIcon from "@mui/icons-material/List";
 import LogoutIcon from "@mui/icons-material/Logout";
+import AccountCircleIcon from "@mui/icons-material/AccountCircle";
+import SettingsIcon from "@mui/icons-material/Settings";
 import TradingViewChart from "../../components/TradingViewChart";
 import MarketPanel from "../../components/MarketPanel";
 import FilterSidebar from "../../components/FilterSidebar";
 import TriggeredAlertsPanel from "../../components/TriggeredAlertsPanel";
 import RealTimeNotifications from "../../components/RealTimeNotifications";
+import UserSettingsModal from "../../components/UserSettingsModal";
 import { SocketProvider } from "../../contexts/SocketContext";
 import { AlertProvider } from "../../contexts/AlertContext";
 import { FavoritesProvider } from "../../contexts/FavoritesContext";
@@ -97,6 +104,10 @@ export default function Dashboard() {
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [mobileBottomNav, setMobileBottomNav] = useState(0);
   const [currentMobileView, setCurrentMobileView] = useState("chart"); // 'chart', 'filters', 'market'
+
+  // User menu state
+  const [userMenuAnchor, setUserMenuAnchor] = useState(null);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
 
   // References
   const filterSidebarRef = useRef();
@@ -512,14 +523,60 @@ export default function Dashboard() {
                   token={localStorage.getItem("token")}
                   onAlertTrigger={handleAlertTrigger}
                 />
+              
+              {/* User Icon with Menu */}
               <IconButton
                 color="inherit"
-                onClick={handleLogout}
+                onClick={(e) => setUserMenuAnchor(e.currentTarget)}
                 sx={{ color: "#888" }}
-                title="Logout"
+                title="User Menu"
               >
-                <LogoutIcon />
+                <AccountCircleIcon />
               </IconButton>
+              
+              {/* User Menu */}
+              <Menu
+                anchorEl={userMenuAnchor}
+                open={Boolean(userMenuAnchor)}
+                onClose={() => setUserMenuAnchor(null)}
+                PaperProps={{
+                  sx: {
+                    backgroundColor: "#1a1a1a",
+                    color: "white",
+                    border: "1px solid #333",
+                  },
+                }}
+              >
+                <MenuItem
+                  onClick={() => {
+                    setUserMenuAnchor(null);
+                    setSettingsModalOpen(true);
+                  }}
+                >
+                  <ListItemIcon>
+                    <SettingsIcon sx={{ color: "#1976d2" }} />
+                  </ListItemIcon>
+                  <ListItemText>Settings</ListItemText>
+                </MenuItem>
+                <MenuItem
+                  onClick={() => {
+                    setUserMenuAnchor(null);
+                    handleLogout();
+                  }}
+                >
+                  <ListItemIcon>
+                    <LogoutIcon sx={{ color: "#f44336" }} />
+                  </ListItemIcon>
+                  <ListItemText>Logout</ListItemText>
+                </MenuItem>
+              </Menu>
+              
+              {/* User Settings Modal */}
+              <UserSettingsModal
+                open={settingsModalOpen}
+                onClose={() => setSettingsModalOpen(false)}
+                user={user}
+              />
             </Box>
           </Box>
 

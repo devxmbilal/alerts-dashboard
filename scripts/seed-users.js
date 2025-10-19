@@ -14,6 +14,11 @@ async function seedUsers() {
       password: "admin123",
       name: "Admin User",
       email: "admin@alerts.com",
+      telegramChatId: "", // Add your Telegram chat ID here
+      notificationPreferences: {
+        email: true,
+        telegram: false, // Enable after adding telegramChatId
+      },
     };
 
     // Check if admin user already exists
@@ -37,6 +42,11 @@ async function seedUsers() {
       password: "test123",
       name: "Test User",
       email: "test@alerts.com",
+      telegramChatId: "", // Add your Telegram chat ID here
+      notificationPreferences: {
+        email: true,
+        telegram: false, // Enable after adding telegramChatId
+      },
     };
 
     const existingTest = await UserService.findByUsername("testuser");

@@ -1269,8 +1269,10 @@ class RealTimeAlertProcessor {
   async sendRealTimeNotification(alert, priceData, alertHistory) {
     try {
       // Get user info for email and telegram
-      const user = await User.findById(alert.userId).select('email telegramChatId notificationPreferences').lean();
-      
+      const user = await User.findById(alert.userId)
+        .select("email telegramChatId notificationPreferences")
+        .lean();
+
       if (!user) {
         console.error(`❌ User not found: ${alert.userId}`);
         return;
@@ -1295,10 +1297,14 @@ class RealTimeAlertProcessor {
         // Add detailed alert info for frontend
         targetValue: alert.alertConditions?.changePercent?.percentage,
         actualValue: priceData.priceChangePercent,
-        direction: alert.alertConditions?.changePercent?.direction === 'increase' ? 'Increase' : 'Decrease',
-        timeframe: alert.alertConditions?.changePercent?.timeframe || '5MIN',
+        direction:
+          alert.alertConditions?.changePercent?.direction === "increase"
+            ? "Increase"
+            : "Decrease",
+        timeframe: alert.alertConditions?.changePercent?.timeframe || "5MIN",
         baselinePrice: alertHistory.baselineData?.baselinePrice,
-        changeFromBaselinePercent: alertHistory.baselineData?.changeFromBaselinePercent,
+        changeFromBaselinePercent:
+          alertHistory.baselineData?.changeFromBaselinePercent,
       };
 
       // Send web socket notification
@@ -1307,21 +1313,41 @@ class RealTimeAlertProcessor {
       // Prepare formatted alert data for Email & Telegram
       const alertData = {
         symbol: alert.symbol,
-        targetValue: alert.alertConditions?.changePercent?.percentage,
-        actualValue: priceData.priceChangePercent,
-        direction: alert.alertConditions?.changePercent?.direction === 'increase' ? 'Increase' : 'Decrease',
-        timeframe: alert.alertConditions?.changePercent?.timeframe || '5MIN',
+        targetValue: alert.conditions?.changePercent?.percentage || "N/A",
+        actualValue: priceData.priceChangePercent || 0,
+        direction:
+          alert.conditions?.changePercent?.direction === "increase"
+            ? "Increase"
+            : alert.conditions?.changePercent?.direction === "decrease"
+            ? "Decrease"
+            : "Increase",
+        timeframe: alert.conditions?.changePercent?.timeframe || "5MIN",
         triggeredPrice: priceData.price,
         baselinePrice: alertHistory.baselineData?.baselinePrice,
-        changeFromBaselinePercent: alertHistory.baselineData?.changeFromBaselinePercent,
+        changeFromBaselinePercent:
+          alertHistory.baselineData?.changeFromBaselinePercent,
         volume: priceData.volume || priceData.volume24h,
         triggeredAt: alertHistory.triggeredAt,
       };
 
+      // Debug: Log the alert data being sent to email
+      console.log(`📧 Email Alert Data for ${alert.symbol}:`, {
+        targetValue: alertData.targetValue,
+        actualValue: alertData.actualValue,
+        direction: alertData.direction,
+        timeframe: alertData.timeframe,
+        triggeredPrice: alertData.triggeredPrice,
+        baselinePrice: alertData.baselinePrice,
+        changeFromBaselinePercent: alertData.changeFromBaselinePercent,
+      });
+
       // Send Email notification if enabled
       if (user.notificationPreferences?.email !== false && user.email) {
         console.log(`📧 Sending email to ${user.email}...`);
-        const emailSent = await EmailService.sendAlertEmail(user.email, alertData);
+        const emailSent = await EmailService.sendAlertEmail(
+          user.email,
+          alertData
+        );
         if (emailSent) {
           console.log(`✅ Email sent successfully to ${user.email}`);
         } else {
@@ -1332,7 +1358,10 @@ class RealTimeAlertProcessor {
       // Send Telegram notification if enabled
       if (user.notificationPreferences?.telegram && user.telegramChatId) {
         console.log(`📱 Sending Telegram message to ${user.telegramChatId}...`);
-        const telegramSent = await TelegramService.sendAlertMessage(user.telegramChatId, alertData);
+        const telegramSent = await TelegramService.sendAlertMessage(
+          user.telegramChatId,
+          alertData
+        );
         if (telegramSent) {
           console.log(`✅ Telegram message sent successfully`);
         } else {
