@@ -106,20 +106,29 @@ class CleanupWorker {
   }
 }
 
-// Start the worker if this file is run directly
-// Check if this is the main module by comparing the script name
+// Start the worker automatically when:
+// - This file is executed directly (node workers/cleanup-worker.js), OR
+// - Running under PM2 (pm_id/PM2 env present), OR
+// - Explicit env flag CLEANUP_WORKER_AUTOSTART=true
 const scriptName = process.argv[1];
 const isMainModule = scriptName && scriptName.includes("cleanup-worker.js");
+const isPM2 = !!(process.env.pm_id || process.env.PM2 || process.env.PM2_HOME);
+const shouldAutoStart =
+  isMainModule ||
+  isPM2 ||
+  (process.env.CLEANUP_WORKER_AUTOSTART || "").toLowerCase() === "true";
 
-if (isMainModule) {
-  console.log("🚀 Starting cleanup worker as main module...");
+if (shouldAutoStart) {
+  console.log(
+    `🚀 Starting cleanup worker...`
+  );
   const worker = new CleanupWorker();
   worker.start().catch((error) => {
     console.error("💥 Cleanup worker failed to start:", error);
     process.exit(1);
   });
 } else {
-  console.log("📦 Cleanup worker loaded as module");
+  console.log("📦 Cleanup worker loaded as module (auto-start disabled)");
 }
 
 export default CleanupWorker;

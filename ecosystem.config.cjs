@@ -60,6 +60,7 @@ module.exports = {
       max_memory_restart: "200M",
       env: {
         NODE_ENV: "production",
+        CLEANUP_WORKER_AUTOSTART: "true",
       },
       error_file: "./logs/cleanup-worker-error.log",
       out_file: "./logs/cleanup-worker-out.log",
