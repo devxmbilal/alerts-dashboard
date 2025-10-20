@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Box,
@@ -24,7 +24,8 @@ import {
   Login as LoginIcon,
 } from "@mui/icons-material";
 
-const LoginPage = () => {
+// Component that uses searchParams - needs to be wrapped in Suspense
+const LoginForm = () => {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [formData, setFormData] = useState({
@@ -222,6 +223,31 @@ const LoginPage = () => {
         </Card>
       </Container>
     </Box>
+  );
+};
+
+// Main component that wraps LoginForm in Suspense
+const LoginPage = () => {
+  return (
+    <Suspense
+      fallback={
+        <Box
+          sx={{
+            minHeight: "100vh",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+          }}
+        >
+          <Typography variant="h6" color="white">
+            Loading...
+          </Typography>
+        </Box>
+      }
+    >
+      <LoginForm />
+    </Suspense>
   );
 };
 
