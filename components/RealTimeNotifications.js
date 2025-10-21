@@ -360,6 +360,9 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             overflow: "hidden",
             display: "flex",
             flexDirection: "column",
+            backgroundColor: "#ffffff",
+            boxShadow: "0 4px 20px rgba(0, 0, 0, 0.15)",
+            border: "1px solid #e0e0e0",
           }}
         >
           {/* Header */}
@@ -373,7 +376,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
               alignItems: "center",
             }}
           >
-            <Typography variant="h6">
+            <Typography variant="h6" sx={{ color: "#333333", fontWeight: 600 }}>
               Real-Time Alerts ({notifications.length})
             </Typography>
             <Box>
@@ -394,7 +397,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
           <Box sx={{ flex: 1, overflow: "auto" }}>
             {notifications.length === 0 ? (
               <Box sx={{ p: 3, textAlign: "center" }}>
-                <Typography color="text.secondary">
+                <Typography sx={{ color: "#666666", fontSize: "0.9rem" }}>
                   No alerts triggered yet
                 </Typography>
               </Box>
@@ -405,10 +408,13 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                     key={notification.id || index}
                     sx={{
                       borderBottom: 1,
-                      borderColor: "divider",
+                      borderColor: "#e0e0e0",
                       backgroundColor: notification.read
-                        ? "transparent"
-                        : "#f5f5f5",
+                        ? "#ffffff"
+                        : "#f8f9fa",
+                      "&:hover": {
+                        backgroundColor: "#f0f0f0",
+                      },
                     }}
                     onClick={() => markAsRead(notification.id)}
                   >
@@ -426,7 +432,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                         <Box
                           sx={{ display: "flex", alignItems: "center", gap: 1 }}
                         >
-                          <Typography variant="subtitle2" fontWeight="bold">
+                          <Typography variant="subtitle2" sx={{ color: "#333333", fontWeight: 600 }}>
                             {notification.symbol}
                           </Typography>
                           <Chip
@@ -440,7 +446,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                       secondary={
                         <Box sx={{ mt: 0.5 }}>
                           {/* Target & Actual */}
-                          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.3 }}>
+                          <Typography variant="caption" sx={{ color: "#555555", display: "block", mb: 0.3, fontSize: "0.75rem" }}>
                             Target: {notification.targetValue || "N/A"}% | Actual 24h change: {" "}
                             <span style={{ color: getChangeColor(notification.actualValue || notification.priceChangePercent) }}>
                               {notification.actualValue !== undefined ? notification.actualValue.toFixed(3) : notification.priceChangePercent}%
@@ -450,7 +456,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                           </Typography>
 
                           {/* Price Info */}
-                          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.3 }}>
+                          <Typography variant="caption" sx={{ color: "#555555", display: "block", mb: 0.3, fontSize: "0.75rem" }}>
                             Price: {formatPrice(notification.price)}
                             {" "} | Last Price: {formatPrice(notification.baselinePrice || notification.price)}
                             {notification.changeFromBaselinePercent !== undefined && (
@@ -463,12 +469,12 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                           </Typography>
 
                           {/* Volume */}
-                          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.3 }}>
+                          <Typography variant="caption" sx={{ color: "#555555", display: "block", mb: 0.3, fontSize: "0.75rem" }}>
                             24h Volume: {notification.volume ? new Intl.NumberFormat("en-US").format(notification.volume) : "N/A"}
                           </Typography>
 
                           {/* Time & Date */}
-                          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                          <Typography variant="caption" sx={{ color: "#666666", display: "block", fontSize: "0.75rem" }}>
                             {formatTime(notification.triggeredAt)}
                           </Typography>
                         </Box>
