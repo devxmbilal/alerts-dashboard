@@ -20,14 +20,10 @@ export async function GET(request) {
       );
     }
 
-    console.log("🔍 API /api/alerts/history - userId:", userId);
-    console.log("🔍 API /api/alerts/history - page:", page, "limit:", limit);
-
     let alertHistory;
 
     if (symbol) {
       // Get alert history for specific symbol
-      console.log("🔍 Fetching alerts for symbol:", symbol);
       alertHistory = await AlertHistoryService.getSymbolAlertHistory(
         symbol,
         limit,
@@ -35,7 +31,6 @@ export async function GET(request) {
       );
     } else {
       // Get alert history with pagination
-      console.log("🔍 Fetching paginated alerts for userId:", userId);
       const result = await AlertHistoryService.getAlertHistoryWithPagination(
         userId,
         page,
@@ -48,7 +43,6 @@ export async function GET(request) {
       alertHistory = result.data; // Extract data from pagination result
     }
 
-    console.log("✅ Returning alert history, count:", alertHistory?.length);
     if (alertHistory?.length > 0) {
       console.log("🔍 First alert sample:", {
         id: alertHistory[0]._id,

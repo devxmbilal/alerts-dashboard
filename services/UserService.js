@@ -1,5 +1,6 @@
 import User from "../models/User.js";
-
+import dotenv from "dotenv";
+dotenv.config();
 class UserService {
   // Create a new user
   static async createUser(userData) {

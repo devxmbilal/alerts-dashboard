@@ -1,3 +1,5 @@
+import dotenv from "dotenv";
+dotenv.config();
 class TelegramService {
   constructor() {
     this.botToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -9,6 +11,7 @@ class TelegramService {
   initialize() {
     try {
       if (this.initialized) return;
+
 
       if (!this.botToken) {
         console.warn("⚠️ Telegram bot token not configured");
@@ -61,13 +64,19 @@ ${alertEmoji} *ALERT TRIGGERED!* ${alertEmoji}
 
 💵 Current Price: \`$${triggeredPrice ? triggeredPrice.toFixed(6) : "N/A"}\`
 📍 Last Price: \`$${baselinePrice ? baselinePrice.toFixed(6) : "N/A"}\`
-${changeEmoji} Change: \`${changeFromBaselinePercent !== undefined ? changeFromBaselinePercent.toFixed(3) : "N/A"}%\`
+${changeEmoji} Change: \`${
+      changeFromBaselinePercent !== undefined
+        ? changeFromBaselinePercent.toFixed(3)
+        : "N/A"
+    }%\`
 
 ━━━━━━━━━━━━━━━━━━━━
 📈 *Trading Volume*
 ━━━━━━━━━━━━━━━━━━━━
 
-📊 24h Volume: \`${volume ? new Intl.NumberFormat("en-US").format(volume) : "N/A"}\`
+📊 24h Volume: \`${
+      volume ? new Intl.NumberFormat("en-US").format(volume) : "N/A"
+    }\`
 
 ━━━━━━━━━━━━━━━━━━━━
 🕐 *Timestamp*

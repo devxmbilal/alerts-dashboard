@@ -1,5 +1,6 @@
 import WebSocket from "ws";
-
+import dotenv from "dotenv";
+dotenv.config();
 class WebSocketService {
   constructor() {
     this.ws = null;

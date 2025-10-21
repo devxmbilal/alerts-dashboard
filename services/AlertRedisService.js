@@ -1,5 +1,6 @@
 import Redis from "ioredis";
-
+import dotenv from "dotenv";
+dotenv.config();
 class AlertRedisService {
   constructor() {
     this.redis = new Redis({

@@ -1,5 +1,6 @@
 import { AlertsCache } from "../utils/redis.js";
-
+import dotenv from "dotenv";
+dotenv.config();
 class NotificationService {
   constructor() {
     this.subscribers = new Map(); // userId -> Set of callbacks

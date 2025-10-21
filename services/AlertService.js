@@ -1,5 +1,6 @@
 import Alert from "../models/Alert.js";
-
+import dotenv from "dotenv";
+dotenv.config();
 class AlertService {
   // Create a new alert
   static async createAlert(

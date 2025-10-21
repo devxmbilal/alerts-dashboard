@@ -1,6 +1,7 @@
 import AlertHistory from "../models/AlertHistory.js";
 import Alert from "../models/Alert.js";
-
+import dotenv from "dotenv";
+dotenv.config();
 class AlertHistoryService {
   // Create alert history entry when alert is triggered
   static async createAlertHistory(alertHistoryData) {

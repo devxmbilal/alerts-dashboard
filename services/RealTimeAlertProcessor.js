@@ -7,7 +7,8 @@ import TelegramService from "./TelegramService.js";
 import Alert from "../models/Alert.js";
 import User from "../models/User.js";
 import AlertRedisService from "./AlertRedisService.js";
-
+import dotenv from "dotenv";
+dotenv.config();
 class RealTimeAlertProcessor {
   constructor() {
     this.activeAlerts = new Map(); // symbol -> alert data
@@ -570,26 +571,6 @@ class RealTimeAlertProcessor {
       }
 
       // Debug: Log live data and alert data
-      console.log(`🔍 Debug - Live Data for ${alert.symbol}:`, {
-        price: liveData.price,
-        volume: liveData.volume,
-        volume24h: liveData.volume24h,
-        priceChange: liveData.priceChange,
-        priceChangePercent: liveData.priceChangePercent,
-        high: liveData.high,
-        low: liveData.low,
-        open: liveData.open,
-        close: liveData.close,
-        timestamp: liveData.timestamp,
-      });
-
-      console.log(`🔍 Debug - Alert Data for ${alert.symbol}:`, {
-        baselinePrice: baselinePrice,
-        baselineVolume: baselineVolume,
-        baselineTimestamp: baselineTimestamp,
-        changeFromBaseline: changeFromBaseline,
-        changeFromBaselinePercent: changeFromBaselinePercent,
-      });
 
       // Determine direction based on price change
       const direction =
@@ -633,10 +614,6 @@ class RealTimeAlertProcessor {
         conditions: this.getAlertConditionsText(alert.conditions),
       };
 
-      console.log(
-        `🔍 Debug - Alert History Data:`,
-        JSON.stringify(alertHistory, null, 2)
-      );
 
       // Save to AlertHistory
       console.log(`📝 Saving alert history for ${alert.symbol}...`);
@@ -1355,6 +1332,7 @@ class RealTimeAlertProcessor {
         }
       }
 
+
       // Send Telegram notification if enabled
       if (user.notificationPreferences?.telegram && user.telegramChatId) {
         console.log(`📱 Sending Telegram message to ${user.telegramChatId}...`);
@@ -1367,6 +1345,14 @@ class RealTimeAlertProcessor {
         } else {
           console.error(`❌ Failed to send Telegram message`);
         }
+      } else {
+        console.log(`⚠️ Telegram notification skipped:`, {
+          telegramEnabled: user.notificationPreferences?.telegram,
+          hasTelegramChatId: !!user.telegramChatId,
+          reason: !user.notificationPreferences?.telegram
+            ? "Telegram disabled in preferences"
+            : "No Telegram chat ID",
+        });
       }
 
       console.log(`📢 Notification: ${alert.symbol} alert triggered!`);

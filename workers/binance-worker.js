@@ -1,10 +1,11 @@
 import Redis from "ioredis";
 import WebSocket from "ws";
-
+import dotenv from "dotenv";
+dotenv.config();
 // Redis configuration
 const redis = new Redis({
-  host: "localhost",
-  port: 6379,
+  host: process.env.REDIS_HOST || "localhost",
+  port: process.env.REDIS_PORT || 6379,
   retryDelayOnFailover: 100,
   enableReadyCheck: false,
   maxRetriesPerRequest: null,

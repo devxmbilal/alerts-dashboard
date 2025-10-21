@@ -1,4 +1,6 @@
 import Redis from "ioredis";
+import dotenv from "dotenv";
+dotenv.config();
 import { connectToMongoDB } from "../utils/mongodb.js";
 import AlertService from "../services/AlertService.js";
 import AlertHistoryService from "../services/AlertHistoryService.js";

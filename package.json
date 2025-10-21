@@ -13,7 +13,9 @@
     "real-time-worker": "node workers/real-time-alert-worker.js",
     "dev:all": "concurrently \"npm run dev\" \"npm run worker\" \"npm run alert-worker\" \"npm run cleanup-worker\"",
     "setup-db": "node scripts/setup-database.js",
-    "seed-users": "node scripts/seed-users.js"
+    "seed-users": "node scripts/seed-users.js",
+    "test-telegram": "node scripts/test-telegram-demo.js",
+    "test-telegram-format": "node scripts/test-telegram-format.js"
   },
   "dependencies": {
     "@emotion/react": "^11.11.0",

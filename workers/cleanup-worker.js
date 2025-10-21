@@ -2,7 +2,8 @@
 
 // 🧹 Cleanup Worker
 // Automatically cleans up old alert history entries (older than 24 hours)
-
+import dotenv from "dotenv";
+dotenv.config();
 import { connectToMongoDB } from "../utils/mongodb.js";
 import AlertHistoryService from "../services/AlertHistoryService.js";
 
