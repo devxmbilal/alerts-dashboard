@@ -2,8 +2,8 @@ module.exports = {
   apps: [
     {
       name: "alerts-dashboard",
-      script: "npm",
-      args: "start",
+      script: "node_modules/.bin/next",
+      args: "start -p 3000",
       cwd: "/var/www/alerts-dashboard",
       instances: 1,
       autorestart: true,
