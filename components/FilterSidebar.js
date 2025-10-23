@@ -31,6 +31,7 @@ import {
   Chip,
   Slider,
   Grid,
+  IconButton,
 } from "@mui/material";
 import { styled } from "@mui/material/styles";
 import {
@@ -549,10 +550,30 @@ const FilterSidebar = forwardRef(
     return (
       <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
         {/* Header */}
-        <Box sx={{ p: 2, borderBottom: "1px solid #333" }}>
+        <Box
+          sx={{
+            p: 2,
+            borderBottom: "1px solid #333",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
           <Typography variant="h6" sx={{ color: "white", fontWeight: 600 }}>
             Alert Filters
           </Typography>
+          <IconButton
+            onClick={() => {
+              // This will be handled by the parent component
+              if (window.parent && window.parent.setFilterSidebarOpen) {
+                window.parent.setFilterSidebarOpen(false);
+              }
+            }}
+            sx={{ color: "white" }}
+            size="small"
+          >
+            <CloseIcon />
+          </IconButton>
         </Box>
 
         {/* Filters */}

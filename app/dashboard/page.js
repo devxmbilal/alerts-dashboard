@@ -164,6 +164,9 @@ export default function Dashboard() {
   const [mobileBottomNav, setMobileBottomNav] = useState(0);
   const [currentMobileView, setCurrentMobileView] = useState("chart"); // 'chart', 'filters', 'market'
 
+  // Filter sidebar state
+  const [filterSidebarOpen, setFilterSidebarOpen] = useState(false);
+
   // User menu state
   const [userMenuAnchor, setUserMenuAnchor] = useState(null);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
@@ -323,6 +326,18 @@ export default function Dashboard() {
         <Button
           fullWidth
           variant="outlined"
+          startIcon={<FilterListIcon />}
+          onClick={() => {
+            setFilterSidebarOpen(!filterSidebarOpen);
+            setMobileDrawerOpen(false);
+          }}
+          sx={{ mb: 1 }}
+        >
+          {filterSidebarOpen ? "Hide Filter Sidebar" : "Show Filter Sidebar"}
+        </Button>
+        <Button
+          fullWidth
+          variant="outlined"
           startIcon={<ListIcon />}
           onClick={() => {
             setCurrentMobileView("market");
@@ -394,31 +409,33 @@ export default function Dashboard() {
     // Desktop layout
     return (
       <Grid container spacing={2} sx={{ height: "100vh" }}>
-        {/* Left Sidebar - Filters */}
-        <Grid item xs={12} md={3}>
-          <Paper
-            sx={{
-              height: "100vh",
-              maxHeight: "100vh",
-              backgroundColor: "#1a1a1a",
-              border: "1px solid #333",
-              borderRadius: 2,
-              overflow: "hidden",
-              display: "flex",
-              flexDirection: "column",
-            }}
-          >
-            <FilterSidebar
-              ref={filterSidebarRef}
-              selectedSymbol={selectedCoin}
-              onCreateAlert={handleCreateAlert}
-              onAlertsCreated={handleAlertsCreated}
-            />
-          </Paper>
-        </Grid>
+        {/* Left Sidebar - Filters (Conditional) */}
+        {filterSidebarOpen && (
+          <Grid item xs={12} md={3}>
+            <Paper
+              sx={{
+                height: "100vh",
+                maxHeight: "100vh",
+                backgroundColor: "#1a1a1a",
+                border: "1px solid #333",
+                borderRadius: 2,
+                overflow: "hidden",
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              <FilterSidebar
+                ref={filterSidebarRef}
+                selectedSymbol={selectedCoin}
+                onCreateAlert={handleCreateAlert}
+                onAlertsCreated={handleAlertsCreated}
+              />
+            </Paper>
+          </Grid>
+        )}
 
-        {/* Main Content Area */}
-        <Grid item xs={12} md={6}>
+        {/* Main Content Area - Dynamic width based on filter sidebar */}
+        <Grid item xs={12} md={filterSidebarOpen ? 6 : 9}>
           <Box
             sx={{
               height: "100%",
@@ -463,7 +480,7 @@ export default function Dashboard() {
         </Grid>
 
         {/* Right Sidebar - Market Panel */}
-        <Grid item xs={12} md={3}>
+        <Grid item xs={12} md={filterSidebarOpen ? 3 : 3}>
           <Paper
             sx={{
               height: "100vh", // Fixed full height
@@ -543,6 +560,20 @@ export default function Dashboard() {
                     sx={{ mr: 2 }}
                   >
                     <MenuIcon />
+                  </IconButton>
+                )}
+                {!isMobile && (
+                  <IconButton
+                    color="inherit"
+                    onClick={() => setFilterSidebarOpen(!filterSidebarOpen)}
+                    sx={{ mr: 2 }}
+                    title={
+                      filterSidebarOpen
+                        ? "Hide Filter Sidebar"
+                        : "Show Filter Sidebar"
+                    }
+                  >
+                    <FilterListIcon />
                   </IconButton>
                 )}
                 <Typography variant="h5" component="h1" sx={{ color: "white" }}>
