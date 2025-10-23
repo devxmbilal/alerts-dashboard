@@ -44,8 +44,6 @@ import {
   Timeline as TimelineIcon,
   Star as StarIcon,
   ShowChart as ShowChartIcon,
-  BarChart as BarChartIcon,
-  CurrencyExchange as CurrencyExchangeIcon,
 } from "@mui/icons-material";
 import { useAlert } from "../contexts/AlertContext";
 import { useSocket } from "../contexts/SocketContext";
@@ -144,11 +142,6 @@ const FilterSidebar = forwardRef(
 
     // State management - exact same as client
     const [filters, setFilters] = useState({
-      // Market filters - default selections matching the image
-      market: { SPOT: true },
-      exchange: { BINANCE: true },
-      pair: { USDT: true },
-
       // Price filters
       minDaily: {},
       changePercent: { direction: "increase" }, // Default to increase
@@ -159,13 +152,6 @@ const FilterSidebar = forwardRef(
       rsiRange: {},
       volume: {},
       ema: {},
-    });
-
-    const [alertSettings, setAlertSettings] = useState({
-      timeframe: "1h",
-      notificationType: "both",
-      email: "",
-      telegram: "",
     });
 
     const [isCreating, setIsCreating] = useState(false);
@@ -181,9 +167,6 @@ const FilterSidebar = forwardRef(
       getFilters: () => filters,
       resetFilters: () => {
         setFilters({
-          market: { SPOT: true },
-          exchange: { BINANCE: true },
-          pair: { USDT: true },
           minDaily: {},
           changePercent: { direction: "increase" },
           alertCount: {},
@@ -200,9 +183,6 @@ const FilterSidebar = forwardRef(
       (category, value) => {
         // Define single selection categories
         const singleSelectionCategories = [
-          "market",
-          "exchange",
-          "pair",
           "minDaily",
           "changePercent",
           "alertCount",
@@ -414,12 +394,8 @@ const FilterSidebar = forwardRef(
           body: JSON.stringify({
             conditions: alertConditions,
             notificationSettings: {
-              email:
-                alertSettings.notificationType === "email" ||
-                alertSettings.notificationType === "both",
-              telegram:
-                alertSettings.notificationType === "telegram" ||
-                alertSettings.notificationType === "both",
+              email: true,
+              telegram: true,
               webhook: false,
             },
           }),
@@ -449,7 +425,7 @@ const FilterSidebar = forwardRef(
       } finally {
         setIsCreating(false);
       }
-    }, [getFavoriteSymbols, filters, alertSettings, onCreateAlert]);
+    }, [getFavoriteSymbols, filters, onCreateAlert]);
 
     // Get active filters count
     const activeFiltersCount = useMemo(() => {
@@ -460,15 +436,6 @@ const FilterSidebar = forwardRef(
         )
       ).length;
     }, [filters]);
-
-    // Market options
-    const marketOptions = [{ value: "SPOT", label: "Spot" }];
-
-    // Exchange options
-    const exchangeOptions = [{ value: "BINANCE", label: "Binance" }];
-
-    // Pair options
-    const pairOptions = [{ value: "USDT", label: "USDT" }];
 
     // Min Daily Volume options - matching the image
     const minDailyOptions = [
@@ -579,16 +546,6 @@ const FilterSidebar = forwardRef(
       { value: "CROSSING_DOWN", label: "CROSSING DOWN" },
     ];
 
-    // Timeframe options
-    const timeframeOptions = [
-      { value: "1m", label: "1 Minute" },
-      { value: "5m", label: "5 Minutes" },
-      { value: "15m", label: "15 Minutes" },
-      { value: "1h", label: "1 Hour" },
-      { value: "4h", label: "4 Hours" },
-      { value: "1d", label: "1 Day" },
-    ];
-
     return (
       <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
         {/* Header */}
@@ -610,99 +567,6 @@ const FilterSidebar = forwardRef(
           }}
           className="filter-sidebar-scrollbar"
         >
-          {/* Market Filter */}
-          <DarkAccordion defaultExpanded>
-            <AccordionSummary
-              expandIcon={<ExpandMoreIcon sx={{ color: "white" }} />}
-            >
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                <ShowChartIcon sx={{ color: "#1976d2" }} />
-                <Typography sx={{ color: "white" }}>Market</Typography>
-              </Box>
-            </AccordionSummary>
-            <AccordionDetails>
-              <FormGroup>
-                {marketOptions.map((option) => (
-                  <FormControlLabel
-                    key={option.value}
-                    control={
-                      <CustomCheckbox
-                        checked={filters.market[option.value] || false}
-                        onChange={() =>
-                          handleCheckboxChange("market", option.value)
-                        }
-                      />
-                    }
-                    label={option.label}
-                    sx={{ color: "white" }}
-                  />
-                ))}
-              </FormGroup>
-            </AccordionDetails>
-          </DarkAccordion>
-
-          {/* Exchange Filter */}
-          <DarkAccordion>
-            <AccordionSummary
-              expandIcon={<ExpandMoreIcon sx={{ color: "white" }} />}
-            >
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                <CurrencyExchangeIcon sx={{ color: "#4caf50" }} />
-                <Typography sx={{ color: "white" }}>Exchange</Typography>
-              </Box>
-            </AccordionSummary>
-            <AccordionDetails>
-              <FormGroup>
-                {exchangeOptions.map((option) => (
-                  <FormControlLabel
-                    key={option.value}
-                    control={
-                      <CustomCheckbox
-                        checked={filters.exchange[option.value] || false}
-                        onChange={() =>
-                          handleCheckboxChange("exchange", option.value)
-                        }
-                      />
-                    }
-                    label={option.label}
-                    sx={{ color: "white" }}
-                  />
-                ))}
-              </FormGroup>
-            </AccordionDetails>
-          </DarkAccordion>
-
-          {/* Pair Filter */}
-          <DarkAccordion>
-            <AccordionSummary
-              expandIcon={<ExpandMoreIcon sx={{ color: "white" }} />}
-            >
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                <BarChartIcon sx={{ color: "#ff9800" }} />
-                <Typography sx={{ color: "white" }}>Pair</Typography>
-              </Box>
-            </AccordionSummary>
-            <AccordionDetails>
-              <FormGroup>
-                {pairOptions.map((option) => (
-                  <FormControlLabel
-                    key={option.value}
-                    control={
-                      <CustomCheckbox
-                        checked={filters.pair[option.value] || false}
-                        onChange={() =>
-                          handleCheckboxChange("pair", option.value)
-                        }
-                      />
-                    }
-                    label={option.label}
-                    sx={{ color: "white" }}
-                  />
-                ))}
-              </FormGroup>
-            </AccordionDetails>
-          </DarkAccordion>
-
           {/* Min Daily Volume Filter */}
           <DarkAccordion>
             <AccordionSummary
@@ -812,11 +676,17 @@ const FilterSidebar = forwardRef(
                   startAdornment: (
                     <InputAdornment position="start">
                       {filters.changePercent.direction === "increase" ? (
-                        <TrendingUpIcon sx={{ fontSize: 18, color: "#4caf50" }} />
+                        <TrendingUpIcon
+                          sx={{ fontSize: 18, color: "#4caf50" }}
+                        />
                       ) : filters.changePercent.direction === "decrease" ? (
-                        <TrendingDownIcon sx={{ fontSize: 18, color: "#f44336" }} />
+                        <TrendingDownIcon
+                          sx={{ fontSize: 18, color: "#f44336" }}
+                        />
                       ) : (
-                        <ShowChartIcon sx={{ fontSize: 18, color: "#ff9800" }} />
+                        <ShowChartIcon
+                          sx={{ fontSize: 18, color: "#ff9800" }}
+                        />
                       )}
                     </InputAdornment>
                   ),
@@ -1221,86 +1091,6 @@ const FilterSidebar = forwardRef(
               </Grid>
             </AccordionDetails>
           </DarkAccordion>
-
-          {/* Alert Settings */}
-          <DarkAccordion>
-            <AccordionSummary
-              expandIcon={<ExpandMoreIcon sx={{ color: "white" }} />}
-            >
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                <NotificationsActiveIcon sx={{ color: "#1976d2" }} />
-                <Typography sx={{ color: "white" }}>Alert Settings</Typography>
-              </Box>
-            </AccordionSummary>
-            <AccordionDetails>
-              <CustomTextField
-                select
-                fullWidth
-                size="small"
-                label="Timeframe"
-                value={alertSettings.timeframe}
-                onChange={(e) =>
-                  setAlertSettings((prev) => ({
-                    ...prev,
-                    timeframe: e.target.value,
-                  }))
-                }
-                sx={{ mb: 2 }}
-              >
-                {timeframeOptions.map((option) => (
-                  <MenuItem key={option.value} value={option.value}>
-                    {option.label}
-                  </MenuItem>
-                ))}
-              </CustomTextField>
-
-              <CustomTextField
-                select
-                fullWidth
-                size="small"
-                label="Notification Type"
-                value={alertSettings.notificationType}
-                onChange={(e) =>
-                  setAlertSettings((prev) => ({
-                    ...prev,
-                    notificationType: e.target.value,
-                  }))
-                }
-                sx={{ mb: 2 }}
-              >
-                <MenuItem value="email">Email Only</MenuItem>
-                <MenuItem value="telegram">Telegram Only</MenuItem>
-                <MenuItem value="both">Both</MenuItem>
-              </CustomTextField>
-
-              <CustomTextField
-                fullWidth
-                size="small"
-                label="Email"
-                value={alertSettings.email}
-                onChange={(e) =>
-                  setAlertSettings((prev) => ({
-                    ...prev,
-                    email: e.target.value,
-                  }))
-                }
-                sx={{ mb: 2 }}
-              />
-
-              <CustomTextField
-                fullWidth
-                size="small"
-                label="Telegram Chat ID"
-                value={alertSettings.telegram}
-                onChange={(e) =>
-                  setAlertSettings((prev) => ({
-                    ...prev,
-                    telegram: e.target.value,
-                  }))
-                }
-              />
-            </AccordionDetails>
-          </DarkAccordion>
         </Box>
 
         {/* Actions */}
@@ -1323,11 +1113,8 @@ const FilterSidebar = forwardRef(
             variant="outlined"
             onClick={() => {
               setFilters({
-                market: { SPOT: true },
-                exchange: { BINANCE: true },
-                pair: { USDT: true },
                 minDaily: {},
-                changePercent: {},
+                changePercent: { direction: "increase" },
                 alertCount: {},
                 candle: {},
                 rsiRange: {},

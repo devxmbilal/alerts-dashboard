@@ -1186,6 +1186,32 @@ class RealTimeAlertProcessor {
         console.log(`📊 Baseline updated to current price: ${priceData.price}`);
       }
 
+      // CRITICAL: Update the in-memory alert with new baseline
+      alert.baselinePrice = priceData.price;
+      alert.baselineVolume = priceData.volume;
+      alert.baselineTimestamp = new Date();
+      alert.lastTriggeredAt = new Date();
+      alert.lastTriggeredPrice = priceData.price;
+      alert.lastTriggeredVolume = priceData.volume;
+      if (updatedConditions) {
+        alert.conditions = updatedConditions;
+      }
+      console.log(`🔄 In-memory alert updated with new baseline: ${priceData.price}`);
+
+      // Update the alert in activeAlerts map
+      const alertsForSymbol = this.activeAlerts.get(alert.symbol);
+      if (alertsForSymbol) {
+        const alertIndex = alertsForSymbol.findIndex(
+          (a) => a._id.toString() === alert._id.toString()
+        );
+        if (alertIndex !== -1) {
+          alertsForSymbol[alertIndex] = alert;
+          console.log(
+            `🔄 Updated alert in activeAlerts map for ${alert.symbol}`
+          );
+        }
+      }
+
       // Clean up old processed alerts (keep only last 60 seconds)
       const currentTime = Math.floor(Date.now() / 1000);
       for (const key of this.processedAlerts) {
