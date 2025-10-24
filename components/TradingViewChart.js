@@ -3,7 +3,7 @@
 import React, { useEffect } from "react";
 import { Box, Typography } from "@mui/material";
 
-const TradingViewChart = ({ symbol = "BTCUSDT", timeframe = "15m" }) => {
+const TradingViewChart = ({ symbol = "BTCUSDT", timeframe = "5m" }) => {
   useEffect(() => {
     // Clear existing chart container
     const container = document.getElementById("tradingview_chart");

@@ -153,7 +153,7 @@ export default function Dashboard() {
 
   // State management
   const [selectedCoin, setSelectedCoin] = useState("BTCUSDT");
-  const [selectedTimeframe, setSelectedTimeframe] = useState("15m");
+  const [selectedTimeframe, setSelectedTimeframe] = useState("5m");
   const [lastTriggeredSymbol, setLastTriggeredSymbol] = useState(null);
   const [alerts, setAlerts] = useState([]);
   const [chartSwitchNotification, setChartSwitchNotification] = useState(null);
