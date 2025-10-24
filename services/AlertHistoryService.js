@@ -288,6 +288,29 @@ class AlertHistoryService {
       throw error;
     }
   }
+
+  // Clear all alert history for a user
+  static async clearUserAlertHistory(userId) {
+    try {
+      console.log(`🗑️ Clearing all alert history for user ${userId}...`);
+
+      const result = await AlertHistory.deleteMany({
+        userId: userId,
+      });
+
+      console.log(
+        `✅ Cleared ${result.deletedCount} alert history records for user ${userId}`
+      );
+
+      return {
+        success: true,
+        deletedCount: result.deletedCount,
+      };
+    } catch (error) {
+      console.error("❌ Error clearing alert history:", error);
+      throw error;
+    }
+  }
 }
 
 export default AlertHistoryService;

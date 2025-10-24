@@ -28,7 +28,6 @@ import SettingsIcon from "@mui/icons-material/Settings";
 import TradingViewChart from "../../components/TradingViewChart";
 import MarketPanel from "../../components/MarketPanel";
 import FilterSidebar from "../../components/FilterSidebar";
-import TriggeredAlertsPanel from "../../components/TriggeredAlertsPanel";
 import RealTimeNotifications from "../../components/RealTimeNotifications";
 import UserSettingsModal from "../../components/UserSettingsModal";
 import { SocketProvider } from "../../contexts/SocketContext";
@@ -357,15 +356,12 @@ export default function Dashboard() {
       switch (currentMobileView) {
         case "chart":
           return (
-            <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 1, height: "100%" }}>
               <TradingViewChart
                 key={`${selectedCoin}-${selectedTimeframe}`}
                 symbol={selectedCoin}
                 timeframe={selectedTimeframe}
               />
-              <Box sx={{ height: "350px", mt: 1 }}>
-                <TriggeredAlertsPanel onAlertTrigger={handleAlertTrigger} />
-              </Box>
             </Box>
           );
         case "filters":
@@ -392,15 +388,12 @@ export default function Dashboard() {
           );
         default:
           return (
-            <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 1, height: "100%" }}>
               <TradingViewChart
                 key={`${selectedCoin}-${selectedTimeframe}`}
                 symbol={selectedCoin}
                 timeframe={selectedTimeframe}
               />
-              <Box sx={{ height: "350px", mt: 1 }}>
-                <TriggeredAlertsPanel onAlertTrigger={handleAlertTrigger} />
-              </Box>
             </Box>
           );
       }
@@ -444,7 +437,7 @@ export default function Dashboard() {
               gap: 1,
             }}
           >
-            {/* Chart Section */}
+            {/* Chart Section - Full Height */}
             <Paper
               sx={{
                 flex: 1,
@@ -453,7 +446,7 @@ export default function Dashboard() {
                 borderRadius: 2,
                 overflow: "hidden",
                 minHeight: "500px",
-                maxHeight: "600px",
+                height: "100%",
               }}
             >
               <TradingViewChart
@@ -461,20 +454,6 @@ export default function Dashboard() {
                 symbol={selectedCoin}
                 timeframe={selectedTimeframe}
               />
-            </Paper>
-
-            {/* Triggered Alerts History Section */}
-            <Paper
-              sx={{
-                height: "350px",
-                backgroundColor: "#1a1a1a",
-                border: "1px solid #333",
-                borderRadius: 2,
-                overflow: "hidden",
-                mt: 1,
-              }}
-            >
-              <TriggeredAlertsPanel onAlertTrigger={handleAlertTrigger} />
             </Paper>
           </Box>
         </Grid>

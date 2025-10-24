@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { connectToMongoDB } from "../../../../utils/mongodb.js";
+import { verifyToken } from "../../../../utils/auth.js";
 import AlertHistoryService from "../../../../services/AlertHistoryService.js";
 
 // GET /api/alerts/history - Get alert history for a user
@@ -38,7 +39,7 @@ export async function GET(request) {
       );
       console.log("🔍 Pagination result:", {
         dataLength: result?.data?.length,
-        pagination: result?.pagination
+        pagination: result?.pagination,
       });
       alertHistory = result.data; // Extract data from pagination result
     }
@@ -48,7 +49,7 @@ export async function GET(request) {
         id: alertHistory[0]._id,
         symbol: alertHistory[0].symbol,
         triggeredAt: alertHistory[0].triggeredAt,
-        hasTriggerData: !!alertHistory[0].triggerData
+        hasTriggerData: !!alertHistory[0].triggerData,
       });
     }
 
@@ -101,6 +102,54 @@ export async function PUT(request) {
     console.error("Error updating alert history:", error);
     return NextResponse.json(
       { error: "Failed to update alert history" },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE /api/alerts/history - Clear all alert history for a user
+export async function DELETE(request) {
+  try {
+    await connectToMongoDB();
+
+    // Get token from Authorization header
+    const authHeader = request.headers.get("authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return NextResponse.json(
+        { error: "Authorization token required" },
+        { status: 401 }
+      );
+    }
+
+    const token = authHeader.substring(7);
+    const decoded = verifyToken(token);
+    if (!decoded) {
+      return NextResponse.json(
+        { error: "Invalid or expired token" },
+        { status: 401 }
+      );
+    }
+
+    console.log(`🗑️ Clearing all alert history for user ${decoded.userId}...`);
+
+    // Clear all alert history for the user
+    const result = await AlertHistoryService.clearUserAlertHistory(
+      decoded.userId
+    );
+
+    console.log(`✅ Cleared ${result.deletedCount} alert history records`);
+
+    return NextResponse.json({
+      success: true,
+      message: `Cleared ${result.deletedCount} alert history records`,
+      data: {
+        deletedCount: result.deletedCount,
+      },
+    });
+  } catch (error) {
+    console.error("Error clearing alert history:", error);
+    return NextResponse.json(
+      { error: "Failed to clear alert history" },
       { status: 500 }
     );
   }
