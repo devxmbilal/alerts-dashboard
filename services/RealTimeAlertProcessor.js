@@ -1281,9 +1281,11 @@ class RealTimeAlertProcessor {
         return;
       }
 
-      // Prepare notification data for web socket
+      // Prepare notification data for SSE stream with complete alert history info
       const notification = {
         type: "alert_triggered",
+        _id: alertHistory._id,
+        id: alertHistory._id,
         symbol: alert.symbol,
         price: priceData.price,
         priceChange: priceData.priceChange,
@@ -1297,21 +1299,38 @@ class RealTimeAlertProcessor {
         triggeredAt: alertHistory.triggeredAt,
         alertId: alert._id,
         userId: alert.userId,
-        // Add detailed alert info for frontend
-        targetValue: alert.alertConditions?.changePercent?.percentage,
+        // Add detailed alert info for frontend display
+        targetValue: alert.alertConditions?.changePercent?.percentage || alert.conditions?.changePercent?.percentage,
         actualValue: priceData.priceChangePercent,
         direction:
-          alert.alertConditions?.changePercent?.direction === "increase"
-            ? "Increase"
-            : "Decrease",
-        timeframe: alert.alertConditions?.changePercent?.timeframe || "5MIN",
+          (alert.alertConditions?.changePercent?.direction || alert.conditions?.changePercent?.direction) === "increase"
+            ? "increase"
+            : "decrease",
+        timeframe: alert.alertConditions?.changePercent?.timeframe || alert.conditions?.changePercent?.timeframe || "5MIN",
         baselinePrice: alertHistory.baselineData?.baselinePrice,
         changeFromBaselinePercent:
           alertHistory.baselineData?.changeFromBaselinePercent,
+        // Add alert history data for complete display
+        alertConditions: alert.alertConditions || alert.conditions,
+        triggerData: {
+          price: priceData.price,
+          priceChangePercent: priceData.priceChangePercent,
+          volume24h: priceData.volume || priceData.volume24h,
+        },
+        baselineData: alertHistory.baselineData,
       };
 
-      // Send web socket notification
+      console.log(`📢 Sending real-time notification for ${alert.symbol}:`, {
+        userId: alert.userId,
+        symbol: notification.symbol,
+        price: notification.price,
+        targetValue: notification.targetValue,
+        actualValue: notification.actualValue,
+      });
+
+      // Send notification via SSE stream
       await NotificationService.sendNotification(alert.userId, notification);
+      console.log(`✅ Real-time notification sent successfully for ${alert.symbol}`);
 
       // Prepare formatted alert data for Email & Telegram
       const alertData = {
