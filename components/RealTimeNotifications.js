@@ -96,6 +96,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
         try {
           const data = JSON.parse(event.data);
           console.log("📨 Received notification:", data.type, data.symbol);
+          console.log("📨 Full notification data:", data);
 
           if (data.type === "connected") {
             console.log("📡 Notifications stream connected");
@@ -105,31 +106,18 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
 
           // Map alert history data to notification format
           const mappedAlert = {
-            id: data._id || data.id,
+            id: data._id || data.id || `realtime_${Date.now()}`,
             symbol: data.symbol,
-            targetValue:
-              data.targetValue ||
-              data.alertConditions?.changePercent?.percentage,
-            actualValue:
-              data.actualValue || data.triggerData?.priceChangePercent,
-            timeframe:
-              data.timeframe ||
-              data.alertConditions?.changePercent?.timeframe ||
-              "5MIN",
-            direction:
-              data.direction ||
-              data.alertConditions?.changePercent?.direction ||
-              "increase",
-            price: data.price || data.triggerData?.price,
-            baselinePrice:
-              data.baselinePrice || data.baselineData?.baselinePrice,
-            changeFromBaselinePercent:
-              data.changeFromBaselinePercent ||
-              data.baselineData?.changeFromBaselinePercent,
-            volume: data.volume || data.triggerData?.volume24h,
-            priceChangePercent:
-              data.priceChangePercent || data.triggerData?.priceChangePercent,
-            triggeredAt: data.triggeredAt,
+            targetValue: data.targetValue,
+            actualValue: data.actualValue,
+            timeframe: data.timeframe || "5MIN",
+            direction: data.direction || "increase",
+            price: data.price,
+            baselinePrice: data.baselinePrice,
+            changeFromBaselinePercent: data.changeFromBaselinePercent,
+            volume: data.volume,
+            priceChangePercent: data.priceChangePercent,
+            triggeredAt: data.triggeredAt || new Date().toISOString(),
             read: false,
           };
 
@@ -143,6 +131,10 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
           // Update unread count - increment for new unread notification
           setUnreadCount((prev) => prev + 1);
 
+          // Show visual feedback for new alert
+          console.log(`🚨 NEW ALERT ADDED TO HISTORY: ${data.symbol}`);
+          console.log(`📊 Alert details:`, mappedAlert);
+
           // Trigger chart switch if callback provided
           if (onAlertTriggerRef.current && data.symbol) {
             console.log(`🚨 TRIGGERING CHART SWITCH for ${data.symbol}`);
@@ -150,10 +142,12 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
               "🔍 onAlertTrigger callback exists:",
               typeof onAlertTriggerRef.current
             );
-            console.log("🔍 Alert data:", {
+            console.log("🔍 Alert data for chart switch:", {
               symbol: data.symbol,
               price: data.price,
               priceChangePercent: data.priceChangePercent,
+              conditions: data.conditions,
+              triggeredAt: data.triggeredAt,
             });
 
             try {
@@ -176,6 +170,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             console.warn("⚠️ Chart switch NOT triggered:", {
               hasCallback: !!onAlertTriggerRef.current,
               hasSymbol: !!data.symbol,
+              dataType: data.type,
             });
           }
 
