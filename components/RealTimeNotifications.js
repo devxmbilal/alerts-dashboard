@@ -20,19 +20,17 @@ import {
   DialogActions,
 } from "@mui/material";
 import {
-  Notifications as NotificationsIcon,
+  History as HistoryIcon,
   Close as CloseIcon,
-  ExpandMore as ExpandMoreIcon,
-  ExpandLess as ExpandLessIcon,
   Clear as ClearIcon,
   CheckCircle as CheckCircleIcon,
 } from "@mui/icons-material";
 
 const RealTimeNotifications = ({ token, onAlertTrigger }) => {
-  const [notifications, setNotifications] = useState([]);
+  const [alertHistory, setAlertHistory] = useState([]);
   const [isConnected, setIsConnected] = useState(true);
   const [isExpanded, setIsExpanded] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
+  const [newAlertCount, setNewAlertCount] = useState(0);
   const [showClearDialog, setShowClearDialog] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const eventSourceRef = useRef(null);
@@ -51,8 +49,8 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
     // Connect to real-time notifications
     connectToNotifications();
 
-    // Load existing notifications
-    loadNotifications();
+    // Load existing alert history
+    loadAlertHistory();
 
     return () => {
       if (eventSourceRef.current) {
@@ -68,7 +66,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
   const connectToNotifications = () => {
     // Skip real-time connection if disabled
     if (process.env.NEXT_PUBLIC_DISABLE_REALTIME_NOTIFICATIONS === "true") {
-      console.log("📱 Real-time notifications disabled");
+      console.log("📱 Real-time alert history disabled");
       return;
     }
 
@@ -84,7 +82,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
         process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"
       }/api/notifications/stream?token=${encodeURIComponent(token)}`;
 
-      console.log("🔌 Connecting to notifications stream:", url);
+      console.log("🔌 Connecting to alert history stream:", url);
       const eventSource = new EventSource(url);
 
       eventSource.onopen = () => {
@@ -95,16 +93,20 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
       eventSource.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          console.log("📨 Received notification:", data.type, data.symbol);
-          console.log("📨 Full notification data:", data);
+          console.log(
+            "📨 Received alert history update:",
+            data.type,
+            data.symbol
+          );
+          console.log("📨 Full alert data:", data);
 
           if (data.type === "connected") {
-            console.log("📡 Notifications stream connected");
+            console.log("📡 Alert history stream connected");
             setIsConnected(true);
             return;
           }
 
-          // Map alert history data to notification format
+          // Map alert data to history format
           const mappedAlert = {
             id: data._id || data.id || `realtime_${Date.now()}`,
             symbol: data.symbol,
@@ -121,15 +123,15 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             read: false,
           };
 
-          // Add new notification
-          setNotifications((prev) => {
-            const newNotifications = [mappedAlert, ...prev];
-            // Keep only last 50 notifications
-            return newNotifications.slice(0, 50);
+          // Add new alert to history
+          setAlertHistory((prev) => {
+            const newHistory = [mappedAlert, ...prev];
+            // Keep only last 50 alerts
+            return newHistory.slice(0, 50);
           });
 
-          // Update unread count - increment for new unread notification
-          setUnreadCount((prev) => prev + 1);
+          // Update new alert count
+          setNewAlertCount((prev) => prev + 1);
 
           // Show visual feedback for new alert
           console.log(`🚨 NEW ALERT ADDED TO HISTORY: ${data.symbol}`);
@@ -176,7 +178,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
 
           // Show browser notification if permission granted
           if (Notification.permission === "granted") {
-            new Notification(`Alert Triggered: ${data.symbol}`, {
+            new Notification(`Alert History Updated: ${data.symbol}`, {
               body: `Price: $${data.price} | Change: ${data.priceChangePercent}%`,
               icon: "/favicon.ico",
             });
@@ -188,7 +190,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
       };
 
       eventSource.onerror = (error) => {
-        console.error("❌ Notifications stream error:", error);
+        console.error("❌ Alert history stream error:", error);
         console.error("❌ EventSource readyState:", eventSource.readyState);
         console.error("❌ EventSource.CONNECTING:", EventSource.CONNECTING);
         console.error("❌ EventSource.OPEN:", EventSource.OPEN);
@@ -218,12 +220,12 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
       eventSourceRef.current = eventSource;
       console.log("📌 EventSource reference saved");
     } catch (error) {
-      console.error("❌ Error connecting to notifications:", error);
+      console.error("❌ Error connecting to alert history:", error);
       setIsConnected(false);
     }
   };
 
-  const loadNotifications = async () => {
+  const loadAlertHistory = async () => {
     try {
       // Get user from localStorage
       const userStr = localStorage.getItem("user");
@@ -245,11 +247,10 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
         const result = await response.json();
         const alertHistory = result.data || [];
 
-        // Map alert history to notification format
-        const mappedNotifications = alertHistory.map((alert) => ({
+        // Map alert history to display format
+        const mappedHistory = alertHistory.map((alert) => ({
           id: alert._id,
           symbol: alert.symbol,
-
           targetValue: alert.alertConditions?.changePercent?.percentage,
           actualValue: alert.triggerData?.priceChangePercent,
           timeframe: alert.alertConditions?.changePercent?.timeframe || "5MIN",
@@ -265,10 +266,9 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
           read: alert.status === "acknowledged",
         }));
 
-        setNotifications(mappedNotifications);
-        // Calculate unread count (notifications that are not read)
-        const unreadNotifications = mappedNotifications.filter((n) => !n.read);
-        setUnreadCount(unreadNotifications.length);
+        setAlertHistory(mappedHistory);
+        // Reset new alert count when loading existing history
+        setNewAlertCount(0);
       }
     } catch (error) {
       console.error("❌ Error loading alert history:", error);
@@ -276,27 +276,19 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
   };
 
   const markAsRead = (id) => {
-    setNotifications((prev) => {
-      const updatedNotifications = prev.map((notif) =>
-        notif.id === id ? { ...notif, read: true } : notif
+    setAlertHistory((prev) => {
+      const updatedHistory = prev.map((alert) =>
+        alert.id === id ? { ...alert, read: true } : alert
       );
 
-      // Recalculate unread count
-      const unreadCount = updatedNotifications.filter((n) => !n.read).length;
-      setUnreadCount(unreadCount);
-
-      return updatedNotifications;
+      return updatedHistory;
     });
   };
 
-  // Mark all as read when panel is opened
+  // Reset new alert count when panel is opened
   useEffect(() => {
     if (isExpanded) {
-      // Mark all notifications as read
-      setNotifications((prev) =>
-        prev.map((notif) => ({ ...notif, read: true }))
-      );
-      setUnreadCount(0);
+      setNewAlertCount(0);
     }
   }, [isExpanded]);
 
@@ -325,22 +317,22 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
       if (response.ok) {
         console.log("✅ All alert history cleared successfully");
         // Clear from UI
-        setNotifications([]);
-        setUnreadCount(0);
+        setAlertHistory([]);
+        setNewAlertCount(0);
         setShowClearDialog(false);
       } else {
         const errorData = await response.json();
         console.error("❌ Failed to clear alert history:", errorData.error);
         // Still clear from UI even if API fails
-        setNotifications([]);
-        setUnreadCount(0);
+        setAlertHistory([]);
+        setNewAlertCount(0);
         setShowClearDialog(false);
       }
     } catch (error) {
-      console.error("❌ Error clearing notifications:", error);
+      console.error("❌ Error clearing alert history:", error);
       // Still clear from UI even if API fails
-      setNotifications([]);
-      setUnreadCount(0);
+      setAlertHistory([]);
+      setNewAlertCount(0);
       setShowClearDialog(false);
     } finally {
       setIsClearing(false);
@@ -429,7 +421,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
 
   return (
     <Box sx={{ position: "relative" }}>
-      {/* Notification Bell */}
+      {/* Alert History Icon */}
       <IconButton
         onClick={() => {
           setIsExpanded(!isExpanded);
@@ -438,7 +430,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
         sx={{ color: "white" }}
       >
         <Badge
-          badgeContent={unreadCount > 0 ? unreadCount : null}
+          badgeContent={newAlertCount > 0 ? newAlertCount : null}
           color="error"
           sx={{
             "& .MuiBadge-badge": {
@@ -449,13 +441,13 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             },
           }}
         >
-          <NotificationsIcon />
+          <HistoryIcon />
         </Badge>
       </IconButton>
 
       {/* Connection Status - Removed to avoid user confusion */}
 
-      {/* Notifications Panel */}
+      {/* Alert History Panel */}
       <Collapse in={isExpanded} timeout="auto" unmountOnExit>
         <Paper
           sx={{
@@ -486,13 +478,13 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             }}
           >
             <Typography variant="h6" sx={{ color: "white", fontWeight: 600 }}>
-              Alert History ({notifications.length})
+              Alert History ({alertHistory.length})
             </Typography>
             <Box sx={{ color: "white" }}>
               <Button
                 size="small"
                 onClick={() => setShowClearDialog(true)}
-                disabled={notifications.length === 0}
+                disabled={alertHistory.length === 0}
                 sx={{
                   color: "white",
                   textTransform: "none",
@@ -522,9 +514,9 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             </Box>
           </Box>
 
-          {/* Notifications List */}
+          {/* Alert History List */}
           <Box sx={{ flex: 1, overflow: "auto" }}>
-            {notifications.length === 0 ? (
+            {alertHistory.length === 0 ? (
               <Box sx={{ p: 3, textAlign: "center" }}>
                 <Typography sx={{ color: "white", fontSize: "0.9rem" }}>
                   No alerts triggered yet
@@ -532,15 +524,13 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
               </Box>
             ) : (
               <List sx={{ p: 1 }}>
-                {notifications.map((notification, index) => (
+                {alertHistory.map((alert, index) => (
                   <ListItem
-                    key={notification.id || index}
+                    key={alert.id || index}
                     sx={{
                       borderBottom: 1,
                       borderColor: "#333333",
-                      backgroundColor: notification.read
-                        ? "#000000"
-                        : "#1a1a1a",
+                      backgroundColor: alert.read ? "#000000" : "#1a1a1a",
                       "&:hover": {
                         backgroundColor: "#2a2a2a",
                       },
@@ -548,14 +538,12 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                       borderRadius: 1,
                       border: "1px solid #333333",
                     }}
-                    onClick={() => markAsRead(notification.id)}
+                    onClick={() => markAsRead(alert.id)}
                   >
                     <ListItemIcon>
                       <CheckCircleIcon
                         sx={{
-                          color: getChangeColor(
-                            notification.priceChangePercent
-                          ),
+                          color: getChangeColor(alert.priceChangePercent),
                         }}
                       />
                     </ListItemIcon>
@@ -577,7 +565,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                               fontSize: "1rem",
                             }}
                           >
-                            {notification.symbol}
+                            {alert.symbol}
                           </Typography>
                           <Chip
                             label="TRIGGERED"
@@ -603,27 +591,25 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                               fontSize: "0.8rem",
                             }}
                           >
-                            <strong>Target:</strong>{" "}
-                            {notification.targetValue || 1} |{" "}
+                            <strong>Target:</strong> {alert.targetValue || 1} |{" "}
                             <strong>Actual 24h change:</strong>{" "}
                             <span
                               style={{
                                 color: getChangeColor(
-                                  notification.actualValue ||
-                                    notification.priceChangePercent
+                                  alert.actualValue || alert.priceChangePercent
                                 ),
                                 fontWeight: 600,
                               }}
                             >
-                              {notification.actualValue !== undefined
-                                ? notification.actualValue.toFixed(3)
-                                : notification.priceChangePercent}
+                              {alert.actualValue !== undefined
+                                ? alert.actualValue.toFixed(3)
+                                : alert.priceChangePercent}
                               %
                             </span>{" "}
                             | <strong>Timeframe:</strong>{" "}
-                            {notification.timeframe || "5MIN"} |{" "}
+                            {alert.timeframe || "5MIN"} |{" "}
                             <strong>Direction:</strong>{" "}
-                            {notification.direction || "increase"}
+                            {alert.direction || "increase"}
                           </Typography>
 
                           {/* Price */}
@@ -637,8 +623,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                               fontWeight: 600,
                             }}
                           >
-                            <strong>Price:</strong>{" "}
-                            {formatPrice(notification.price)}
+                            <strong>Price:</strong> {formatPrice(alert.price)}
                           </Typography>
 
                           {/* Last Price */}
@@ -652,9 +637,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                             }}
                           >
                             <strong>Last Price:</strong>{" "}
-                            {formatPrice(
-                              notification.baselinePrice || notification.price
-                            )}
+                            {formatPrice(alert.baselinePrice || alert.price)}
                           </Typography>
 
                           {/* Change in price */}
@@ -671,16 +654,13 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                             <span
                               style={{
                                 color: getChangeColor(
-                                  notification.changeFromBaselinePercent
+                                  alert.changeFromBaselinePercent
                                 ),
                                 fontWeight: 600,
                               }}
                             >
-                              {notification.changeFromBaselinePercent !==
-                              undefined
-                                ? notification.changeFromBaselinePercent.toFixed(
-                                    3
-                                  )
+                              {alert.changeFromBaselinePercent !== undefined
+                                ? alert.changeFromBaselinePercent.toFixed(3)
                                 : "N/A"}
                               %
                             </span>
@@ -697,10 +677,10 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                             }}
                           >
                             <strong>24h Volume:</strong>{" "}
-                            {notification.volume
+                            {alert.volume
                               ? new Intl.NumberFormat("en-US", {
                                   maximumFractionDigits: 1,
-                                }).format(notification.volume)
+                                }).format(alert.volume)
                               : "N/A"}
                           </Typography>
 
@@ -715,7 +695,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                             }}
                           >
                             <strong>Time:</strong>{" "}
-                            {formatTime(notification.triggeredAt)}
+                            {formatTime(alert.triggeredAt)}
                           </Typography>
                           <Typography
                             variant="body2"
@@ -726,7 +706,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                             }}
                           >
                             <strong>Date:</strong>{" "}
-                            {formatDate(notification.triggeredAt)}
+                            {formatDate(alert.triggeredAt)}
                           </Typography>
                         </Box>
                       }
@@ -760,8 +740,8 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             cannot be undone.
           </Typography>
           <Typography sx={{ color: "#888", fontSize: "0.9rem" }}>
-            This will permanently remove {notifications.length} alert(s) from
-            the database.
+            This will permanently remove {alertHistory.length} alert(s) from the
+            database.
           </Typography>
         </DialogContent>
         <DialogActions>
