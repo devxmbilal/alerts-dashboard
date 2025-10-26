@@ -12,6 +12,11 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         PORT: 3000,
+        REDIS_HOST: "localhost",
+        REDIS_PORT: 6379,
+        MONGODB_URI: "mongodb://localhost:27017/crypto-alerts",
+        JWT_SECRET: "your-super-secret-jwt-key-change-in-production",
+        TELEGRAM_BOT_TOKEN: "8305959326:AAHDT8CW0BPFXJK5RdNP_0c62agwoKraG50",
       },
       error_file: "./logs/alerts-dashboard-error.log",
       out_file: "./logs/alerts-dashboard-out.log",
@@ -28,6 +33,9 @@ module.exports = {
       max_memory_restart: "500M",
       env: {
         NODE_ENV: "production",
+        REDIS_HOST: "localhost",
+        REDIS_PORT: 6379,
+        MONGODB_URI: "mongodb://localhost:27017/crypto-alerts",
       },
       error_file: "./logs/binance-worker-error.log",
       out_file: "./logs/binance-worker-out.log",
@@ -44,6 +52,9 @@ module.exports = {
       max_memory_restart: "500M",
       env: {
         NODE_ENV: "production",
+        REDIS_HOST: "localhost",
+        REDIS_PORT: 6379,
+        MONGODB_URI: "mongodb://localhost:27017/crypto-alerts",
       },
       error_file: "./logs/alert-worker-error.log",
       out_file: "./logs/alert-worker-out.log",
