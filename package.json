@@ -12,6 +12,8 @@
     "cleanup-worker": "node workers/cleanup-worker.js",
     "real-time-worker": "node workers/real-time-alert-worker.js",
     "dev:all": "concurrently \"npm run dev\" \"npm run worker\" \"npm run alert-worker\" \"npm run cleanup-worker\"",
+    "start-all": "node start-all.js",
+    "test-redis": "node test-redis.js",
     "setup-db": "node scripts/setup-database.js",
     "seed-users": "node scripts/seed-users.js",
     "test-telegram": "node scripts/test-telegram-demo.js",
