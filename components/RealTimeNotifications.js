@@ -20,7 +20,7 @@ import {
   DialogActions,
 } from "@mui/material";
 import {
-  History as HistoryIcon,
+  Notifications as NotificationsIcon,
   Close as CloseIcon,
   Clear as ClearIcon,
   CheckCircle as CheckCircleIcon,
@@ -473,7 +473,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
 
   return (
     <Box sx={{ position: "relative" }}>
-      {/* Alert History Icon */}
+      {/* Alert Notifications Icon */}
       <IconButton
         onClick={() => {
           setIsExpanded(!isExpanded);
@@ -493,13 +493,13 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             },
           }}
         >
-          <HistoryIcon />
+          <NotificationsIcon />
         </Badge>
       </IconButton>
 
       {/* Connection Status - Removed to avoid user confusion */}
 
-      {/* Alert History Panel */}
+      {/* Alert Notifications Panel */}
       <Collapse in={isExpanded} timeout="auto" unmountOnExit>
         <Paper
           sx={{
@@ -530,7 +530,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             }}
           >
             <Typography variant="h6" sx={{ color: "white", fontWeight: 600 }}>
-              Alert History ({alertHistory.length})
+              Alert Notifications ({alertHistory.length})
             </Typography>
             <Box sx={{ color: "white" }}>
               <Button
@@ -566,7 +566,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             </Box>
           </Box>
 
-          {/* Alert History List */}
+          {/* Alert Notifications List */}
           <Box sx={{ flex: 1, overflow: "auto" }}>
             {alertHistory.length === 0 ? (
               <Box sx={{ p: 3, textAlign: "center" }}>
@@ -802,11 +802,11 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
         }}
       >
         <DialogTitle sx={{ color: "white", fontWeight: 600 }}>
-          Clear All Alert History
+          Clear All Alert Notifications
         </DialogTitle>
         <DialogContent>
           <Typography sx={{ color: "#ccc", mb: 2 }}>
-            Are you sure you want to delete all alert history? This action
+            Are you sure you want to delete all alert notifications? This action
             cannot be undone.
           </Typography>
           <Typography sx={{ color: "#888", fontSize: "0.9rem" }}>
