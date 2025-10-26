@@ -575,27 +575,24 @@ export default function Dashboard() {
                       color: "white",
                       p: 2,
                       borderRadius: 2,
-                      fontSize: "1rem",
-                      fontWeight: 700,
+                      fontSize: "0.5rem",
+                      fontWeight: 400,
                       textAlign: "center",
                       animation: "pulse 2s infinite",
                       border: "2px solid #ff8c42",
                       boxShadow: "0 0 20px rgba(255, 107, 53, 0.5)",
-                      maxWidth: "400px",
+                      maxWidth: "200px",
                     }}
                   >
                     🚨 Alert triggered and switched to{" "}
                     {chartSwitchNotification.symbol}
                     <br />
-                    Price: ${chartSwitchNotification.price?.toFixed(6) ||
+                    Price: ${chartSwitchNotification.price?.toFixed(4) ||
                       "N/A"}
                     <br />
                     Change: {chartSwitchNotification.priceChangePercent?.toFixed(3) ||
                       "N/A"}%
                     <br />
-                    <small style={{ fontSize: "0.8rem", opacity: 0.8 }}>
-                      Chart automatically switched
-                    </small>
                   </Box>
                 )}
                 <Typography variant="body2" sx={{ color: "#888" }}>

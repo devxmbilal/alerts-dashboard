@@ -81,7 +81,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
       // FIXED: Use alerts stream instead of notifications stream for real-time alerts
       const user = JSON.parse(localStorage.getItem("user") || "{}");
       const userId = user._id || user.id;
-      
+
       if (!userId) {
         console.error("❌ No user ID found in localStorage");
         return;
@@ -123,20 +123,57 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             const alertData = data.data || data;
             console.log(`🚨 ALERT TRIGGERED: ${alertData.symbol}`);
 
-            // Map alert data to history format
+            // Map alert data to AlertHistory format
             const mappedAlert = {
-              id: alertData.alertId || alertData._id || `realtime_${Date.now()}`,
+              _id:
+                alertData.alertId || alertData._id || `realtime_${Date.now()}`,
               symbol: alertData.symbol,
-              targetValue: alertData.targetValue || alertData.conditions?.changePercent?.percentage,
-              actualValue: alertData.actualValue || alertData.triggeredChange,
-              timeframe: alertData.timeframe || alertData.conditions?.changePercent?.timeframe || "5MIN",
-              direction: alertData.direction || alertData.conditions?.changePercent?.direction || "increase",
-              price: alertData.triggeredPrice || alertData.price,
-              baselinePrice: alertData.baselinePrice,
-              changeFromBaselinePercent: alertData.changeFromBaselinePercent,
-              volume: alertData.triggeredVolume || alertData.volume,
-              priceChangePercent: alertData.triggeredChange || alertData.priceChangePercent,
+              alertConditions: alertData.alertConditions ||
+                alertData.conditions || {
+                  changePercent: {
+                    percentage:
+                      alertData.targetValue ||
+                      alertData.conditions?.changePercent?.percentage,
+                    timeframe:
+                      alertData.timeframe ||
+                      alertData.conditions?.changePercent?.timeframe ||
+                      "5MIN",
+                    direction:
+                      alertData.direction ||
+                      alertData.conditions?.changePercent?.direction ||
+                      "increase",
+                  },
+                },
+              triggerData: {
+                price: alertData.triggeredPrice || alertData.price,
+                priceChangePercent:
+                  alertData.triggeredChange || alertData.priceChangePercent,
+                volume24h: alertData.triggeredVolume || alertData.volume,
+                timestamp: alertData.triggeredAt || new Date().toISOString(),
+              },
+              baselineData: {
+                baselinePrice: alertData.baselinePrice,
+                changeFromBaselinePercent: alertData.changeFromBaselinePercent,
+              },
               triggeredAt: alertData.triggeredAt || new Date().toISOString(),
+              status: "triggered",
+              // Additional fields for display
+              targetValue:
+                alertData.targetValue ||
+                alertData.conditions?.changePercent?.percentage,
+              actualValue: alertData.actualValue || alertData.triggeredChange,
+              timeframe:
+                alertData.timeframe ||
+                alertData.conditions?.changePercent?.timeframe ||
+                "5MIN",
+              direction:
+                alertData.direction ||
+                alertData.conditions?.changePercent?.direction ||
+                "increase",
+              price: alertData.triggeredPrice || alertData.price,
+              volume: alertData.triggeredVolume || alertData.volume,
+              priceChangePercent:
+                alertData.triggeredChange || alertData.priceChangePercent,
               read: false,
             };
 
@@ -157,13 +194,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             // Trigger chart switch if callback provided
             if (onAlertTriggerRef.current && alertData.symbol) {
               console.log(`🚨 TRIGGERING CHART SWITCH for ${alertData.symbol}`);
-              console.log("🔍 Alert data for chart switch:", {
-                symbol: alertData.symbol,
-                price: alertData.triggeredPrice,
-                priceChangePercent: alertData.triggeredChange,
-                conditions: alertData.conditions,
-                triggeredAt: alertData.triggeredAt,
-              });
+              
 
               try {
                 onAlertTriggerRef.current({
@@ -193,7 +224,6 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             if (Notification.permission === "granted") {
               new Notification(`🚨 Alert Triggered: ${alertData.symbol}`, {
                 body: `Price: $${alertData.triggeredPrice} | Change: ${alertData.triggeredChange}%`,
-                icon: "/favicon.ico",
               });
             }
           } else if (data.type === "heartbeat") {
