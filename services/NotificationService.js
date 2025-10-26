@@ -27,25 +27,46 @@ class NotificationService {
   // Send notification to user
   async sendNotification(userId, notification) {
     try {
+     
+
       // Store notification in Redis for persistence
       await this.storeNotification(userId, notification);
+      console.log("✅ Notification stored in Redis");
 
       // Send to real-time subscribers
       if (this.subscribers.has(userId)) {
+        console.log(
+          `✅ Found ${
+            this.subscribers.get(userId).size
+          } subscriber(s) for user ${userId}`
+        );
+        let callbackCount = 0;
         this.subscribers.get(userId).forEach((callback) => {
           try {
+            console.log(
+              `📤 Calling subscriber callback #${++callbackCount}...`
+            );
             callback(notification);
+            console.log(`✅ Callback #${callbackCount} executed successfully`);
           } catch (error) {
-            console.error("❌ Error sending notification to user:", error);
+            console.error(`❌ Error in callback #${callbackCount}:`, error);
           }
         });
+      } else {
+        console.log(`⚠️ NO SUBSCRIBERS found for user ${userId}`);
+        console.log(
+          "⚠️ Available user IDs:",
+          Array.from(this.subscribers.keys())
+        );
       }
 
       console.log(
         `📢 Notification sent to user ${userId}: ${notification.symbol} alert triggered`
       );
+      console.log("🔍 ===== END NOTIFICATION DEBUG =====\n");
     } catch (error) {
       console.error("❌ Error sending notification:", error);
+      console.error("❌ Error stack:", error.stack);
     }
   }
 

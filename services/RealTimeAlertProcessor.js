@@ -614,7 +614,6 @@ class RealTimeAlertProcessor {
         conditions: this.getAlertConditionsText(alert.conditions),
       };
 
-
       // Save to AlertHistory
       console.log(`📝 Saving alert history for ${alert.symbol}...`);
       await AlertHistoryService.createAlertHistory(alertHistory);
@@ -1196,7 +1195,9 @@ class RealTimeAlertProcessor {
       if (updatedConditions) {
         alert.conditions = updatedConditions;
       }
-      console.log(`🔄 In-memory alert updated with new baseline: ${priceData.price}`);
+      console.log(
+        `🔄 In-memory alert updated with new baseline: ${priceData.price}`
+      );
 
       // Update the alert in activeAlerts map
       const alertsForSymbol = this.activeAlerts.get(alert.symbol);
@@ -1300,13 +1301,19 @@ class RealTimeAlertProcessor {
         alertId: alert._id,
         userId: alert.userId,
         // Add detailed alert info for frontend display
-        targetValue: alert.alertConditions?.changePercent?.percentage || alert.conditions?.changePercent?.percentage,
+        targetValue:
+          alert.alertConditions?.changePercent?.percentage ||
+          alert.conditions?.changePercent?.percentage,
         actualValue: priceData.priceChangePercent,
         direction:
-          (alert.alertConditions?.changePercent?.direction || alert.conditions?.changePercent?.direction) === "increase"
+          (alert.alertConditions?.changePercent?.direction ||
+            alert.conditions?.changePercent?.direction) === "increase"
             ? "increase"
             : "decrease",
-        timeframe: alert.alertConditions?.changePercent?.timeframe || alert.conditions?.changePercent?.timeframe || "5MIN",
+        timeframe:
+          alert.alertConditions?.changePercent?.timeframe ||
+          alert.conditions?.changePercent?.timeframe ||
+          "5MIN",
         baselinePrice: alertHistory.baselineData?.baselinePrice,
         changeFromBaselinePercent:
           alertHistory.baselineData?.changeFromBaselinePercent,
@@ -1330,7 +1337,9 @@ class RealTimeAlertProcessor {
 
       // Send notification via SSE stream
       await NotificationService.sendNotification(alert.userId, notification);
-      console.log(`✅ Real-time notification sent successfully for ${alert.symbol}`);
+      console.log(
+        `✅ Real-time notification sent successfully for ${alert.symbol}`
+      );
 
       // Prepare formatted alert data for Email & Telegram
       const alertData = {
@@ -1376,7 +1385,6 @@ class RealTimeAlertProcessor {
           console.error(`❌ Failed to send email to ${user.email}`);
         }
       }
-
 
       // Send Telegram notification if enabled
       if (user.notificationPreferences?.telegram && user.telegramChatId) {

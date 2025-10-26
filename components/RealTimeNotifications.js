@@ -92,56 +92,83 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
 
       eventSource.onmessage = (event) => {
         try {
+          console.log("\n🔍 ===== SSE MESSAGE RECEIVED =====");
+          console.log("🔍 Raw event data:", event.data);
+
           const data = JSON.parse(event.data);
-          console.log(
-            "📨 Received alert history update:",
-            data.type,
-            data.symbol
-          );
-          console.log("📨 Full alert data:", data);
+          console.log("🔍 Parsed data:", data);
+          console.log("🔍 Type:", data.type);
+          console.log("🔍 Symbol:", data.symbol);
 
           if (data.type === "connected") {
             console.log("📡 Alert history stream connected");
+            console.log("🔍 ===== END SSE MESSAGE =====\n");
             setIsConnected(true);
             return;
           }
 
-          // Map alert data to history format
+          console.log("📨 Processing alert notification...");
+
+          // Map alert data to match AlertHistory format
+          console.log("🔍 Mapping alert data to AlertHistory format...");
           const mappedAlert = {
-            id: data._id || data.id || `realtime_${Date.now()}`,
+            _id: data._id || data.id || `realtime_${Date.now()}`,
             symbol: data.symbol,
+            alertConditions: data.alertConditions || data.conditions,
+            triggerData: {
+              price: data.price,
+              priceChangePercent: data.priceChangePercent,
+              volume24h: data.volume,
+              timestamp: data.triggeredAt || new Date().toISOString(),
+            },
+            baselineData: data.baselineData || {
+              baselinePrice: data.baselinePrice,
+              changeFromBaselinePercent: data.changeFromBaselinePercent,
+            },
+            triggeredAt: data.triggeredAt || new Date().toISOString(),
+            status: "triggered",
+            // Additional fields for display
             targetValue: data.targetValue,
             actualValue: data.actualValue,
             timeframe: data.timeframe || "5MIN",
             direction: data.direction || "increase",
-            price: data.price,
-            baselinePrice: data.baselinePrice,
-            changeFromBaselinePercent: data.changeFromBaselinePercent,
-            volume: data.volume,
-            priceChangePercent: data.priceChangePercent,
-            triggeredAt: data.triggeredAt || new Date().toISOString(),
             read: false,
           };
+          console.log("✅ Alert mapped to AlertHistory format:", mappedAlert);
 
           // Add new alert to history
+          console.log("🔍 Adding alert to history state...");
           setAlertHistory((prev) => {
+            console.log("🔍 Previous history length:", prev.length);
             const newHistory = [mappedAlert, ...prev];
+            console.log("🔍 New history length:", newHistory.length);
             // Keep only last 50 alerts
             return newHistory.slice(0, 50);
           });
+          console.log("✅ Alert added to history state");
 
           // Update new alert count
-          setNewAlertCount((prev) => prev + 1);
+          console.log("🔍 Updating badge count...");
+          setNewAlertCount((prev) => {
+            console.log("🔍 Previous count:", prev);
+            console.log("🔍 New count:", prev + 1);
+            return prev + 1;
+          });
+          console.log("✅ Badge count updated");
 
           // Show visual feedback for new alert
           console.log(`🚨 NEW ALERT ADDED TO HISTORY: ${data.symbol}`);
           console.log(`📊 Alert details:`, mappedAlert);
 
           // Trigger chart switch if callback provided
+          console.log("🔍 Checking chart switch callback...");
+          console.log("🔍 Callback exists:", !!onAlertTriggerRef.current);
+          console.log("🔍 Symbol exists:", !!data.symbol);
+
           if (onAlertTriggerRef.current && data.symbol) {
             console.log(`🚨 TRIGGERING CHART SWITCH for ${data.symbol}`);
             console.log(
-              "🔍 onAlertTrigger callback exists:",
+              "🔍 onAlertTrigger callback type:",
               typeof onAlertTriggerRef.current
             );
             console.log("🔍 Alert data for chart switch:", {
@@ -176,6 +203,8 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             });
           }
 
+          console.log("🔍 ===== END SSE MESSAGE =====\n");
+
           // Show browser notification if permission granted
           if (Notification.permission === "granted") {
             new Notification(`Alert History Updated: ${data.symbol}`, {
@@ -184,17 +213,22 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             });
           }
         } catch (error) {
+          console.error("\n❌ ===== SSE MESSAGE ERROR =====");
           console.error("❌ Error parsing notification:", error);
-          console.error("❌ Event data:", event.data);
+          console.error("❌ Error stack:", error.stack);
+          console.error("❌ Raw event data:", event.data);
+          console.error("❌ ===== END ERROR =====\n");
         }
       };
 
       eventSource.onerror = (error) => {
-        console.error("❌ Alert history stream error:", error);
+        console.error("\n❌ ===== SSE CONNECTION ERROR =====");
+        console.error("❌ Notifications stream error:", error);
         console.error("❌ EventSource readyState:", eventSource.readyState);
         console.error("❌ EventSource.CONNECTING:", EventSource.CONNECTING);
         console.error("❌ EventSource.OPEN:", EventSource.OPEN);
         console.error("❌ EventSource.CLOSED:", EventSource.CLOSED);
+        console.error("❌ ===== END CONNECTION ERROR =====\n");
 
         setIsConnected(false);
 
@@ -227,12 +261,18 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
 
   const loadAlertHistory = async () => {
     try {
+      console.log("\n🔍 ===== LOADING ALERT HISTORY =====");
       // Get user from localStorage
       const userStr = localStorage.getItem("user");
-      if (!userStr) return;
+      if (!userStr) {
+        console.log("⚠️ No user found in localStorage");
+        console.log("🔍 ===== END LOADING =====\n");
+        return;
+      }
 
       const user = JSON.parse(userStr);
       const userId = user._id;
+      console.log("🔍 UserId:", userId);
 
       const response = await fetch(
         `/api/alerts/history?userId=${userId}&limit=150`,
@@ -242,43 +282,41 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
           },
         }
       );
+      console.log("🔍 History API response status:", response.status);
 
       if (response.ok) {
         const result = await response.json();
         const alertHistory = result.data || [];
+        console.log("✅ Loaded", alertHistory.length, "alerts from history");
 
-        // Map alert history to display format
-        const mappedHistory = alertHistory.map((alert) => ({
-          id: alert._id,
-          symbol: alert.symbol,
-          targetValue: alert.alertConditions?.changePercent?.percentage,
-          actualValue: alert.triggerData?.priceChangePercent,
-          timeframe: alert.alertConditions?.changePercent?.timeframe || "5MIN",
-          direction:
-            alert.alertConditions?.changePercent?.direction || "increase",
-          price: alert.triggerData?.price,
-          baselinePrice: alert.baselineData?.baselinePrice,
-          changeFromBaselinePercent:
-            alert.baselineData?.changeFromBaselinePercent,
-          volume: alert.triggerData?.volume24h,
-          priceChangePercent: alert.triggerData?.priceChangePercent,
-          triggeredAt: alert.triggeredAt,
-          read: alert.status === "acknowledged",
-        }));
-
-        setAlertHistory(mappedHistory);
+        // Use the same format as AlertHistory component - no mapping needed
+        setAlertHistory(alertHistory);
+        console.log(
+          "✅ Alert history state updated with",
+          alertHistory.length,
+          "alerts"
+        );
         // Reset new alert count when loading existing history
         setNewAlertCount(0);
+        console.log("✅ Badge count reset to 0");
+      } else {
+        console.error(
+          "❌ History API error:",
+          response.status,
+          response.statusText
+        );
       }
+      console.log("🔍 ===== END LOADING =====\n");
     } catch (error) {
       console.error("❌ Error loading alert history:", error);
+      console.error("❌ Error stack:", error.stack);
     }
   };
 
   const markAsRead = (id) => {
     setAlertHistory((prev) => {
       const updatedHistory = prev.map((alert) =>
-        alert.id === id ? { ...alert, read: true } : alert
+        alert._id === id ? { ...alert, status: "acknowledged" } : alert
       );
 
       return updatedHistory;
@@ -526,11 +564,12 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
               <List sx={{ p: 1 }}>
                 {alertHistory.map((alert, index) => (
                   <ListItem
-                    key={alert.id || index}
+                    key={alert._id || index}
                     sx={{
                       borderBottom: 1,
                       borderColor: "#333333",
-                      backgroundColor: alert.read ? "#000000" : "#1a1a1a",
+                      backgroundColor:
+                        alert.status === "acknowledged" ? "#000000" : "#1a1a1a",
                       "&:hover": {
                         backgroundColor: "#2a2a2a",
                       },
@@ -538,12 +577,14 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                       borderRadius: 1,
                       border: "1px solid #333333",
                     }}
-                    onClick={() => markAsRead(alert.id)}
+                    onClick={() => markAsRead(alert._id)}
                   >
                     <ListItemIcon>
                       <CheckCircleIcon
                         sx={{
-                          color: getChangeColor(alert.priceChangePercent),
+                          color: getChangeColor(
+                            alert.triggerData?.priceChangePercent
+                          ),
                         }}
                       />
                     </ListItemIcon>
@@ -591,25 +632,29 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                               fontSize: "0.8rem",
                             }}
                           >
-                            <strong>Target:</strong> {alert.targetValue || 1} |{" "}
-                            <strong>Actual 24h change:</strong>{" "}
+                            <strong>Target:</strong>{" "}
+                            {alert.alertConditions?.changePercent?.percentage ||
+                              "N/A"}{" "}
+                            | <strong>Actual 24h change:</strong>{" "}
                             <span
                               style={{
                                 color: getChangeColor(
-                                  alert.actualValue || alert.priceChangePercent
+                                  alert.triggerData?.priceChangePercent
                                 ),
                                 fontWeight: 600,
                               }}
                             >
-                              {alert.actualValue !== undefined
-                                ? alert.actualValue.toFixed(3)
-                                : alert.priceChangePercent}
+                              {alert.triggerData?.priceChangePercent?.toFixed(
+                                3
+                              ) || "N/A"}
                               %
                             </span>{" "}
                             | <strong>Timeframe:</strong>{" "}
-                            {alert.timeframe || "5MIN"} |{" "}
-                            <strong>Direction:</strong>{" "}
-                            {alert.direction || "increase"}
+                            {alert.alertConditions?.changePercent?.timeframe ||
+                              "5MIN"}{" "}
+                            | <strong>Direction:</strong>{" "}
+                            {alert.alertConditions?.changePercent?.direction ||
+                              "increase"}
                           </Typography>
 
                           {/* Price */}
@@ -623,7 +668,8 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                               fontWeight: 600,
                             }}
                           >
-                            <strong>Price:</strong> {formatPrice(alert.price)}
+                            <strong>Price:</strong>{" "}
+                            {formatPrice(alert.triggerData?.price)}
                           </Typography>
 
                           {/* Last Price */}
@@ -637,7 +683,10 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                             }}
                           >
                             <strong>Last Price:</strong>{" "}
-                            {formatPrice(alert.baselinePrice || alert.price)}
+                            {formatPrice(
+                              alert.baselineData?.baselinePrice ||
+                                alert.triggerData?.price
+                            )}
                           </Typography>
 
                           {/* Change in price */}
@@ -654,13 +703,16 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                             <span
                               style={{
                                 color: getChangeColor(
-                                  alert.changeFromBaselinePercent
+                                  alert.baselineData?.changeFromBaselinePercent
                                 ),
                                 fontWeight: 600,
                               }}
                             >
-                              {alert.changeFromBaselinePercent !== undefined
-                                ? alert.changeFromBaselinePercent.toFixed(3)
+                              {alert.baselineData?.changeFromBaselinePercent !==
+                              undefined
+                                ? alert.baselineData.changeFromBaselinePercent.toFixed(
+                                    3
+                                  )
                                 : "N/A"}
                               %
                             </span>
@@ -677,10 +729,10 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                             }}
                           >
                             <strong>24h Volume:</strong>{" "}
-                            {alert.volume
+                            {alert.triggerData?.volume24h
                               ? new Intl.NumberFormat("en-US", {
                                   maximumFractionDigits: 1,
-                                }).format(alert.volume)
+                                }).format(alert.triggerData.volume24h)
                               : "N/A"}
                           </Typography>
 
@@ -695,7 +747,9 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                             }}
                           >
                             <strong>Time:</strong>{" "}
-                            {formatTime(alert.triggeredAt)}
+                            {formatTime(
+                              alert.triggerData?.timestamp || alert.triggeredAt
+                            )}
                           </Typography>
                           <Typography
                             variant="body2"
@@ -706,7 +760,9 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                             }}
                           >
                             <strong>Date:</strong>{" "}
-                            {formatDate(alert.triggeredAt)}
+                            {formatDate(
+                              alert.triggerData?.timestamp || alert.triggeredAt
+                            )}
                           </Typography>
                         </Box>
                       }

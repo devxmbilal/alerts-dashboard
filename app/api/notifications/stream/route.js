@@ -26,29 +26,50 @@ export async function GET(request) {
 
     const userId = decoded.userId;
 
+    console.log("\n🔍 ===== SSE STREAM SETUP =====");
+    console.log("🔍 UserId:", userId);
+    console.log("🔍 Token valid: true");
+
     // Create a readable stream for Server-Sent Events
     const stream = new ReadableStream({
       start(controller) {
+        console.log("✅ SSE stream started for user:", userId);
+
         // Send initial connection message
         const data = `data: ${JSON.stringify({
           type: "connected",
           message: "Connected to notifications",
         })}\n\n`;
         controller.enqueue(new TextEncoder().encode(data));
+        console.log("✅ Initial connection message sent");
 
         // Subscribe to notifications for this user (optional)
         let notificationCallback = null;
         try {
           notificationCallback = (notification) => {
             try {
+              console.log(
+                "📤 SSE: Sending notification to client:",
+                notification.symbol
+              );
               const data = `data: ${JSON.stringify(notification)}\n\n`;
               controller.enqueue(new TextEncoder().encode(data));
+              console.log("✅ SSE: Notification sent successfully");
             } catch (error) {
-              console.error("❌ Error sending notification via SSE:", error);
+              console.error("❌ SSE: Error sending notification:", error);
             }
           };
 
           NotificationService.subscribe(userId, notificationCallback);
+          console.log("✅ Subscribed to NotificationService for user:", userId);
+          console.log(
+            "🔍 Total subscribers now:",
+            NotificationService.subscribers.size
+          );
+          console.log(
+            "🔍 Subscribers for this user:",
+            NotificationService.subscribers.get(userId)?.size || 0
+          );
 
           // Send existing notifications
           NotificationService.getNotifications(userId)
