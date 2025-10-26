@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: "alerts-dashboard",
-      script: "npm",
+      script: "npx",
       args: "next start -p 3000",
       cwd: "/var/www/alerts-dashboard",
       instances: 1,
