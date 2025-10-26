@@ -590,7 +590,7 @@ export default function Dashboard() {
                       color: "white",
                       p: 2,
                       borderRadius: 2,
-                      fontSize: "0.8rem",
+                      fontSize: "0.5rem",
                       fontWeight: 400,
                       textAlign: "center",
                       animation: "pulse 2s infinite",
@@ -601,14 +601,6 @@ export default function Dashboard() {
                   >
                     🚨 Alert triggered and switched to{" "}
                     {chartSwitchNotification.symbol}
-                    <br />
-                    Price: ${chartSwitchNotification.price?.toFixed(6) || "N/A"}
-                    <br />
-                    Change:{" "}
-                    {chartSwitchNotification.priceChangePercent?.toFixed(3) ||
-                      "N/A"}
-                    %
-                    <br />
                   </Box>
                 )}
                 <Typography variant="body2" sx={{ color: "#888" }}>
