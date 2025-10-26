@@ -78,11 +78,20 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
         eventSourceRef.current = null;
       }
 
+      // FIXED: Use alerts stream instead of notifications stream for real-time alerts
+      const user = JSON.parse(localStorage.getItem("user") || "{}");
+      const userId = user._id || user.id;
+      
+      if (!userId) {
+        console.error("❌ No user ID found in localStorage");
+        return;
+      }
+
       const url = `${
         process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"
-      }/api/notifications/stream?token=${encodeURIComponent(token)}`;
+      }/api/alerts/stream?userId=${userId}`;
 
-      console.log("🔌 Connecting to alert history stream:", url);
+      console.log("🔌 Connecting to alerts stream:", url);
       const eventSource = new EventSource(url);
 
       eventSource.onopen = () => {
@@ -94,97 +103,101 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
         try {
           const data = JSON.parse(event.data);
           console.log(
-            "📨 Received alert history update:",
+            "📨 Received alert stream update:",
             data.type,
-            data.symbol
+            data.symbol || data.data?.symbol
           );
           console.log("📨 Full alert data:", data);
 
           if (data.type === "connected") {
-            console.log("📡 Alert history stream connected");
+            console.log("📡 Alert stream connected");
             setIsConnected(true);
             return;
           }
 
-          // Map alert data to history format
-          const mappedAlert = {
-            id: data._id || data.id || `realtime_${Date.now()}`,
-            symbol: data.symbol,
-            targetValue: data.targetValue,
-            actualValue: data.actualValue,
-            timeframe: data.timeframe || "5MIN",
-            direction: data.direction || "increase",
-            price: data.price,
-            baselinePrice: data.baselinePrice,
-            changeFromBaselinePercent: data.changeFromBaselinePercent,
-            volume: data.volume,
-            priceChangePercent: data.priceChangePercent,
-            triggeredAt: data.triggeredAt || new Date().toISOString(),
-            read: false,
-          };
+          // Handle alert_triggered events from Redis
+          if (data.type === "alert_triggered") {
+            const alertData = data.data || data;
+            console.log(`🚨 ALERT TRIGGERED: ${alertData.symbol}`);
 
-          // Add new alert to history
-          setAlertHistory((prev) => {
-            const newHistory = [mappedAlert, ...prev];
-            // Keep only last 50 alerts
-            return newHistory.slice(0, 50);
-          });
+            // Map alert data to history format
+            const mappedAlert = {
+              id: alertData.alertId || alertData._id || `realtime_${Date.now()}`,
+              symbol: alertData.symbol,
+              targetValue: alertData.targetValue || alertData.conditions?.changePercent?.percentage,
+              actualValue: alertData.actualValue || alertData.triggeredChange,
+              timeframe: alertData.timeframe || alertData.conditions?.changePercent?.timeframe || "5MIN",
+              direction: alertData.direction || alertData.conditions?.changePercent?.direction || "increase",
+              price: alertData.triggeredPrice || alertData.price,
+              baselinePrice: alertData.baselinePrice,
+              changeFromBaselinePercent: alertData.changeFromBaselinePercent,
+              volume: alertData.triggeredVolume || alertData.volume,
+              priceChangePercent: alertData.triggeredChange || alertData.priceChangePercent,
+              triggeredAt: alertData.triggeredAt || new Date().toISOString(),
+              read: false,
+            };
 
-          // Update new alert count
-          setNewAlertCount((prev) => prev + 1);
-
-          // Show visual feedback for new alert
-          console.log(`🚨 NEW ALERT ADDED TO HISTORY: ${data.symbol}`);
-          console.log(`📊 Alert details:`, mappedAlert);
-
-          // Trigger chart switch if callback provided
-          if (onAlertTriggerRef.current && data.symbol) {
-            console.log(`🚨 TRIGGERING CHART SWITCH for ${data.symbol}`);
-            console.log(
-              "🔍 onAlertTrigger callback exists:",
-              typeof onAlertTriggerRef.current
-            );
-            console.log("🔍 Alert data for chart switch:", {
-              symbol: data.symbol,
-              price: data.price,
-              priceChangePercent: data.priceChangePercent,
-              conditions: data.conditions,
-              triggeredAt: data.triggeredAt,
+            // Add new alert to history
+            setAlertHistory((prev) => {
+              const newHistory = [mappedAlert, ...prev];
+              // Keep only last 50 alerts
+              return newHistory.slice(0, 50);
             });
 
-            try {
-              onAlertTriggerRef.current({
-                symbol: data.symbol,
-                price: data.price,
-                priceChangePercent: data.priceChangePercent,
-                conditions: data.conditions,
-                triggeredAt: data.triggeredAt,
+            // Update new alert count for badge
+            setNewAlertCount((prev) => prev + 1);
+
+            // Show visual feedback for new alert
+            console.log(`🚨 NEW ALERT ADDED TO HISTORY: ${alertData.symbol}`);
+            console.log(`📊 Alert details:`, mappedAlert);
+
+            // Trigger chart switch if callback provided
+            if (onAlertTriggerRef.current && alertData.symbol) {
+              console.log(`🚨 TRIGGERING CHART SWITCH for ${alertData.symbol}`);
+              console.log("🔍 Alert data for chart switch:", {
+                symbol: alertData.symbol,
+                price: alertData.triggeredPrice,
+                priceChangePercent: alertData.triggeredChange,
+                conditions: alertData.conditions,
+                triggeredAt: alertData.triggeredAt,
               });
-              console.log("✅ Chart switch callback executed successfully");
-            } catch (callbackError) {
-              console.error(
-                "❌ Error in onAlertTrigger callback:",
-                callbackError
-              );
-              console.error("❌ Callback error stack:", callbackError.stack);
-            }
-          } else {
-            console.warn("⚠️ Chart switch NOT triggered:", {
-              hasCallback: !!onAlertTriggerRef.current,
-              hasSymbol: !!data.symbol,
-              dataType: data.type,
-            });
-          }
 
-          // Show browser notification if permission granted
-          if (Notification.permission === "granted") {
-            new Notification(`Alert History Updated: ${data.symbol}`, {
-              body: `Price: $${data.price} | Change: ${data.priceChangePercent}%`,
-              icon: "/favicon.ico",
-            });
+              try {
+                onAlertTriggerRef.current({
+                  symbol: alertData.symbol,
+                  price: alertData.triggeredPrice,
+                  priceChangePercent: alertData.triggeredChange,
+                  conditions: alertData.conditions,
+                  triggeredAt: alertData.triggeredAt,
+                });
+                console.log("✅ Chart switch callback executed successfully");
+              } catch (callbackError) {
+                console.error(
+                  "❌ Error in onAlertTrigger callback:",
+                  callbackError
+                );
+                console.error("❌ Callback error stack:", callbackError.stack);
+              }
+            } else {
+              console.warn("⚠️ Chart switch NOT triggered:", {
+                hasCallback: !!onAlertTriggerRef.current,
+                hasSymbol: !!alertData.symbol,
+                dataType: data.type,
+              });
+            }
+
+            // Show browser notification if permission granted
+            if (Notification.permission === "granted") {
+              new Notification(`🚨 Alert Triggered: ${alertData.symbol}`, {
+                body: `Price: $${alertData.triggeredPrice} | Change: ${alertData.triggeredChange}%`,
+                icon: "/favicon.ico",
+              });
+            }
+          } else if (data.type === "heartbeat") {
+            console.log("💓 Alert stream heartbeat");
           }
         } catch (error) {
-          console.error("❌ Error parsing notification:", error);
+          console.error("❌ Error parsing alert stream message:", error);
           console.error("❌ Event data:", event.data);
         }
       };

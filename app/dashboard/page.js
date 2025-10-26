@@ -236,14 +236,16 @@ export default function Dashboard() {
       console.log(
         `🚨 Alert triggered for ${alertData.symbol}, switching chart...`
       );
+      console.log("🔍 Alert trigger data:", alertData);
+      
       setSelectedCoin(alertData.symbol);
       setLastTriggeredSymbol(alertData.symbol);
 
-      // Show notification
+      // Show notification with proper data
       setChartSwitchNotification({
         symbol: alertData.symbol,
-        price: alertData.price,
-        priceChangePercent: alertData.priceChangePercent,
+        price: alertData.price || alertData.triggeredPrice,
+        priceChangePercent: alertData.priceChangePercent || alertData.triggeredChange,
         timestamp: new Date(),
       });
 
@@ -257,6 +259,9 @@ export default function Dashboard() {
         setCurrentMobileView("chart");
         setMobileBottomNav(0);
       }
+
+      // Force chart re-render with new symbol
+      setSelectedTimeframe(prev => prev); // Trigger re-render
     }
   };
 
@@ -576,17 +581,21 @@ export default function Dashboard() {
                       animation: "pulse 2s infinite",
                       border: "2px solid #ff8c42",
                       boxShadow: "0 0 20px rgba(255, 107, 53, 0.5)",
+                      maxWidth: "400px",
                     }}
                   >
                     🚨 Alert triggered and switched to{" "}
                     {chartSwitchNotification.symbol}
                     <br />
                     Price: ${chartSwitchNotification.price?.toFixed(6) ||
-                      "N/A"}{" "}
-                    (
-                    {chartSwitchNotification.priceChangePercent?.toFixed(3) ||
                       "N/A"}
-                    %)
+                    <br />
+                    Change: {chartSwitchNotification.priceChangePercent?.toFixed(3) ||
+                      "N/A"}%
+                    <br />
+                    <small style={{ fontSize: "0.8rem", opacity: 0.8 }}>
+                      Chart automatically switched
+                    </small>
                   </Box>
                 )}
                 <Typography variant="body2" sx={{ color: "#888" }}>

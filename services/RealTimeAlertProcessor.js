@@ -1332,6 +1332,58 @@ class RealTimeAlertProcessor {
       await NotificationService.sendNotification(alert.userId, notification);
       console.log(`✅ Real-time notification sent successfully for ${alert.symbol}`);
 
+      // CRITICAL FIX: Also publish to Redis for real-time alerts
+      try {
+        const Redis = (await import("ioredis")).default;
+        const redis = new Redis({
+          host: process.env.REDIS_HOST || "localhost",
+          port: process.env.REDIS_PORT || 6379,
+          lazyConnect: true,
+          retryDelayOnClusterDown: 300,
+          maxRetriesPerRequest: 3,
+        });
+
+        const alertData = {
+          type: "alert_triggered",
+          alertId: alert._id,
+          historyId: alertHistory._id,
+          userId: alert.userId,
+          symbol: alert.symbol,
+          triggeredAt: new Date(),
+          triggeredPrice: parseFloat(priceData.price),
+          triggeredVolume: parseFloat(priceData.volume || priceData.volume24h),
+          triggeredChange: parseFloat(priceData.priceChangePercent),
+          conditions: alert.conditions,
+          notificationSettings: alert.notificationSettings,
+          // Add frontend display data
+          targetValue: notification.targetValue,
+          actualValue: notification.actualValue,
+          direction: notification.direction,
+          timeframe: notification.timeframe,
+          baselinePrice: notification.baselinePrice,
+          changeFromBaselinePercent: notification.changeFromBaselinePercent,
+        };
+
+        // Publish to alert triggers channel for real-time updates
+        await redis.publish("alert:triggers", JSON.stringify(alertData));
+        console.log(`🚨 Alert published to Redis for ${alert.symbol}:`, alertData);
+
+        // Also publish to notifications channel for header badge updates
+        await redis.publish("notifications:alerts", JSON.stringify({
+          type: "new_alert",
+          userId: alert.userId,
+          symbol: alert.symbol,
+          timestamp: new Date(),
+          alertId: alert._id,
+        }));
+        console.log(`📢 Alert notification published to Redis for user ${alert.userId}`);
+
+        await redis.quit();
+      } catch (redisError) {
+        console.error("❌ Error publishing alert to Redis:", redisError);
+        // Don't fail the whole process if Redis fails
+      }
+
       // Prepare formatted alert data for Email & Telegram
       const alertData = {
         symbol: alert.symbol,
