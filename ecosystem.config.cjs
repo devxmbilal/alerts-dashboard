@@ -9,6 +9,7 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: "1G",
+      env_file: ".env.local",
       env: {
         NODE_ENV: "production",
         PORT: 3000,
@@ -31,6 +32,7 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: "500M",
+      env_file: ".env.local",
       env: {
         NODE_ENV: "production",
         REDIS_HOST: "localhost",
@@ -50,6 +52,7 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: "500M",
+      env_file: ".env.local",
       env: {
         NODE_ENV: "production",
         REDIS_HOST: "localhost",
