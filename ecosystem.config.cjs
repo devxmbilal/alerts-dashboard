@@ -2,8 +2,8 @@ module.exports = {
   apps: [
     {
       name: "alerts-dashboard",
-      script: "npx",
-      args: "next start -p 3000",
+      script: "node_modules/.bin/next",
+      args: "start -p 3000",
       cwd: "/var/www/alerts-dashboard",
       instances: 1,
       autorestart: true,
@@ -22,6 +22,8 @@ module.exports = {
       out_file: "./logs/alerts-dashboard-out.log",
       log_file: "./logs/alerts-dashboard-combined.log",
       time: true,
+      merge_logs: true,
+      log_date_format: "YYYY-MM-DD HH:mm:ss Z",
     },
     {
       name: "binance-worker",
