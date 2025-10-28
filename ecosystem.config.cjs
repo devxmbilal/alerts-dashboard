@@ -9,7 +9,7 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: "1G",
-      env_file: ".env.local",
+      env_file: ".env",
       env: {
         NODE_ENV: "production",
         PORT: 3000,
@@ -17,7 +17,7 @@ module.exports = {
         REDIS_PORT: 6379,
         MONGODB_URI: "mongodb://localhost:27017/crypto-alerts",
         JWT_SECRET: "your-super-secret-jwt-key-change-in-production",
-        TELEGRAM_BOT_TOKEN: "8305959326:AAHDT8CW0BPFXJK5RdNP_0c62agwoKraG50",
+        TELEGRAM_BOT_TOKEN: "7287504688:AAGz8DYPG8QUylOWY_ed7zqom62pBzmm2bA",
       },
       error_file: "./logs/alerts-dashboard-error.log",
       out_file: "./logs/alerts-dashboard-out.log",
@@ -54,7 +54,7 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: "500M",
-      env_file: ".env.local",
+      env_file: ".env",
       env: {
         NODE_ENV: "production",
         REDIS_HOST: "localhost",
