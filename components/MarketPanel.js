@@ -354,7 +354,7 @@ const MarketPanel = forwardRef(
     return (
       <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
         {/* Header - exact same as client */}
-        <Box sx={{ p: 2, borderBottom: "1px solid #333" }}>
+        <Box sx={{ p: 1, borderBottom: "1px solid #333" }}>
           <Typography
             variant="h6"
             sx={{ color: "white", mb: 1, fontWeight: 600 }}
@@ -541,8 +541,8 @@ const MarketPanel = forwardRef(
           className="market-panel-scrollbar"
           sx={{
             flex: 1,
-            height: "calc(100vh - 300px)", // Fixed height
-            minHeight: "400px", // Minimum height
+            height: "calc(100vh - 80px)", // Ultra reduced height
+            minHeight: "150px", // Ultra reduced minimum height
             overflow: "auto",
           }}
         >
@@ -709,7 +709,7 @@ const MarketPanel = forwardRef(
         {/* Footer Stats */}
         <Box
           sx={{
-            p: 2,
+            p: 1,
             borderTop: "1px solid #333",
             backgroundColor: "#1a1a1a",
             flexShrink: 0, // Prevent shrinking

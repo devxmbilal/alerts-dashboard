@@ -379,7 +379,7 @@ export default function Dashboard() {
           );
         case "filters":
           return (
-            <Box sx={{ height: "calc(100vh - 200px)", minHeight: "500px" }}>
+            <Box sx={{ height: "calc(100vh - 100px)", minHeight: "250px" }}>
               <FilterSidebar
                 ref={filterSidebarRef}
                 selectedSymbol={selectedCoin}
@@ -390,7 +390,7 @@ export default function Dashboard() {
           );
         case "market":
           return (
-            <Box sx={{ height: "calc(100vh - 200px)", minHeight: "500px" }}>
+            <Box sx={{ height: "calc(100vh - 100px)", minHeight: "250px" }}>
               <MarketPanel
                 ref={marketPanelRef}
                 onSelectCoin={handleCoinSelect}
@@ -421,7 +421,7 @@ export default function Dashboard() {
 
     // Desktop layout
     return (
-      <Grid container spacing={2} sx={{ height: "100vh" }}>
+      <Grid container spacing={1} sx={{ height: "100vh" }}>
         {/* Left Sidebar - Filters (Conditional) */}
         {filterSidebarOpen && (
           <Grid item xs={12} md={3}>
@@ -449,26 +449,26 @@ export default function Dashboard() {
 
         {/* Main Content Area - Dynamic width based on filter sidebar */}
         <Grid item xs={12} md={filterSidebarOpen ? 6 : 9}>
-          <Box
-            sx={{
-              height: "100%",
-              display: "flex",
-              flexDirection: "column",
-              gap: 1,
-            }}
-          >
-            {/* Chart Section - Full Height */}
-            <Paper
+            <Box
               sx={{
-                flex: 1,
-                backgroundColor: "#1a1a1a",
-                border: "1px solid #333",
-                borderRadius: 2,
-                overflow: "hidden",
-                minHeight: "500px",
                 height: "100%",
+                display: "flex",
+                flexDirection: "column",
+                gap: 0.5,
               }}
             >
+            {/* Chart Section - Full Height */}
+              <Paper
+                sx={{
+                  flex: 1,
+                  backgroundColor: "#1a1a1a",
+                  border: "1px solid #333",
+                  borderRadius: 2,
+                  overflow: "hidden",
+                  minHeight: "200px",
+                  height: "100%",
+                }}
+              >
               <TradingViewChart
                 key={`${selectedCoin}-${selectedTimeframe}`}
                 symbol={selectedCoin}
@@ -479,7 +479,7 @@ export default function Dashboard() {
         </Grid>
 
         {/* Right Sidebar - Market Panel */}
-        <Grid item xs={12} md={filterSidebarOpen ? 3 : 3}>
+        <Grid item xs={12} md={3}>
           <Paper
             sx={{
               height: "100vh", // Fixed full height
@@ -545,7 +545,7 @@ export default function Dashboard() {
               sx={{
                 backgroundColor: "#1a1a1a",
                 borderBottom: "1px solid #333",
-                p: 2,
+                p: 0.5,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
@@ -668,7 +668,7 @@ export default function Dashboard() {
             </Box>
 
             {/* Main Content */}
-            <Box sx={{ p: 2 }}>{renderMainContent()}</Box>
+            <Box sx={{ p: 0.5 }}>{renderMainContent()}</Box>
 
             {/* Mobile Bottom Navigation */}
             {isMobile && (

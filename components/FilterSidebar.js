@@ -89,26 +89,26 @@ const DarkAccordion = styled(Accordion)({
   backgroundColor: "transparent",
   color: "white",
   boxShadow: "none",
-  marginBottom: "8px",
+  marginBottom: "2px",
   "&:before": {
     display: "none",
   },
   "& .MuiAccordionSummary-root": {
-    minHeight: "48px",
-    padding: "0 16px",
-    borderRadius: "6px",
+    minHeight: "24px",
+    padding: "0 8px",
+    borderRadius: "3px",
     "&:hover": {
       backgroundColor: "rgba(255, 255, 255, 0.04)",
     },
   },
   "& .MuiAccordionSummary-content": {
-    margin: "12px 0",
-    fontSize: "14px",
+    margin: "4px 0",
+    fontSize: "10px",
     fontWeight: "500",
-    letterSpacing: "0.5px",
+    letterSpacing: "0.2px",
   },
   "& .MuiAccordionDetails-root": {
-    padding: "0 16px 16px",
+    padding: "0 8px 8px",
   },
 });
 
@@ -552,7 +552,7 @@ const FilterSidebar = forwardRef(
         {/* Header */}
         <Box
           sx={{
-            p: 2,
+            p: 1,
             borderBottom: "1px solid #333",
             display: "flex",
             justifyContent: "space-between",
@@ -580,11 +580,11 @@ const FilterSidebar = forwardRef(
         <Box
           sx={{
             flex: 1,
-            p: 2,
+            p: 0.5,
             overflow: "auto",
-            height: "calc(100vh - 120px)",
-            minHeight: "500px",
-            maxHeight: "calc(100vh - 120px)",
+            height: "calc(100vh - 60px)",
+            minHeight: "200px",
+            maxHeight: "calc(100vh - 60px)",
           }}
           className="filter-sidebar-scrollbar"
         >
@@ -1115,7 +1115,7 @@ const FilterSidebar = forwardRef(
         </Box>
 
         {/* Actions */}
-        <Box sx={{ p: 2, borderTop: "1px solid #333" }}>
+        <Box sx={{ p: 1, borderTop: "1px solid #333" }}>
           <Button
             fullWidth
             variant="contained"

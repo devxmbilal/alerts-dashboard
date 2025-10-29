@@ -38,9 +38,15 @@ const TradingViewChart = ({ symbol = "BTCUSDT", timeframe = "5m" }) => {
         "1d": "D",
       };
 
+      // Dynamically calculate height to fill available space
+      const wrapper = document.getElementById("tradingview_chart_wrapper");
+      const dynamicHeight = wrapper?.clientHeight
+        ? wrapper.clientHeight
+        : Math.max(300, window.innerHeight - 220);
+
       new TradingView.widget({
         width: "100%",
-        height: 610,
+        height: dynamicHeight,
         symbol: symbol,
         interval: intervalMap[timeframe] || timeframe,
         timezone: "Etc/UTC",
@@ -54,13 +60,25 @@ const TradingViewChart = ({ symbol = "BTCUSDT", timeframe = "5m" }) => {
         container_id: "tradingview_chart",
       });
     }
+
+    // Optional: adjust chart on resize (lightweight recreate)
+    const onResize = () => {
+      const c = document.getElementById("tradingview_chart");
+      if (c) c.innerHTML = "";
+      createWidget();
+    };
+    window.addEventListener("resize", onResize);
+    
+    return () => {
+      window.removeEventListener("resize", onResize);
+    };
   }, [symbol, timeframe]);
 
   return (
     <Box
       sx={{
         width: "100%",
-        height: "100%",
+        height: "85%",
         minHeight: "400px",
         backgroundColor: "#1a1a1a",
         position: "relative",
@@ -93,8 +111,9 @@ const TradingViewChart = ({ symbol = "BTCUSDT", timeframe = "5m" }) => {
         sx={{
           flex: 1,
           position: "relative",
-          minHeight: "400px",
+          minHeight: "300px",
         }}
+        id="tradingview_chart_wrapper"
       >
         <div className="tradingview-widget-container w-full">
           <div id="tradingview_chart" />

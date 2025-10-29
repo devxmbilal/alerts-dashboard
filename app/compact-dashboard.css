@@ -5,125 +5,125 @@
 
 /* Global Typography Reduction */
 body {
-  font-size: 13px !important; /* Reduced from default 16px */
+  font-size: 7px !important; /* Ultra reduced from 8px */
 }
 
 h1, .MuiTypography-h1 {
-  font-size: 1.75rem !important; /* Reduced from 2.5rem */
+  font-size: 1.2rem !important; /* Ultra reduced from 1.75rem */
 }
 
 h2, .MuiTypography-h2 {
-  font-size: 1.5rem !important; /* Reduced from 2rem */
+  font-size: 1.1rem !important; /* Ultra reduced from 1.5rem */
 }
 
 h3, .MuiTypography-h3 {
-  font-size: 1.25rem !important; /* Reduced from 1.75rem */
+  font-size: 1rem !important; /* Ultra reduced from 1.25rem */
 }
 
 h4, .MuiTypography-h4 {
-  font-size: 1.1rem !important; /* Reduced from 1.5rem */
+  font-size: 0.9rem !important; /* Ultra reduced from 1.1rem */
 }
 
 h5, .MuiTypography-h5 {
-  font-size: 1rem !important; /* Reduced from 1.25rem */
+  font-size: 0.8rem !important; /* Ultra reduced from 1rem */
 }
 
 h6, .MuiTypography-h6 {
-  font-size: 0.9rem !important; /* Reduced from 1rem */
+  font-size: 0.75rem !important; /* Ultra reduced from 0.9rem */
 }
 
 .MuiTypography-body1 {
-  font-size: 0.875rem !important; /* Reduced from 1rem */
+  font-size: 0.7rem !important; /* Ultra reduced from 0.875rem */
 }
 
 .MuiTypography-body2 {
-  font-size: 0.8rem !important; /* Reduced from 0.875rem */
+  font-size: 0.65rem !important; /* Ultra reduced from 0.8rem */
 }
 
 .MuiTypography-caption {
-  font-size: 0.7rem !important; /* Reduced from 0.75rem */
+  font-size: 0.6rem !important; /* Ultra reduced from 0.7rem */
 }
 
 /* Paper/Card Components */
 .MuiPaper-root {
-  padding: 12px !important; /* Reduced from default */
+  padding: 2px !important; /* Ultra reduced from 3px */
 }
 
 .MuiCard-root {
-  padding: 10px !important;
+  padding: 2px !important; /* Ultra reduced from 4px */
 }
 
 /* Buttons */
 .MuiButton-root {
-  font-size: 0.8rem !important; /* Reduced from 0.875rem */
-  padding: 6px 14px !important; /* Reduced from 8px 16px */
-  min-height: 32px !important; /* Reduced from 36px */
+  font-size: 0.6rem !important; /* Ultra reduced from 0.75rem */
+  padding: 2px 6px !important; /* Ultra reduced from 4px 10px */
+  min-height: 20px !important; /* Ultra reduced from 28px */
 }
 
 .MuiButton-sizeLarge {
-  font-size: 0.875rem !important;
-  padding: 8px 18px !important;
+  font-size: 0.7rem !important; /* Ultra reduced */
+  padding: 4px 10px !important; /* Ultra reduced */
 }
 
 .MuiButton-sizeSmall {
-  font-size: 0.75rem !important;
-  padding: 4px 10px !important;
+  font-size: 0.55rem !important; /* Ultra reduced */
+  padding: 2px 6px !important; /* Ultra reduced */
 }
 
 /* Icon Buttons */
 .MuiIconButton-root {
-  padding: 6px !important; /* Reduced from 12px */
+  padding: 2px !important; /* Ultra reduced from 6px */
 }
 
 .MuiIconButton-root svg {
-  font-size: 1.25rem !important; /* Reduced from 1.5rem */
+  font-size: 0.9rem !important; /* Ultra reduced from 1.25rem */
 }
 
 /* Input Fields */
 .MuiInputBase-root {
-  font-size: 0.85rem !important; /* Reduced from 1rem */
-  min-height: 36px !important; /* Reduced from 40px */
+  font-size: 0.65rem !important; /* Ultra reduced from 0.85rem */
+  min-height: 24px !important; /* Ultra reduced from 36px */
 }
 
 .MuiInputBase-input {
-  padding: 8px 12px !important; /* Reduced from 10px 14px */
+  padding: 4px 6px !important; /* Ultra reduced from 8px 12px */
 }
 
 .MuiOutlinedInput-input {
-  padding: 8px 12px !important;
+  padding: 4px 6px !important; /* Ultra reduced */
 }
 
 .MuiInputLabel-root {
-  font-size: 0.85rem !important;
+  font-size: 0.65rem !important; /* Ultra reduced */
 }
 
 /* Search Input */
 .MuiInputBase-root.MuiOutlinedInput-root {
-  padding: 6px 10px !important;
+  padding: 3px 6px !important; /* Ultra reduced */
 }
 
 /* List Items */
 .MuiListItem-root {
-  padding: 6px 12px !important; /* Reduced from 8px 16px */
-  min-height: 40px !important; /* Reduced from 48px */
+  padding: 2px 4px !important; /* Ultra reduced from 4px 8px */
+  min-height: 20px !important; /* Ultra reduced from 32px */
 }
 
 .MuiListItemText-primary {
-  font-size: 0.85rem !important; /* Reduced from 1rem */
+  font-size: 0.65rem !important; /* Ultra reduced from 0.85rem */
 }
 
 .MuiListItemText-secondary {
-  font-size: 0.75rem !important; /* Reduced from 0.875rem */
+  font-size: 0.6rem !important; /* Ultra reduced from 0.75rem */
 }
 
 /* Chips */
 .MuiChip-root {
-  height: 24px !important; /* Reduced from 32px */
-  font-size: 0.75rem !important; /* Reduced from 0.8125rem */
+  height: 16px !important; /* Ultra reduced from 24px */
+  font-size: 0.6rem !important; /* Ultra reduced from 0.75rem */
 }
 
 .MuiChip-label {
-  padding: 0 8px !important; /* Reduced from 0 12px */
+  padding: 0 4px !important; /* Ultra reduced from 0 8px */
 }
 
 /* Dividers */
@@ -133,35 +133,35 @@ h6, .MuiTypography-h6 {
 
 /* Accordions */
 .MuiAccordion-root {
-  margin: 4px 0 !important;
+  margin: 1px 0 !important; /* Ultra reduced */
 }
 
 .MuiAccordionSummary-root {
-  min-height: 40px !important; /* Reduced from 48px */
-  padding: 0 12px !important; /* Reduced from 0 16px */
+  min-height: 20px !important; /* Ultra reduced from 40px */
+  padding: 0 4px !important; /* Ultra reduced from 0 12px */
 }
 
 .MuiAccordionSummary-content {
-  margin: 8px 0 !important; /* Reduced from 12px 0 */
-  font-size: 0.85rem !important;
+  margin: 2px 0 !important; /* Ultra reduced from 8px 0 */
+  font-size: 0.6rem !important; /* Ultra reduced */
 }
 
 .MuiAccordionDetails-root {
-  padding: 8px 12px 12px !important; /* Reduced from 12px 16px 16px */
+  padding: 2px 4px 4px !important; /* Ultra reduced from 8px 12px 12px */
 }
 
 /* Tabs */
 .MuiTab-root {
-  font-size: 0.8rem !important;
-  min-height: 40px !important; /* Reduced from 48px */
-  padding: 8px 14px !important; /* Reduced from 12px 16px */
+  font-size: 0.6rem !important; /* Ultra reduced */
+  min-height: 20px !important; /* Ultra reduced from 40px */
+  padding: 2px 6px !important; /* Ultra reduced from 8px 14px */
 }
 
 /* Toggle Buttons */
 .MuiToggleButton-root {
-  font-size: 0.8rem !important;
-  padding: 6px 12px !important; /* Reduced from 8px 16px */
-  min-height: 32px !important;
+  font-size: 0.6rem !important; /* Ultra reduced */
+  padding: 2px 6px !important; /* Ultra reduced from 6px 12px */
+  min-height: 18px !important; /* Ultra reduced */
 }
 
 /* Table Cells */
@@ -308,12 +308,12 @@ h6, .MuiTypography-h6 {
 
 /* Chart Container */
 .chart-container {
-  min-height: 350px !important; /* Reduced from 400px */
+  min-height: 120px !important; /* Ultra reduced from 200px */
 }
 
 /* Filter Sidebar */
 .filter-sidebar {
-  padding: 12px !important;
+  padding: 2px !important; /* Ultra reduced from 4px */
 }
 
 .filter-sidebar .MuiTypography-h6 {
@@ -323,7 +323,7 @@ h6, .MuiTypography-h6 {
 
 /* Triggered Alerts Panel */
 .triggered-alerts-panel {
-  max-height: 250px !important; /* Reduced from 300px */
+  max-height: 200px !important; /* Further reduced from 250px */
 }
 
 .triggered-alerts-panel .MuiListItem-root {
@@ -482,32 +482,61 @@ h6, .MuiTypography-h6 {
 /* Mobile Specific Adjustments */
 @media (max-width: 768px) {
   body {
-    font-size: 12px !important;
+    font-size: 6px !important; /* Ultra reduced */
   }
   
   .MuiButton-root {
-    font-size: 0.75rem !important;
-    padding: 5px 12px !important;
+    font-size: 0.5rem !important; /* Ultra reduced */
+    padding: 1px 4px !important; /* Ultra reduced */
+    min-height: 16px !important; /* Ultra reduced */
   }
   
   .MuiListItem-root {
-    padding: 6px 10px !important;
-    min-height: 36px !important;
+    padding: 1px 3px !important; /* Ultra reduced */
+    min-height: 16px !important; /* Ultra reduced */
   }
   
   .MuiTypography-h6 {
-    font-size: 0.85rem !important;
+    font-size: 0.6rem !important; /* Ultra reduced */
+  }
+  
+  .chart-container {
+    min-height: 80px !important; /* Ultra reduced */
+  }
+  
+  .MuiPaper-root {
+    padding: 1px !important; /* Ultra reduced */
   }
 }
 
 /* Tablet Specific Adjustments */
 @media (min-width: 769px) and (max-width: 1024px) {
   body {
-    font-size: 12.5px !important;
+    font-size: 8px !important; /* Ultra reduced */
   }
   
   .MuiButton-root {
-    font-size: 0.775rem !important;
+    font-size: 0.6rem !important; /* Ultra reduced */
+    padding: 2px 6px !important; /* Ultra reduced */
+  }
+  
+  .chart-container {
+    min-height: 100px !important; /* Ultra reduced */
+  }
+}
+
+/* Laptop/Desktop Specific Adjustments */
+@media (min-width: 1025px) {
+  body {
+    font-size: 7px !important; /* Ultra reduced */
+  }
+  
+  .chart-container {
+    min-height: 120px !important; /* Ultra reduced */
+  }
+  
+  .MuiPaper-root {
+    padding: 2px !important; /* Ultra reduced */
   }
 }
 
