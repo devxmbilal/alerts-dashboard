@@ -379,7 +379,7 @@ export default function Dashboard() {
           );
         case "filters":
           return (
-            <Box sx={{ height: "calc(100vh - 100px)", minHeight: "250px" }}>
+            <Box sx={{ height: "calc(100dvh - 100px)", minHeight: "250px" }}>
               <FilterSidebar
                 ref={filterSidebarRef}
                 selectedSymbol={selectedCoin}
@@ -390,7 +390,7 @@ export default function Dashboard() {
           );
         case "market":
           return (
-            <Box sx={{ height: "calc(100vh - 100px)", minHeight: "250px" }}>
+            <Box sx={{ height: "calc(100dvh - 100px)", minHeight: "250px" }}>
               <MarketPanel
                 ref={marketPanelRef}
                 onSelectCoin={handleCoinSelect}
@@ -421,14 +421,14 @@ export default function Dashboard() {
 
     // Desktop layout
     return (
-      <Grid container spacing={1} sx={{ height: "100vh" }}>
+      <Grid container spacing={1} sx={{ height: "100dvh" }}>
         {/* Left Sidebar - Filters (Conditional) */}
         {filterSidebarOpen && (
           <Grid item xs={12} md={3}>
             <Paper
               sx={{
-                height: "100vh",
-                maxHeight: "100vh",
+                height: "100dvh",
+                maxHeight: "100dvh",
                 backgroundColor: "#1a1a1a",
                 border: "1px solid #333",
                 borderRadius: 2,
@@ -449,26 +449,26 @@ export default function Dashboard() {
 
         {/* Main Content Area - Dynamic width based on filter sidebar */}
         <Grid item xs={12} md={filterSidebarOpen ? 6 : 9}>
-            <Box
+          <Box
+            sx={{
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+              gap: 0.5,
+            }}
+          >
+            {/* Chart Section - Full Height */}
+            <Paper
               sx={{
+                flex: 1,
+                backgroundColor: "#1a1a1a",
+                border: "1px solid #333",
+                borderRadius: 2,
+                overflow: "hidden",
+                minHeight: "200px",
                 height: "100%",
-                display: "flex",
-                flexDirection: "column",
-                gap: 0.5,
               }}
             >
-            {/* Chart Section - Full Height */}
-              <Paper
-                sx={{
-                  flex: 1,
-                  backgroundColor: "#1a1a1a",
-                  border: "1px solid #333",
-                  borderRadius: 2,
-                  overflow: "hidden",
-                  minHeight: "200px",
-                  height: "100%",
-                }}
-              >
               <TradingViewChart
                 key={`${selectedCoin}-${selectedTimeframe}`}
                 symbol={selectedCoin}
@@ -482,8 +482,8 @@ export default function Dashboard() {
         <Grid item xs={12} md={3}>
           <Paper
             sx={{
-              height: "100vh", // Fixed full height
-              maxHeight: "100vh", // Maximum height
+              height: "100dvh", // Fixed full height
+              maxHeight: "100dvh", // Maximum height
               backgroundColor: "#1a1a1a",
               border: "1px solid #333",
               borderRadius: 2,
@@ -538,6 +538,21 @@ export default function Dashboard() {
             sx={{
               minHeight: "100vh",
               backgroundColor: "#0a0a0a",
+              // Slightly increase font sizes only on dashboard
+              "& .MuiTypography-root": {
+                fontSize: {
+                  xs: "1.02rem",
+                  sm: "1.04rem",
+                  md: "1.06rem",
+                },
+              },
+              "& .MuiTypography-h5": {
+                fontSize: {
+                  xs: "1.25rem",
+                  sm: "1.3rem",
+                  md: "1.35rem",
+                },
+              },
             }}
           >
             {/* Header */}
@@ -626,12 +641,19 @@ export default function Dashboard() {
                   anchorEl={userMenuAnchor}
                   open={Boolean(userMenuAnchor)}
                   onClose={() => setUserMenuAnchor(null)}
+                  anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+                  transformOrigin={{ vertical: "top", horizontal: "right" }}
+                  keepMounted
+                  marginThreshold={8}
                   PaperProps={{
                     sx: {
                       backgroundColor: "#1a1a1a",
                       color: "white",
                       border: "1px solid #333",
+                      mt: 1,
+                      minWidth: 180,
                     },
+                    elevation: 8,
                   }}
                 >
                   <MenuItem
