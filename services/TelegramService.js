@@ -79,11 +79,11 @@ ${changeEmoji} Change: \`${
     }\`
 
 ━━━━━━━━━━━━━━━━━━━━
-🕐 *Timestamp*
+🕐 *Timestamp (PKT)*
 ━━━━━━━━━━━━━━━━━━━━
 
-⏰ Time: \`${new Date(triggeredAt).toLocaleTimeString()}\`
-📅 Date: \`${new Date(triggeredAt).toLocaleDateString()}\`
+⏰ Time: \`${new Date(triggeredAt).toLocaleTimeString('en-PK', { timeZone: 'Asia/Karachi', hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}\`
+📅 Date: \`${new Date(triggeredAt).toLocaleDateString('en-PK', { timeZone: 'Asia/Karachi', year: 'numeric', month: 'short', day: 'numeric' })}\`
 
 ━━━━━━━━━━━━━━━━━━━━
 
