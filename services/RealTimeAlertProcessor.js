@@ -701,7 +701,16 @@ class RealTimeAlertProcessor {
       );
 
       // Send real-time notification using saved alert history (with _id)
-      await this.sendRealTimeNotification(alert, liveData, savedAlertHistory);
+      // Fire and forget - don't block alert processing for notifications
+      // This allows Telegram notifications to be sent in parallel without blocking
+      this.sendRealTimeNotification(alert, liveData, savedAlertHistory).catch(
+        (error) => {
+          console.error(
+            `❌ Error sending notification for ${alert.symbol} (non-blocking):`,
+            error.message
+          );
+        }
+      );
 
       return true;
     } catch (error) {
@@ -1279,8 +1288,16 @@ class RealTimeAlertProcessor {
       }
 
       // Send real-time notification using saved alert history (with _id)
+      // Fire and forget - don't block alert processing for notifications
       if (savedHistory) {
-        await this.sendRealTimeNotification(alert, priceData, savedHistory);
+        this.sendRealTimeNotification(alert, priceData, savedHistory).catch(
+          (error) => {
+            console.error(
+              `❌ Error sending notification for ${alert.symbol} (non-blocking):`,
+              error.message
+            );
+          }
+        );
       } else {
         console.error(
           `❌ Cannot send notification: savedHistory is null for ${alert.symbol}`
@@ -1576,8 +1593,9 @@ class RealTimeAlertProcessor {
                 console.log(
                   `✅ Telegram message sent successfully to ${user.telegramChatId}`
                 );
-                // Mark as sent in database using atomic update (only if not already set)
-                const updateResult = await AlertHistory.findOneAndUpdate(
+                // Mark as sent in database using atomic update (non-blocking)
+                // Fire and forget - don't wait for DB update to complete
+                AlertHistory.findOneAndUpdate(
                   {
                     _id: alertHistory._id,
                     "notificationSent.telegram": { $ne: true }, // Only update if not already true
@@ -1586,17 +1604,24 @@ class RealTimeAlertProcessor {
                     $set: { "notificationSent.telegram": true },
                   },
                   { new: true }
-                );
-
-                if (updateResult) {
-                  console.log(
-                    `✅ Alert history ${alertHistory._id} marked as Telegram sent`
-                  );
-                } else {
-                  console.log(
-                    `⚠️ Alert history ${alertHistory._id} was already marked as Telegram sent (atomic check)`
-                  );
-                }
+                )
+                  .then((updateResult) => {
+                    if (updateResult) {
+                      console.log(
+                        `✅ Alert history ${alertHistory._id} marked as Telegram sent`
+                      );
+                    } else {
+                      console.log(
+                        `⚠️ Alert history ${alertHistory._id} was already marked as Telegram sent (atomic check)`
+                      );
+                    }
+                  })
+                  .catch((error) => {
+                    console.error(
+                      `❌ Error marking alert history ${alertHistory._id} as sent:`,
+                      error.message
+                    );
+                  });
               } else {
                 retryCount++;
                 if (retryCount < maxRetries) {
