@@ -8,6 +8,7 @@ import Alert from "../models/Alert.js";
 import AlertHistory from "../models/AlertHistory.js";
 import User from "../models/User.js";
 import AlertRedisService from "./AlertRedisService.js";
+import pLimit from "p-limit";
 import dotenv from "dotenv";
 dotenv.config();
 class RealTimeAlertProcessor {
@@ -22,6 +23,8 @@ class RealTimeAlertProcessor {
     this.currentRound = 0; // Track current processing round
     this.isRoundProcessing = false; // Prevent overlapping rounds
     this.roundInterval = null; // Round processing interval
+    // Concurrency limit for parallel alert processing (20-50 alerts at once)
+    this.processLimit = pLimit(50);
   }
 
   async loadAlertsFromRedis(userId) {
@@ -120,6 +123,7 @@ class RealTimeAlertProcessor {
 
       if (freshAlerts.length === 0) {
         console.log("⚠️ No active alerts found, skipping round");
+        this.isRoundProcessing = false;
         return;
       }
 
@@ -131,20 +135,38 @@ class RealTimeAlertProcessor {
         } symbols`
       );
 
-      // Step 3: Process each alert with live data
-      let processedCount = 0;
-      let triggeredCount = 0;
-
-      for (const alert of freshAlerts) {
-        const liveData = livePrices[alert.symbol];
-        if (liveData) {
-          const result = await this.processAlertWithLiveData(alert, liveData);
-          processedCount++;
-          if (result.triggered) {
-            triggeredCount++;
+      // Step 3: Process each alert with live data in parallel (with concurrency limit)
+      // Process alerts in parallel with concurrency limit (up to 50 at once)
+      const alertPromises = freshAlerts.map((alert) =>
+        this.processLimit(async () => {
+          try {
+            const liveData = livePrices[alert.symbol];
+            if (liveData) {
+              const result = await this.processAlertWithLiveData(
+                alert,
+                liveData
+              );
+              return result;
+            }
+            return { triggered: false, reason: "no_live_data" };
+          } catch (error) {
+            console.error(
+              `❌ Error processing alert ${alert._id} for ${alert.symbol}:`,
+              error.message
+            );
+            return { triggered: false, reason: "error", error: error.message };
           }
-        }
-      }
+        })
+      );
+
+      // Wait for all alerts to be processed (with concurrency limit)
+      const results = await Promise.all(alertPromises);
+
+      // Count processed and triggered alerts from results
+      const processedCount = results.length;
+      const triggeredCount = results.filter(
+        (r) => r && r.triggered === true
+      ).length;
 
       console.log(
         `✅ Round ${this.currentRound} completed: Processed ${processedCount} alerts, ${triggeredCount} triggered`
@@ -617,7 +639,21 @@ class RealTimeAlertProcessor {
 
       // Save to AlertHistory
       console.log(`📝 Saving alert history for ${alert.symbol}...`);
-      await AlertHistoryService.createAlertHistory(alertHistory);
+      const savedAlertHistory = await AlertHistoryService.createAlertHistory(
+        alertHistory
+      );
+
+      // CRITICAL: Use saved alert history with _id for notification
+      if (!savedAlertHistory || !savedAlertHistory._id) {
+        console.error(
+          `❌ Failed to save alert history for ${alert.symbol}, cannot send notifications`
+        );
+        return false;
+      }
+
+      console.log(
+        `✅ Alert history saved: ${savedAlertHistory._id} for ${alert.symbol}`
+      );
 
       // Update alert with latest price and new baseline
       const updateData = {
@@ -652,8 +688,8 @@ class RealTimeAlertProcessor {
         `✅ Alert ${alert._id} updated with new baseline price: ${liveData.price}`
       );
 
-      // Send real-time notification
-      await this.sendRealTimeNotification(alert, liveData, alertHistory);
+      // Send real-time notification using saved alert history (with _id)
+      await this.sendRealTimeNotification(alert, liveData, savedAlertHistory);
 
       return true;
     } catch (error) {
@@ -1113,10 +1149,17 @@ class RealTimeAlertProcessor {
       );
 
       // Save alert history (only once per trigger)
+      let savedHistory = null;
       try {
-        const savedHistory = await AlertHistoryService.createAlertHistory(
+        savedHistory = await AlertHistoryService.createAlertHistory(
           alertHistory
         );
+        if (!savedHistory || !savedHistory._id) {
+          console.error(
+            `❌ Failed to save alert history for ${alert.symbol}, savedHistory is invalid`
+          );
+          return false;
+        }
         console.log(`✅ Alert history saved successfully: ${savedHistory._id}`);
         console.log(`✅ Alert history details:`, {
           id: savedHistory._id,
@@ -1223,8 +1266,14 @@ class RealTimeAlertProcessor {
         }
       }
 
-      // Send real-time notification (we'll implement this)
-      this.sendRealTimeNotification(alert, priceData, alertHistory);
+      // Send real-time notification using saved alert history (with _id)
+      if (savedHistory) {
+        await this.sendRealTimeNotification(alert, priceData, savedHistory);
+      } else {
+        console.error(
+          `❌ Cannot send notification: savedHistory is null for ${alert.symbol}`
+        );
+      }
 
       return true;
     } catch (error) {
@@ -1273,6 +1322,10 @@ class RealTimeAlertProcessor {
 
   async sendRealTimeNotification(alert, priceData, alertHistory) {
     try {
+      console.log(
+        `📢 sendRealTimeNotification called for ${alert.symbol}, alertHistory._id: ${alertHistory._id}`
+      );
+
       // Get user info for email and telegram
       const user = await User.findById(alert.userId)
         .select("email telegramChatId notificationPreferences")
@@ -1447,12 +1500,41 @@ class RealTimeAlertProcessor {
         }
       }
 
-      // Send Telegram notification if enabled AND not already sent
+      // Check if Telegram notification should be sent
+      // First check from database to ensure we have fresh data
+      let shouldSendTelegram = false;
       if (
         user.notificationPreferences?.telegram &&
         user.telegramChatId &&
-        !alertHistory.notificationSent?.telegram
+        alertHistory._id
       ) {
+        try {
+          // Fetch fresh alert history from database to check notificationSent status
+          const freshHistory = await AlertHistory.findById(
+            alertHistory._id
+          ).lean();
+          if (freshHistory && !freshHistory.notificationSent?.telegram) {
+            shouldSendTelegram = true;
+            console.log(
+              `📱 Telegram notification should be sent for alert history ${alertHistory._id}`
+            );
+          } else if (freshHistory?.notificationSent?.telegram) {
+            console.log(
+              `⚠️ Telegram already sent for alert history ${alertHistory._id}, skipping`
+            );
+          }
+        } catch (dbError) {
+          console.error(
+            `❌ Error checking alert history status:`,
+            dbError.message
+          );
+          // Fallback: assume we should send if basic checks pass
+          shouldSendTelegram = !alertHistory.notificationSent?.telegram;
+        }
+      }
+
+      // Send Telegram notification if enabled AND not already sent
+      if (shouldSendTelegram) {
         console.log(
           `📱 Sending Telegram message to ${user.telegramChatId} for alert history ${alertHistory._id}...`
         );
@@ -1467,7 +1549,7 @@ class RealTimeAlertProcessor {
             // Only add delay for retries, not first attempt (immediate send)
             if (retryCount > 0) {
               // Fixed 1 second delay per retry (max 2 retries = 2 seconds total, within 3 second limit)
-              const delay = 1000; // 1 second per retry
+              const delay = 1100; // 1 second per retry
               console.log(
                 `🔄 Retry ${retryCount}/${maxRetries - 1} after ${delay}ms...`
               );
@@ -1515,21 +1597,23 @@ class RealTimeAlertProcessor {
         }
 
         // Removed unnecessary delay - Telegram messages should be sent immediately
-      } else if (alertHistory.notificationSent?.telegram) {
-        console.log(
-          `⚠️ Telegram notification already sent for alert history ${alertHistory._id}, skipping`
-        );
       } else {
-        console.log(`⚠️ Telegram notification skipped:`, {
-          telegramEnabled: user.notificationPreferences?.telegram,
-          hasTelegramChatId: !!user.telegramChatId,
-          alreadySent: alertHistory.notificationSent?.telegram,
-          reason: !user.notificationPreferences?.telegram
-            ? "Telegram disabled in preferences"
-            : !user.telegramChatId
-            ? "No Telegram chat ID"
-            : "Already sent",
-        });
+        // Telegram notification was not sent - log the reason
+        console.log(
+          `⚠️ Telegram notification skipped for alert history ${alertHistory._id}:`,
+          {
+            telegramEnabled: user.notificationPreferences?.telegram,
+            hasTelegramChatId: !!user.telegramChatId,
+            hasAlertHistoryId: !!alertHistory._id,
+            reason: !user.notificationPreferences?.telegram
+              ? "Telegram disabled in preferences"
+              : !user.telegramChatId
+              ? "No Telegram chat ID"
+              : !alertHistory._id
+              ? "No alert history ID"
+              : "Already sent or check failed",
+          }
+        );
       }
 
       console.log(`📢 Notification: ${alert.symbol} alert triggered!`);
