@@ -688,6 +688,18 @@ class RealTimeAlertProcessor {
         `✅ Alert ${alert._id} updated with new baseline price: ${liveData.price}`
       );
 
+      // Log savedAlertHistory before sending notification
+      console.log(
+        `📤 About to send notification for ${alert.symbol}, savedAlertHistory:`,
+        {
+          _id: savedAlertHistory._id,
+          symbol: savedAlertHistory.symbol,
+          notificationSent: savedAlertHistory.notificationSent,
+          notificationSentTelegram:
+            savedAlertHistory.notificationSent?.telegram,
+        }
+      );
+
       // Send real-time notification using saved alert history (with _id)
       await this.sendRealTimeNotification(alert, liveData, savedAlertHistory);
 
@@ -1501,102 +1513,114 @@ class RealTimeAlertProcessor {
       }
 
       // Check if Telegram notification should be sent
-      // First check from database to ensure we have fresh data
-      let shouldSendTelegram = false;
-      if (
+      // Since alertHistory was just saved, it should be fresh and notificationSent should not be set
+      // We'll use atomic update in the sending logic to prevent duplicates
+      const shouldSendTelegram =
         user.notificationPreferences?.telegram &&
         user.telegramChatId &&
-        alertHistory._id
-      ) {
-        try {
-          // Fetch fresh alert history from database to check notificationSent status
-          const freshHistory = await AlertHistory.findById(
-            alertHistory._id
-          ).lean();
-          if (freshHistory && !freshHistory.notificationSent?.telegram) {
-            shouldSendTelegram = true;
-            console.log(
-              `📱 Telegram notification should be sent for alert history ${alertHistory._id}`
-            );
-          } else if (freshHistory?.notificationSent?.telegram) {
-            console.log(
-              `⚠️ Telegram already sent for alert history ${alertHistory._id}, skipping`
-            );
-          }
-        } catch (dbError) {
-          console.error(
-            `❌ Error checking alert history status:`,
-            dbError.message
-          );
-          // Fallback: assume we should send if basic checks pass
-          shouldSendTelegram = !alertHistory.notificationSent?.telegram;
+        alertHistory._id;
+
+      console.log(
+        `🔍 Checking Telegram notification for alertHistory ${alertHistory._id}:`,
+        {
+          telegramEnabled: user.notificationPreferences?.telegram,
+          hasTelegramChatId: !!user.telegramChatId,
+          hasAlertHistoryId: !!alertHistory._id,
+          shouldSendTelegram: shouldSendTelegram,
+          notificationSent: alertHistory.notificationSent,
         }
-      }
+      );
 
-      // Send Telegram notification if enabled AND not already sent
+      // Send Telegram notification if enabled
+      // Atomic update will prevent duplicates if multiple alerts try to send simultaneously
       if (shouldSendTelegram) {
-        console.log(
-          `📱 Sending Telegram message to ${user.telegramChatId} for alert history ${alertHistory._id}...`
-        );
+        // First, atomically check if notification was already sent
+        // This prevents multiple parallel attempts from sending the same notification
+        const checkResult = await AlertHistory.findOne({
+          _id: alertHistory._id,
+          "notificationSent.telegram": { $ne: true }, // Only if not already sent
+        }).lean();
 
-        // Retry logic: try up to 3 times with minimal delay (max 3 seconds total)
-        let telegramSent = false;
-        let retryCount = 0;
-        const maxRetries = 3;
+        if (!checkResult) {
+          console.log(
+            `⚠️ Alert history ${alertHistory._id} already has Telegram notification sent, skipping`
+          );
+        } else {
+          console.log(
+            `📱 Sending Telegram message to ${user.telegramChatId} for alert history ${alertHistory._id}...`
+          );
 
-        while (!telegramSent && retryCount < maxRetries) {
-          try {
-            // Only add delay for retries, not first attempt (immediate send)
-            if (retryCount > 0) {
-              // Fixed 1 second delay per retry (max 2 retries = 2 seconds total, within 3 second limit)
-              const delay = 1100; // 1 second per retry
-              console.log(
-                `🔄 Retry ${retryCount}/${maxRetries - 1} after ${delay}ms...`
-              );
-              await new Promise((resolve) => setTimeout(resolve, delay));
-            }
+          // Retry logic: try up to 3 times with minimal delay (max 3 seconds total)
+          let telegramSent = false;
+          let retryCount = 0;
+          const maxRetries = 3;
 
-            telegramSent = await TelegramService.sendAlertMessage(
-              user.telegramChatId,
-              alertData
-            );
-
-            if (telegramSent) {
-              console.log(
-                `✅ Telegram message sent successfully to ${user.telegramChatId}`
-              );
-              // Mark as sent in database
-              await AlertHistory.findByIdAndUpdate(alertHistory._id, {
-                "notificationSent.telegram": true,
-              });
-              console.log(
-                `✅ Alert history ${alertHistory._id} marked as Telegram sent`
-              );
-            } else {
-              retryCount++;
-              if (retryCount < maxRetries) {
+          while (!telegramSent && retryCount < maxRetries) {
+            try {
+              // Only add delay for retries, not first attempt (immediate send)
+              if (retryCount > 0) {
+                // Fixed 1 second delay per retry (max 2 retries = 2 seconds total, within 3 second limit)
+                const delay = 1100; // 1 second per retry
                 console.log(
-                  `⚠️ Telegram send failed, will retry (${retryCount}/${
-                    maxRetries - 1
-                  })`
+                  `🔄 Retry ${retryCount}/${maxRetries - 1} after ${delay}ms...`
+                );
+                await new Promise((resolve) => setTimeout(resolve, delay));
+              }
+
+              telegramSent = await TelegramService.sendAlertMessage(
+                user.telegramChatId,
+                alertData
+              );
+
+              if (telegramSent) {
+                console.log(
+                  `✅ Telegram message sent successfully to ${user.telegramChatId}`
+                );
+                // Mark as sent in database using atomic update (only if not already set)
+                const updateResult = await AlertHistory.findOneAndUpdate(
+                  {
+                    _id: alertHistory._id,
+                    "notificationSent.telegram": { $ne: true }, // Only update if not already true
+                  },
+                  {
+                    $set: { "notificationSent.telegram": true },
+                  },
+                  { new: true }
+                );
+
+                if (updateResult) {
+                  console.log(
+                    `✅ Alert history ${alertHistory._id} marked as Telegram sent`
+                  );
+                } else {
+                  console.log(
+                    `⚠️ Alert history ${alertHistory._id} was already marked as Telegram sent (atomic check)`
+                  );
+                }
+              } else {
+                retryCount++;
+                if (retryCount < maxRetries) {
+                  console.log(
+                    `⚠️ Telegram send failed, will retry (${retryCount}/${
+                      maxRetries - 1
+                    })`
+                  );
+                }
+              }
+            } catch (error) {
+              retryCount++;
+              console.error(
+                `❌ Error sending Telegram message (attempt ${retryCount}/${maxRetries}):`,
+                error.message
+              );
+              if (retryCount >= maxRetries) {
+                console.error(
+                  `❌ Failed to send Telegram message after ${maxRetries} attempts`
                 );
               }
             }
-          } catch (error) {
-            retryCount++;
-            console.error(
-              `❌ Error sending Telegram message (attempt ${retryCount}/${maxRetries}):`,
-              error.message
-            );
-            if (retryCount >= maxRetries) {
-              console.error(
-                `❌ Failed to send Telegram message after ${maxRetries} attempts`
-              );
-            }
-          }
-        }
-
-        // Removed unnecessary delay - Telegram messages should be sent immediately
+          } // End of while loop
+        } // End of else block for checkResult
       } else {
         // Telegram notification was not sent - log the reason
         console.log(
