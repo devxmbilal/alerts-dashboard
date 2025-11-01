@@ -5,6 +5,7 @@ import NotificationService from "./NotificationService.js";
 import EmailService from "./EmailService.js";
 import TelegramService from "./TelegramService.js";
 import Alert from "../models/Alert.js";
+import AlertHistory from "../models/AlertHistory.js";
 import User from "../models/User.js";
 import AlertRedisService from "./AlertRedisService.js";
 import dotenv from "dotenv";
@@ -614,7 +615,6 @@ class RealTimeAlertProcessor {
         conditions: this.getAlertConditionsText(alert.conditions),
       };
 
-
       // Save to AlertHistory
       console.log(`📝 Saving alert history for ${alert.symbol}...`);
       await AlertHistoryService.createAlertHistory(alertHistory);
@@ -1196,7 +1196,9 @@ class RealTimeAlertProcessor {
       if (updatedConditions) {
         alert.conditions = updatedConditions;
       }
-      console.log(`🔄 In-memory alert updated with new baseline: ${priceData.price}`);
+      console.log(
+        `🔄 In-memory alert updated with new baseline: ${priceData.price}`
+      );
 
       // Update the alert in activeAlerts map
       const alertsForSymbol = this.activeAlerts.get(alert.symbol);
@@ -1300,13 +1302,19 @@ class RealTimeAlertProcessor {
         alertId: alert._id,
         userId: alert.userId,
         // Add detailed alert info for frontend display
-        targetValue: alert.alertConditions?.changePercent?.percentage || alert.conditions?.changePercent?.percentage,
+        targetValue:
+          alert.alertConditions?.changePercent?.percentage ||
+          alert.conditions?.changePercent?.percentage,
         actualValue: priceData.priceChangePercent,
         direction:
-          (alert.alertConditions?.changePercent?.direction || alert.conditions?.changePercent?.direction) === "increase"
+          (alert.alertConditions?.changePercent?.direction ||
+            alert.conditions?.changePercent?.direction) === "increase"
             ? "increase"
             : "decrease",
-        timeframe: alert.alertConditions?.changePercent?.timeframe || alert.conditions?.changePercent?.timeframe || "5MIN",
+        timeframe:
+          alert.alertConditions?.changePercent?.timeframe ||
+          alert.conditions?.changePercent?.timeframe ||
+          "5MIN",
         baselinePrice: alertHistory.baselineData?.baselinePrice,
         changeFromBaselinePercent:
           alertHistory.baselineData?.changeFromBaselinePercent,
@@ -1330,7 +1338,9 @@ class RealTimeAlertProcessor {
 
       // Send notification via SSE stream
       await NotificationService.sendNotification(alert.userId, notification);
-      console.log(`✅ Real-time notification sent successfully for ${alert.symbol}`);
+      console.log(
+        `✅ Real-time notification sent successfully for ${alert.symbol}`
+      );
 
       // CRITICAL FIX: Also publish to Redis for real-time alerts
       try {
@@ -1366,17 +1376,25 @@ class RealTimeAlertProcessor {
 
         // Publish to alert triggers channel for real-time updates
         await redis.publish("alert:triggers", JSON.stringify(alertData));
-        console.log(`🚨 Alert published to Redis for ${alert.symbol}:`, alertData);
+        console.log(
+          `🚨 Alert published to Redis for ${alert.symbol}:`,
+          alertData
+        );
 
         // Also publish to notifications channel for header badge updates
-        await redis.publish("notifications:alerts", JSON.stringify({
-          type: "new_alert",
-          userId: alert.userId,
-          symbol: alert.symbol,
-          timestamp: new Date(),
-          alertId: alert._id,
-        }));
-        console.log(`📢 Alert notification published to Redis for user ${alert.userId}`);
+        await redis.publish(
+          "notifications:alerts",
+          JSON.stringify({
+            type: "new_alert",
+            userId: alert.userId,
+            symbol: alert.symbol,
+            timestamp: new Date(),
+            alertId: alert._id,
+          })
+        );
+        console.log(
+          `📢 Alert notification published to Redis for user ${alert.userId}`
+        );
 
         await redis.quit();
       } catch (redisError) {
@@ -1429,26 +1447,88 @@ class RealTimeAlertProcessor {
         }
       }
 
-
-      // Send Telegram notification if enabled
-      if (user.notificationPreferences?.telegram && user.telegramChatId) {
-        console.log(`📱 Sending Telegram message to ${user.telegramChatId}...`);
-        const telegramSent = await TelegramService.sendAlertMessage(
-          user.telegramChatId,
-          alertData
+      // Send Telegram notification if enabled AND not already sent
+      if (
+        user.notificationPreferences?.telegram &&
+        user.telegramChatId &&
+        !alertHistory.notificationSent?.telegram
+      ) {
+        console.log(
+          `📱 Sending Telegram message to ${user.telegramChatId} for alert history ${alertHistory._id}...`
         );
-        if (telegramSent) {
-          console.log(`✅ Telegram message sent successfully`);
-        } else {
-          console.error(`❌ Failed to send Telegram message`);
+
+        // Retry logic: try up to 3 times with minimal delay (max 3 seconds total)
+        let telegramSent = false;
+        let retryCount = 0;
+        const maxRetries = 3;
+
+        while (!telegramSent && retryCount < maxRetries) {
+          try {
+            // Only add delay for retries, not first attempt (immediate send)
+            if (retryCount > 0) {
+              // Fixed 1 second delay per retry (max 2 retries = 2 seconds total, within 3 second limit)
+              const delay = 1000; // 1 second per retry
+              console.log(
+                `🔄 Retry ${retryCount}/${maxRetries - 1} after ${delay}ms...`
+              );
+              await new Promise((resolve) => setTimeout(resolve, delay));
+            }
+
+            telegramSent = await TelegramService.sendAlertMessage(
+              user.telegramChatId,
+              alertData
+            );
+
+            if (telegramSent) {
+              console.log(
+                `✅ Telegram message sent successfully to ${user.telegramChatId}`
+              );
+              // Mark as sent in database
+              await AlertHistory.findByIdAndUpdate(alertHistory._id, {
+                "notificationSent.telegram": true,
+              });
+              console.log(
+                `✅ Alert history ${alertHistory._id} marked as Telegram sent`
+              );
+            } else {
+              retryCount++;
+              if (retryCount < maxRetries) {
+                console.log(
+                  `⚠️ Telegram send failed, will retry (${retryCount}/${
+                    maxRetries - 1
+                  })`
+                );
+              }
+            }
+          } catch (error) {
+            retryCount++;
+            console.error(
+              `❌ Error sending Telegram message (attempt ${retryCount}/${maxRetries}):`,
+              error.message
+            );
+            if (retryCount >= maxRetries) {
+              console.error(
+                `❌ Failed to send Telegram message after ${maxRetries} attempts`
+              );
+            }
+          }
         }
+
+        // Removed unnecessary delay - Telegram messages should be sent immediately
+      } else if (alertHistory.notificationSent?.telegram) {
+        console.log(
+          `⚠️ Telegram notification already sent for alert history ${alertHistory._id}, skipping`
+        );
       } else {
         console.log(`⚠️ Telegram notification skipped:`, {
           telegramEnabled: user.notificationPreferences?.telegram,
           hasTelegramChatId: !!user.telegramChatId,
+          alreadySent: alertHistory.notificationSent?.telegram,
           reason: !user.notificationPreferences?.telegram
             ? "Telegram disabled in preferences"
-            : "No Telegram chat ID",
+            : !user.telegramChatId
+            ? "No Telegram chat ID"
+            : "Already sent",
         });
       }
 
