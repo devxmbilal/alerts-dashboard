@@ -186,6 +186,71 @@ class RealTimeAlertProcessor {
         `📊 Baseline: ${alert.baselinePrice}, Live: ${liveData.price}`
       );
 
+      // CRITICAL: Check if baseline needs to be updated based on timeframe
+      // If timeframe interval has passed, update baseline to current live price
+      if (alert.conditions?.changePercent?.timeframe) {
+        const timeframe = alert.conditions.changePercent.timeframe;
+        const timeframeMs = this.getTimeframeMs(timeframe);
+        const baselineTimestamp = alert.baselineTimestamp
+          ? new Date(alert.baselineTimestamp).getTime()
+          : Date.now();
+        const currentTime = Date.now();
+        const timeSinceBaseline = currentTime - baselineTimestamp;
+
+        // Check if timeframe interval has passed
+        if (timeSinceBaseline >= timeframeMs) {
+          console.log(
+            `⏰ Timeframe interval (${timeframe}) has passed for ${alert.symbol}`
+          );
+          console.log(
+            `📊 Updating baseline: ${alert.baselinePrice} → ${liveData.price}`
+          );
+
+          // Update baseline to current live price
+          alert.baselinePrice = liveData.price;
+          alert.baselineVolume = liveData.volume || liveData.volume24h;
+          alert.baselineTimestamp = new Date();
+
+          // Update in database (non-blocking)
+          Alert.findByIdAndUpdate(alert._id, {
+            baselinePrice: liveData.price,
+            baselineVolume: liveData.volume || liveData.volume24h,
+            baselineTimestamp: new Date(),
+          }).catch((error) => {
+            console.error(
+              `❌ Error updating baseline for ${alert.symbol}:`,
+              error.message
+            );
+          });
+
+          // Update in activeAlerts map
+          const alertsForSymbol = this.activeAlerts.get(alert.symbol);
+          if (alertsForSymbol) {
+            const alertIndex = alertsForSymbol.findIndex(
+              (a) => a._id.toString() === alert._id.toString()
+            );
+            if (alertIndex !== -1) {
+              alertsForSymbol[alertIndex] = alert;
+            }
+          }
+
+          console.log(
+            `✅ Baseline updated for ${alert.symbol}: New baseline = ${liveData.price}`
+          );
+        } else {
+          const remainingMs = timeframeMs - timeSinceBaseline;
+          const remainingMinutes = Math.ceil(remainingMs / (1000 * 60));
+          console.log(
+            `⏰ Timeframe interval (${timeframe}) not yet reached for ${alert.symbol}`
+          );
+          console.log(
+            `   Remaining time: ${remainingMinutes} minutes (${Math.ceil(
+              remainingMs / 1000
+            )} seconds)`
+          );
+        }
+      }
+
       // FIRST: Check if alert is locked (prevent duplicate triggers)
       if (isAlertLocked(alert)) {
         const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
@@ -865,6 +930,71 @@ class RealTimeAlertProcessor {
       console.log(
         `📊 Baseline: Price=${alert.baselinePrice}, Volume=${alert.baselineVolume}, Timestamp=${alert.baselineTimestamp}`
       );
+
+      // CRITICAL: Check if baseline needs to be updated based on timeframe
+      // If timeframe interval has passed, update baseline to current live price
+      if (alert.conditions?.changePercent?.timeframe) {
+        const timeframe = alert.conditions.changePercent.timeframe;
+        const timeframeMs = this.getTimeframeMs(timeframe);
+        const baselineTimestamp = alert.baselineTimestamp
+          ? new Date(alert.baselineTimestamp).getTime()
+          : Date.now();
+        const currentTime = Date.now();
+        const timeSinceBaseline = currentTime - baselineTimestamp;
+
+        // Check if timeframe interval has passed
+        if (timeSinceBaseline >= timeframeMs) {
+          console.log(
+            `⏰ Timeframe interval (${timeframe}) has passed for ${alert.symbol}`
+          );
+          console.log(
+            `📊 Updating baseline: ${alert.baselinePrice} → ${priceData.price}`
+          );
+
+          // Update baseline to current live price
+          alert.baselinePrice = priceData.price;
+          alert.baselineVolume = priceData.volume || priceData.volume24h;
+          alert.baselineTimestamp = new Date();
+
+          // Update in database (non-blocking)
+          Alert.findByIdAndUpdate(alert._id, {
+            baselinePrice: priceData.price,
+            baselineVolume: priceData.volume || priceData.volume24h,
+            baselineTimestamp: new Date(),
+          }).catch((error) => {
+            console.error(
+              `❌ Error updating baseline for ${alert.symbol}:`,
+              error.message
+            );
+          });
+
+          // Update in activeAlerts map
+          const alertsForSymbol = this.activeAlerts.get(alert.symbol);
+          if (alertsForSymbol) {
+            const alertIndex = alertsForSymbol.findIndex(
+              (a) => a._id.toString() === alert._id.toString()
+            );
+            if (alertIndex !== -1) {
+              alertsForSymbol[alertIndex] = alert;
+            }
+          }
+
+          console.log(
+            `✅ Baseline updated for ${alert.symbol}: New baseline = ${priceData.price}`
+          );
+        } else {
+          const remainingMs = timeframeMs - timeSinceBaseline;
+          const remainingMinutes = Math.ceil(remainingMs / (1000 * 60));
+          console.log(
+            `⏰ Timeframe interval (${timeframe}) not yet reached for ${alert.symbol}`
+          );
+          console.log(
+            `   Remaining time: ${remainingMinutes} minutes (${Math.ceil(
+              remainingMs / 1000
+            )} seconds)`
+          );
+        }
+      }
 
       // Check if alert is locked (temporary lock due to alert count)
       if (isAlertLocked(alert)) {
@@ -2262,25 +2392,43 @@ class RealTimeAlertProcessor {
 
   // Convert timeframe string to milliseconds
   getTimeframeMs(timeframe) {
-    const timeframes = {
-      "1m": 1 * 60 * 1000, // 1 minute
-      "2m": 2 * 60 * 1000, // 2 minutes
-      "3m": 3 * 60 * 1000, // 3 minutes
+    if (!timeframe) return 5 * 60 * 1000; // Default to 5 minutes
 
-      "5MIN": 5 * 60 * 1000, // 5 minutes (alternative format)
-      "10m": 10 * 60 * 1000, // 10 minutes
-      "15m": 15 * 60 * 1000, // 15 minutes
-      "30m": 30 * 60 * 1000, // 30 minutes
-      "1h": 60 * 60 * 1000, // 1 hour
-      "2h": 2 * 60 * 60 * 1000, // 2 hours
-      "4h": 4 * 60 * 60 * 1000, // 4 hours
-      "6h": 6 * 60 * 60 * 1000, // 6 hours
-      "8h": 8 * 60 * 60 * 1000, // 8 hours
-      "12h": 12 * 60 * 60 * 1000, // 12 hours
-      "1d": 24 * 60 * 60 * 1000, // 1 day
+    // Normalize timeframe (uppercase for consistency)
+    const normalized = timeframe.toUpperCase();
+
+    const timeframes = {
+      "1M": 1 * 60 * 1000, // 1 minute
+      "1MIN": 1 * 60 * 1000, // 1 minute
+      "2M": 2 * 60 * 1000, // 2 minutes
+      "2MIN": 2 * 60 * 1000, // 2 minutes
+      "3M": 3 * 60 * 1000, // 3 minutes
+      "3MIN": 3 * 60 * 1000, // 3 minutes
+      "5M": 5 * 60 * 1000, // 5 minutes
+      "5MIN": 5 * 60 * 1000, // 5 minutes (uppercase format)
+      "10M": 10 * 60 * 1000, // 10 minutes
+      "10MIN": 10 * 60 * 1000, // 10 minutes
+      "15M": 15 * 60 * 1000, // 15 minutes
+      "15MIN": 15 * 60 * 1000, // 15 minutes
+      "30M": 30 * 60 * 1000, // 30 minutes
+      "30MIN": 30 * 60 * 1000, // 30 minutes
+      "1H": 60 * 60 * 1000, // 1 hour
+      "1HR": 60 * 60 * 1000, // 1 hour
+      "2H": 2 * 60 * 60 * 1000, // 2 hours
+      "2HR": 2 * 60 * 60 * 1000, // 2 hours
+      "4H": 4 * 60 * 60 * 1000, // 4 hours
+      "4HR": 4 * 60 * 60 * 1000, // 4 hours
+      "6H": 6 * 60 * 60 * 1000, // 6 hours
+      "6HR": 6 * 60 * 60 * 1000, // 6 hours
+      "8H": 8 * 60 * 60 * 1000, // 8 hours
+      "8HR": 8 * 60 * 60 * 1000, // 8 hours
+      "12H": 12 * 60 * 60 * 1000, // 12 hours
+      "12HR": 12 * 60 * 60 * 1000, // 12 hours
+      "1D": 24 * 60 * 60 * 1000, // 1 day
+      "1DAY": 24 * 60 * 60 * 1000, // 1 day
     };
 
-    return timeframes[timeframe] || timeframes["5m"]; // Default to 5 minutes
+    return timeframes[normalized] || timeframes["5MIN"]; // Default to 5 minutes
   }
 
   // Get or create candle data for a symbol and timeframe
