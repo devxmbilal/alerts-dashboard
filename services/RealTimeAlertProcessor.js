@@ -438,44 +438,24 @@ class RealTimeAlertProcessor {
           )}`
         );
 
-        // Simple candle check based on current price vs open
-        if (candleCondition === "CANDLE_ABOVE_OPEN") {
-          if (
-            liveData.close &&
-            liveData.open &&
-            liveData.close > liveData.open
-          ) {
-            console.log(
-              `✅ Candle condition PASSED: Close (${liveData.close}) > Open (${liveData.open})`
-            );
-          } else {
-            console.log(`❌ Candle condition FAILED: Close not above Open`);
-            conditionsMet = false;
-          }
-        } else if (candleCondition === "BULLISH") {
-          // Bullish: close > open
-          if (
-            liveData.close &&
-            liveData.open &&
-            liveData.close > liveData.open
-          ) {
-            console.log(`✅ Bullish candle condition PASSED`);
-          } else {
-            console.log(`❌ Bullish candle condition FAILED`);
-            conditionsMet = false;
-          }
-        } else if (candleCondition === "BEARISH") {
-          // Bearish: close < open
-          if (
-            liveData.close &&
-            liveData.open &&
-            liveData.close < liveData.open
-          ) {
-            console.log(`✅ Bearish candle condition PASSED`);
-          } else {
-            console.log(`❌ Bearish candle condition FAILED`);
-            conditionsMet = false;
-          }
+        // Use the evaluateCandleConditions method for consistent logic
+        const candleMatch = this.evaluateCandleConditions(
+          conditions.candle,
+          liveData
+        );
+        if (!candleMatch) {
+          console.log(
+            `❌ Candle condition FAILED: ${candleCondition} not met for ${conditions.candle.timeframes.join(
+              ", "
+            )}`
+          );
+          conditionsMet = false;
+        } else {
+          console.log(
+            `✅ Candle condition PASSED: ${candleCondition} met for ${conditions.candle.timeframes.join(
+              ", "
+            )}`
+          );
         }
       }
 
@@ -1816,66 +1796,64 @@ class RealTimeAlertProcessor {
     }
 
     const condition = candleConditions.condition;
-    const body = Math.abs(close - open);
     const range = high - low;
-    const upperWick = high - Math.max(close, open);
-    const lowerWick = Math.min(close, open) - low;
 
     console.log(`🕯️ Candle Evaluation: ${condition}`);
     console.log(`   OHLC: O=${open}, H=${high}, L=${low}, C=${close}`);
-    console.log(`   Body=${body.toFixed(6)}, Range=${range.toFixed(6)}`);
+    console.log(`   Range: ${range.toFixed(6)} (High ${high} - Low ${low})`);
 
     switch (condition) {
       case "CANDLE_ABOVE_OPEN":
-      case "BULLISH":
         // Bullish candle: Close > Open
-        const isBullish = close > open;
+        const isAboveOpen = close > open;
         console.log(
-          `   Bullish check: ${isBullish} (Close ${close} > Open ${open})`
+          `   Candle Above Open check: ${isAboveOpen} (Close ${close} > Open ${open})`
         );
-        return isBullish;
-
-      case "CANDLE_BELOW_OPEN":
-      case "BEARISH":
-        // Bearish candle: Close < Open
-        const isBearish = close < open;
-        console.log(
-          `   Bearish check: ${isBearish} (Close ${close} < Open ${open})`
-        );
-        return isBearish;
-
-      case "DOJI":
-        // Doji: Very small body (< 0.1% of range)
-        const isDoji = body < range * 0.001;
-        console.log(
-          `   Doji check: ${isDoji} (Body ${body.toFixed(6)} < ${(
-            range * 0.001
-          ).toFixed(6)})`
-        );
-        return isDoji;
+        return isAboveOpen;
 
       case "HAMMER":
-        // Hammer: Small upper wick, long lower wick, small body at top
-        const isHammer =
-          close > open && // Bullish
-          lowerWick > body * 2 && // Long lower wick
-          upperWick < body * 0.5; // Small upper wick
-        console.log(`   Hammer check: ${isHammer}`);
+        // Hammer: Candle close above 30% from high to low
+        // Meaning: Close is in the upper 30% of the range (70%+ from low)
+        // Formula: (close - low) / (high - low) >= 0.70
+        if (range === 0) {
+          console.log(`   Hammer check: Range is 0, skipping`);
+          return false;
+        }
+        const closePositionFromLow = (close - low) / range;
+        const isHammer = closePositionFromLow >= 0.7; // Close in upper 30% of range
+        console.log(
+          `   Hammer check: ${isHammer} (Close position from low: ${(
+            closePositionFromLow * 100
+          ).toFixed(2)}%)`
+        );
+        console.log(
+          `   Close ${close} is ${(((close - low) / range) * 100).toFixed(
+            2
+          )}% from low (${low}) to high (${high})`
+        );
         return isHammer;
 
-      case "SHOOTING_STAR":
-        // Shooting Star: Long upper wick, small body at bottom
-        const isShootingStar =
-          close < open && // Bearish
-          upperWick > body * 2 && // Long upper wick
-          lowerWick < body * 0.5; // Small lower wick
-        console.log(`   Shooting Star check: ${isShootingStar}`);
-        return isShootingStar;
-
-      case "ENGULFING_BULLISH":
-        // Need previous candle data - skip for now
-        console.log(`   Engulfing patterns need historical data - skipping`);
-        return true;
+      case "INVERTED_HAMMER":
+        // Inverted Hammer: Candle close below 30% from low to high
+        // Meaning: Close is in the lower 30% of the range
+        // Formula: (close - low) / (high - low) <= 0.30
+        if (range === 0) {
+          console.log(`   Inverted Hammer check: Range is 0, skipping`);
+          return false;
+        }
+        const closePositionFromLowInv = (close - low) / range;
+        const isInvertedHammer = closePositionFromLowInv <= 0.3; // Close in lower 30% of range
+        console.log(
+          `   Inverted Hammer check: ${isInvertedHammer} (Close position from low: ${(
+            closePositionFromLowInv * 100
+          ).toFixed(2)}%)`
+        );
+        console.log(
+          `   Close ${close} is ${(((close - low) / range) * 100).toFixed(
+            2
+          )}% from low (${low}) to high (${high})`
+        );
+        return isInvertedHammer;
 
       default:
         console.log(`   Unknown candle condition: ${condition}`);

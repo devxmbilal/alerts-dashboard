@@ -65,7 +65,8 @@ async function testTelegramDemo() {
   };
 
   // Test chat ID (admin user's chat ID from database)
-  const testChatId = "5630545835";
+  //const testChatId = "5630545835";
+  const testChatId = "5550226808";
 
   console.log("\n📱 Sending Demo Alert Message...");
   console.log("Chat ID:", testChatId);

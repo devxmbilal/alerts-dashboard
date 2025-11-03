@@ -480,18 +480,11 @@ const FilterSidebar = forwardRef(
       { value: "W", label: "W" },
     ];
 
-    // Candle condition options - matching the image
+    // Candle condition options - only 3 options
     const candleConditionOptions = [
       { value: "CANDLE_ABOVE_OPEN", label: "Candle Above Open" },
-      { value: "CANDLE_BELOW_OPEN", label: "Candle Below Open" },
-      { value: "GREEN_CANDLE", label: "Green Candle (Close > Open)" },
-      { value: "RED_CANDLE", label: "Red Candle (Close < Open)" },
-      { value: "BULLISH_HAMMER", label: "Bullish Hammer" },
-      { value: "BEARISH_HAMMER", label: "Bearish Hammer" },
-      { value: "DOJI", label: "Doji (Open ≈ Close)" },
-      { value: "LONG_UPPER_WICK", label: "Long Upper Wick" },
-      { value: "LONG_LOWER_WICK", label: "Long Lower Wick" },
-      { value: "NONE", label: "None" },
+      { value: "HAMMER", label: "Hammer" },
+      { value: "INVERTED_HAMMER", label: "Inverted Hammer" },
     ];
 
     // RSI Range timeframe options - matching the image
