@@ -75,19 +75,15 @@ const alertSchema = new mongoose.Schema(
         },
         percentage: String,
       },
-      ema: {
+      openInterest: {
         timeframes: [String],
-        fast: {
+        direction: {
           type: String,
-          default: "12",
+          enum: ["INCREASING", "DECREASING", "ABOVE", "BELOW"],
+          default: "INCREASING",
         },
-        slow: {
+        percentage: {
           type: String,
-          default: "26",
-        },
-        condition: {
-          type: String,
-          default: "ABOVE",
         },
       },
     },
@@ -104,6 +100,9 @@ const alertSchema = new mongoose.Schema(
       required: true,
     },
     baselineVolume: {
+      type: Number,
+    },
+    baselineOpenInterest: {
       type: Number,
     },
     baselineTimestamp: {

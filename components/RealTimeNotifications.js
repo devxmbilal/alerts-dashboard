@@ -422,8 +422,10 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
         parts.push(`Volume: ${conditions.volume.condition}`);
       }
 
-      if (conditions.ema) {
-        parts.push(`EMA: ${conditions.ema.condition}`);
+      if (conditions.openInterest) {
+        parts.push(
+          `Open Interest: ${conditions.openInterest.direction}${conditions.openInterest.percentage ? ` ${conditions.openInterest.percentage}%` : ""}`
+        );
       }
 
       return parts.join(" • ");

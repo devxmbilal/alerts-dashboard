@@ -441,7 +441,8 @@ class RealTimeAlertProcessor {
         // Use the evaluateCandleConditions method for consistent logic
         const candleMatch = this.evaluateCandleConditions(
           conditions.candle,
-          liveData
+          liveData,
+          alert.symbol
         );
         if (!candleMatch) {
           console.log(
@@ -566,41 +567,19 @@ class RealTimeAlertProcessor {
         }
       }
 
-      // Check EMA conditions (optional)
+      // Check OPEN INTEREST conditions (optional)
       if (
         conditionsMet &&
-        conditions.ema &&
-        conditions.ema.timeframes &&
-        conditions.ema.timeframes.length > 0
+        conditions.openInterest &&
+        conditions.openInterest.timeframes &&
+        conditions.openInterest.timeframes.length > 0
       ) {
-        const fastEMA = parseInt(conditions.ema.fast || "12");
-        const slowEMA = parseInt(conditions.ema.slow || "26");
-        const emaCondition = conditions.ema.condition || "ABOVE";
-
-        console.log(
-          `📉 Checking EMA condition: Fast(${fastEMA}) ${emaCondition} Slow(${slowEMA}) on timeframes: ${conditions.ema.timeframes.join(
-            ", "
-          )}`
+        const openInterestMatch = await this.evaluateOpenInterestConditions(
+          conditions.openInterest,
+          alert,
+          liveData
         );
-
-        // Simplified EMA check using price momentum
-        // Real implementation would require historical price data for EMA calculation
-        const priceChange = parseFloat(liveData.priceChangePercent || 0);
-
-        // If price is trending up, assume fast EMA > slow EMA
-        // If price is trending down, assume fast EMA < slow EMA
-        const isFastAboveSlow = priceChange > 0;
-
-        if (emaCondition === "ABOVE" && isFastAboveSlow) {
-          console.log(
-            `✅ EMA condition PASSED: Fast EMA appears to be ABOVE Slow EMA (positive momentum)`
-          );
-        } else if (emaCondition === "BELOW" && !isFastAboveSlow) {
-          console.log(
-            `✅ EMA condition PASSED: Fast EMA appears to be BELOW Slow EMA (negative momentum)`
-          );
-        } else {
-          console.log(`❌ EMA condition FAILED`);
+        if (!openInterestMatch) {
           conditionsMet = false;
         }
       }
@@ -1113,7 +1092,8 @@ class RealTimeAlertProcessor {
       ) {
         const candleMatch = this.evaluateCandleConditions(
           conditions.candle,
-          priceData
+          priceData,
+          alert.symbol
         );
         if (!candleMatch) {
           conditionsMet = false;
@@ -1152,15 +1132,19 @@ class RealTimeAlertProcessor {
         }
       }
 
-      // Check EMA conditions (optional)
+      // Check OPEN INTEREST conditions (optional)
       if (
         conditionsMet &&
-        conditions.ema &&
-        conditions.ema.timeframes &&
-        conditions.ema.timeframes.length > 0
+        conditions.openInterest &&
+        conditions.openInterest.timeframes &&
+        conditions.openInterest.timeframes.length > 0
       ) {
-        const emaMatch = this.evaluateEMAConditions(conditions.ema, priceData);
-        if (!emaMatch) {
+        const openInterestMatch = await this.evaluateOpenInterestConditions(
+          conditions.openInterest,
+          alert,
+          priceData
+        );
+        if (!openInterestMatch) {
           conditionsMet = false;
         }
       }
@@ -1452,8 +1436,14 @@ class RealTimeAlertProcessor {
       parts.push(`Volume: ${conditions.volume.condition}`);
     }
 
-    if (conditions.ema) {
-      parts.push(`EMA: ${conditions.ema.condition}`);
+    if (conditions.openInterest) {
+      parts.push(
+        `Open Interest: ${conditions.openInterest.direction}${
+          conditions.openInterest.percentage
+            ? ` ${conditions.openInterest.percentage}%`
+            : ""
+        }`
+      );
     }
 
     return parts.join(", ");
@@ -1786,7 +1776,9 @@ class RealTimeAlertProcessor {
   }
 
   // Technical analysis helper methods
-  evaluateCandleConditions(candleConditions, priceData) {
+  evaluateCandleConditions(candleConditions, priceData, symbol = null) {
+    // Get current live price for timeframe confirmation
+    const currentPrice = priceData.price || priceData.close;
     const { open, high, low, close } = priceData;
 
     // Validate OHLC data
@@ -1796,6 +1788,7 @@ class RealTimeAlertProcessor {
     }
 
     const condition = candleConditions.condition;
+    const timeframes = candleConditions.timeframes || [];
     const range = high - low;
 
     console.log(`🕯️ Candle Evaluation: ${condition}`);
@@ -1812,47 +1805,148 @@ class RealTimeAlertProcessor {
         return isAboveOpen;
 
       case "HAMMER":
-        // Hammer: Candle close above 30% from high to low
-        // Meaning: Close is in the upper 30% of the range (70%+ from low)
-        // Formula: (close - low) / (high - low) >= 0.70
+        // Hammer: Bullish reversal pattern
+        // Conditions:
+        // 1. Open AND Close both in upper 30% of range (both >= 70% from low)
+        // 2. Current price (close) should be above open for confirmation
+        // Example: High=100, Low=80, Range=20, Upper 30% = 6, Top zone = 94
+        // Open=98 and Close=96 both >= 94 → Hammer ✅
         if (range === 0) {
           console.log(`   Hammer check: Range is 0, skipping`);
           return false;
         }
+
+        // Calculate positions from low
+        const openPositionFromLow = (open - low) / range;
         const closePositionFromLow = (close - low) / range;
-        const isHammer = closePositionFromLow >= 0.7; // Close in upper 30% of range
+
+        // Upper 30% zone: 70% and above (100% - 30% = 70%)
+        const upper30PercentThreshold = 0.7;
+
+        // Check: Both open and close in upper 30%
+        const bothInUpper30 =
+          openPositionFromLow >= upper30PercentThreshold &&
+          closePositionFromLow >= upper30PercentThreshold;
+
+        // Confirmation: Current live price above candle open (timeframe confirmation)
+        // For multiple timeframes: check if current price > open for ALL selected timeframes
+        let timeframeConfirmation = true;
+
+        if (timeframes.length > 0 && symbol) {
+          // Check confirmation for each selected timeframe
+          for (const timeframe of timeframes) {
+            const candle = this.getCandleData(symbol, timeframe);
+            if (candle && candle.open) {
+              const tfConfirmed = currentPrice > candle.open;
+              console.log(
+                `   Timeframe ${timeframe} confirmation: ${tfConfirmed} (Current ${currentPrice} > Open ${candle.open})`
+              );
+              if (!tfConfirmed) {
+                timeframeConfirmation = false;
+                break; // One timeframe failed, pattern invalid
+              }
+            }
+          }
+        } else {
+          // Fallback: use current priceData open for confirmation
+          timeframeConfirmation = currentPrice > open;
+        }
+
+        const isHammer = bothInUpper30 && timeframeConfirmation;
+
+        console.log(`   Hammer check: ${isHammer}`);
         console.log(
-          `   Hammer check: ${isHammer} (Close position from low: ${(
-            closePositionFromLow * 100
-          ).toFixed(2)}%)`
-        );
-        console.log(
-          `   Close ${close} is ${(((close - low) / range) * 100).toFixed(
+          `   Open position: ${(openPositionFromLow * 100).toFixed(
             2
-          )}% from low (${low}) to high (${high})`
+          )}% (${open}), Close position: ${(closePositionFromLow * 100).toFixed(
+            2
+          )}% (${close})`
         );
+        console.log(
+          `   Both in upper 30%: ${bothInUpper30} (Open >= 70%, Close >= 70%)`
+        );
+        console.log(
+          `   Timeframe confirmation: ${timeframeConfirmation} (Current Price ${currentPrice} > Open for all selected timeframes)`
+        );
+        console.log(
+          `   Range: ${range}, Upper 30% zone starts at: ${(
+            low +
+            range * 0.7
+          ).toFixed(2)}`
+        );
+
         return isHammer;
 
       case "INVERTED_HAMMER":
-        // Inverted Hammer: Candle close below 30% from low to high
-        // Meaning: Close is in the lower 30% of the range
-        // Formula: (close - low) / (high - low) <= 0.30
+        // Inverted Hammer: Bearish reversal pattern
+        // Conditions:
+        // 1. Open AND Close both in lower 30% of range (both <= 30% from low)
+        // Example: High=120, Low=100, Range=20, Lower 30% = 6, Bottom zone = 106
+        // Open=102 and Close=104 both <= 106 → Inverted Hammer ✅
         if (range === 0) {
           console.log(`   Inverted Hammer check: Range is 0, skipping`);
           return false;
         }
+
+        // Calculate positions from low
+        const openPositionFromLowInv = (open - low) / range;
         const closePositionFromLowInv = (close - low) / range;
-        const isInvertedHammer = closePositionFromLowInv <= 0.3; // Close in lower 30% of range
+
+        // Lower 30% zone: 30% and below
+        const lower30PercentThreshold = 0.3;
+
+        // Check: Both open and close in lower 30%
+        const bothInLower30 =
+          openPositionFromLowInv <= lower30PercentThreshold &&
+          closePositionFromLowInv <= lower30PercentThreshold;
+
+        // Confirmation: Current live price above candle open (timeframe confirmation)
+        // For multiple timeframes: check if current price > open for ALL selected timeframes
+        let timeframeConfirmationInv = true;
+
+        if (timeframes.length > 0 && symbol) {
+          // Check confirmation for each selected timeframe
+          for (const timeframe of timeframes) {
+            const candle = this.getCandleData(symbol, timeframe);
+            if (candle && candle.open) {
+              const tfConfirmed = currentPrice > candle.open;
+              console.log(
+                `   Timeframe ${timeframe} confirmation: ${tfConfirmed} (Current ${currentPrice} > Open ${candle.open})`
+              );
+              if (!tfConfirmed) {
+                timeframeConfirmationInv = false;
+                break; // One timeframe failed, pattern invalid
+              }
+            }
+          }
+        } else {
+          // Fallback: use current priceData open for confirmation
+          timeframeConfirmationInv = currentPrice > open;
+        }
+
+        const isInvertedHammer = bothInLower30 && timeframeConfirmationInv;
+
+        console.log(`   Inverted Hammer check: ${isInvertedHammer}`);
         console.log(
-          `   Inverted Hammer check: ${isInvertedHammer} (Close position from low: ${(
-            closePositionFromLowInv * 100
-          ).toFixed(2)}%)`
-        );
-        console.log(
-          `   Close ${close} is ${(((close - low) / range) * 100).toFixed(
+          `   Open position: ${(openPositionFromLowInv * 100).toFixed(
             2
-          )}% from low (${low}) to high (${high})`
+          )}% (${open}), Close position: ${(
+            closePositionFromLowInv * 100
+          ).toFixed(2)}% (${close})`
         );
+        console.log(
+          `   Both in lower 30%: ${bothInLower30} (Open <= 30%, Close <= 30%)`
+        );
+        console.log(
+          `   Timeframe confirmation: ${timeframeConfirmationInv} (Current Price ${currentPrice} > Open for all selected timeframes)`
+        );
+        console.log(
+          `   Range: ${range}, Lower 30% zone ends at: ${(
+            low +
+            range * 0.3
+          ).toFixed(2)}`
+        );
+
         return isInvertedHammer;
 
       default:
@@ -2022,109 +2116,160 @@ class RealTimeAlertProcessor {
     }
   }
 
-  evaluateEMAConditions(emaConditions, priceData) {
-    const { condition, fast, slow } = emaConditions;
-    const currentPrice = parseFloat(priceData.close || priceData.price) || 0;
-    const priceChangePercent = parseFloat(priceData.priceChangePercent) || 0;
+  async evaluateOpenInterestConditions(
+    openInterestConditions,
+    alert,
+    priceData
+  ) {
+    const { direction, timeframes, percentage } = openInterestConditions;
 
-    if (currentPrice === 0) {
-      console.log("⚠️ Price data missing, skipping EMA condition");
-      return true;
+    console.log(
+      `📊 Open Interest Evaluation: ${direction} on timeframes: ${timeframes.join(
+        ", "
+      )}${percentage ? ` (${percentage}%)` : ""}`
+    );
+
+    // Fetch open interest from Binance Futures API
+    let currentOpenInterest = priceData.openInterest || null;
+
+    if (!currentOpenInterest) {
+      try {
+        // Fetch from Binance Futures API
+        const futuresSymbol = alert.symbol.toUpperCase();
+        const response = await fetch(
+          `https://fapi.binance.com/fapi/v1/openInterest?symbol=${futuresSymbol}`
+        );
+        if (response.ok) {
+          const data = await response.json();
+          currentOpenInterest = parseFloat(data.openInterest || 0);
+          console.log(
+            `✅ Fetched Open Interest for ${alert.symbol}: ${currentOpenInterest}`
+          );
+        } else {
+          console.warn(
+            `⚠️ Could not fetch Open Interest for ${alert.symbol}: ${response.status}`
+          );
+          // If we can't fetch and no baseline exists, skip the condition
+          if (!alert.baselineOpenInterest) {
+            console.log(
+              "⚠️ No baseline Open Interest and could not fetch current. Skipping condition."
+            );
+            return true;
+          }
+        }
+      } catch (error) {
+        console.warn(
+          `⚠️ Error fetching Open Interest for ${alert.symbol}:`,
+          error.message
+        );
+        // If we can't fetch and no baseline exists, skip the condition
+        if (!alert.baselineOpenInterest) {
+          console.log(
+            "⚠️ No baseline Open Interest and fetch failed. Skipping condition."
+          );
+          return true;
+        }
+      }
     }
 
-    const fastPeriod = parseInt(fast) || 12;
-    const slowPeriod = parseInt(slow) || 26;
+    // Get baseline open interest from alert (should be stored when alert is created)
+    const baselineOpenInterest =
+      alert.baselineOpenInterest || currentOpenInterest;
 
-    console.log(`📊 EMA Evaluation: ${condition}`);
-    console.log(`   Fast EMA: ${fastPeriod}, Slow EMA: ${slowPeriod}`);
-    console.log(`   Current Price: ${currentPrice}`);
-    console.log(`   Price Change: ${priceChangePercent}%`);
+    if (!baselineOpenInterest) {
+      console.log(
+        "⚠️ Baseline Open Interest not found. Using current value as baseline."
+      );
+      // Store current as baseline for future comparisons
+      alert.baselineOpenInterest = currentOpenInterest;
+    }
 
-    // Simplified EMA estimation based on price trends
-    // In a real implementation, you'd calculate actual EMAs from historical data
-    // Here we use price change as a proxy for EMA positioning
-
-    // Estimate: If price is rising, fast EMA is likely above slow EMA
-    // If price is falling, fast EMA is likely below slow EMA
-    const estimatedFastEMA =
-      currentPrice * (1 + (priceChangePercent / 100) * 0.7);
-    const estimatedSlowEMA =
-      currentPrice * (1 + (priceChangePercent / 100) * 0.3);
+    const oiChange =
+      ((currentOpenInterest - baselineOpenInterest) / baselineOpenInterest) *
+      100;
 
     console.log(
-      `   Estimated Fast EMA (${fastPeriod}): ${estimatedFastEMA.toFixed(6)}`
+      `   Current OI: ${currentOpenInterest}, Baseline OI: ${baselineOpenInterest}`
     );
-    console.log(
-      `   Estimated Slow EMA (${slowPeriod}): ${estimatedSlowEMA.toFixed(6)}`
-    );
+    console.log(`   OI Change: ${oiChange.toFixed(2)}%`);
 
-    switch (condition) {
-      case "ABOVE":
-      case "BULLISH_CROSSOVER":
-        // Fast EMA above Slow EMA (bullish)
-        const isBullish = estimatedFastEMA > estimatedSlowEMA;
+    let conditionMet = false;
+
+    switch (direction) {
+      case "INCREASING":
+        conditionMet = oiChange > 0;
+        if (percentage) {
+          const threshold = parseFloat(percentage);
+          conditionMet = conditionMet && oiChange >= threshold;
+        }
         console.log(
-          `   Bullish check: Fast EMA ${estimatedFastEMA.toFixed(
-            6
-          )} > Slow EMA ${estimatedSlowEMA.toFixed(6)}? ${isBullish}`
+          `   INCREASING check: ${oiChange.toFixed(2)}% > 0${
+            percentage ? ` AND >= ${percentage}%` : ""
+          }? ${conditionMet}`
         );
-        return isBullish;
+        break;
+
+      case "DECREASING":
+        conditionMet = oiChange < 0;
+        if (percentage) {
+          const threshold = parseFloat(percentage);
+          conditionMet = conditionMet && Math.abs(oiChange) >= threshold;
+        }
+        console.log(
+          `   DECREASING check: ${oiChange.toFixed(2)}% < 0${
+            percentage ? ` AND |${oiChange.toFixed(2)}%| >= ${percentage}%` : ""
+          }? ${conditionMet}`
+        );
+        break;
+
+      case "ABOVE":
+        if (percentage) {
+          const threshold = parseFloat(percentage);
+          conditionMet = oiChange >= threshold;
+          console.log(
+            `   ABOVE check: ${oiChange.toFixed(
+              2
+            )}% >= ${threshold}%? ${conditionMet}`
+          );
+        } else {
+          // Without percentage, just check if OI is above baseline
+          conditionMet = currentOpenInterest > baselineOpenInterest;
+          console.log(
+            `   ABOVE check: ${currentOpenInterest} > ${baselineOpenInterest}? ${conditionMet}`
+          );
+        }
+        break;
 
       case "BELOW":
-      case "BEARISH_CROSSOVER":
-        // Fast EMA below Slow EMA (bearish)
-        const isBearish = estimatedFastEMA < estimatedSlowEMA;
-        console.log(
-          `   Bearish check: Fast EMA ${estimatedFastEMA.toFixed(
-            6
-          )} < Slow EMA ${estimatedSlowEMA.toFixed(6)}? ${isBearish}`
-        );
-        return isBearish;
-
-      case "PRICE_ABOVE_EMA":
-        // Price above both EMAs
-        const priceAbove = currentPrice > estimatedSlowEMA;
-        console.log(
-          `   Price Above EMA check: ${currentPrice} > ${estimatedSlowEMA}? ${priceAbove}`
-        );
-        return priceAbove;
-
-      case "PRICE_BELOW_EMA":
-        // Price below both EMAs
-        const priceBelow = currentPrice < estimatedSlowEMA;
-        console.log(
-          `   Price Below EMA check: ${currentPrice} < ${estimatedSlowEMA}? ${priceBelow}`
-        );
-        return priceBelow;
-
-      case "CONVERGING":
-        // EMAs are getting closer (difference < 1%)
-        const difference = Math.abs(estimatedFastEMA - estimatedSlowEMA);
-        const percentDiff = (difference / estimatedSlowEMA) * 100;
-        const isConverging = percentDiff < 1;
-        console.log(
-          `   Converging check: ${percentDiff.toFixed(
-            2
-          )}% difference < 1%? ${isConverging}`
-        );
-        return isConverging;
-
-      case "DIVERGING":
-        // EMAs are moving apart (difference > 2%)
-        const diff = Math.abs(estimatedFastEMA - estimatedSlowEMA);
-        const pctDiff = (diff / estimatedSlowEMA) * 100;
-        const isDiverging = pctDiff > 2;
-        console.log(
-          `   Diverging check: ${pctDiff.toFixed(
-            2
-          )}% difference > 2%? ${isDiverging}`
-        );
-        return isDiverging;
+        if (percentage) {
+          const threshold = parseFloat(percentage);
+          conditionMet = oiChange <= -threshold;
+          console.log(
+            `   BELOW check: ${oiChange.toFixed(
+              2
+            )}% <= -${threshold}%? ${conditionMet}`
+          );
+        } else {
+          // Without percentage, just check if OI is below baseline
+          conditionMet = currentOpenInterest < baselineOpenInterest;
+          console.log(
+            `   BELOW check: ${currentOpenInterest} < ${baselineOpenInterest}? ${conditionMet}`
+          );
+        }
+        break;
 
       default:
-        console.log(`   Unknown EMA condition: ${condition}`);
+        console.log(`   Unknown Open Interest direction: ${direction}`);
         return true;
     }
+
+    if (conditionMet) {
+      console.log(`✅ Open Interest condition PASSED: ${direction}`);
+    } else {
+      console.log(`❌ Open Interest condition FAILED: ${direction}`);
+    }
+
+    return conditionMet;
   }
 
   async getUserFavorites(userId) {

@@ -93,7 +93,11 @@ class AlertWorker {
   async handlePriceUpdate(priceData) {
     try {
       console.log(
-        `📡 Price update received for ${priceData.symbol}: Price=${priceData.price}, Volume=${priceData.volume24h || priceData.volume || 'N/A'}, Change=${priceData.priceChangePercent}%`
+        `📡 Price update received for ${priceData.symbol}: Price=${
+          priceData.price
+        }, Volume=${priceData.volume24h || priceData.volume || "N/A"}, Change=${
+          priceData.priceChangePercent
+        }%`
       );
 
       // Process the price update in real-time using RealTimeAlertProcessor
@@ -189,19 +193,19 @@ class AlertWorker {
         }
       }
 
-      // Check EMA conditions (optional)
+      // Check OPEN INTEREST conditions (optional)
+      // Note: Open Interest evaluation is handled in RealTimeAlertProcessor
+      // This worker may not have access to Open Interest data, so skip for now
+      // The RealTimeAlertProcessor will handle Open Interest conditions
       if (
-        conditions.ema &&
-        conditions.ema.timeframes &&
-        conditions.ema.timeframes.length > 0
+        conditions.openInterest &&
+        conditions.openInterest.timeframes &&
+        conditions.openInterest.timeframes.length > 0
       ) {
-        const emaMatch = await this.evaluateEMAConditions(
-          conditions.ema,
-          marketData
+        console.log(
+          `📊 Open Interest condition detected, but evaluation handled by RealTimeAlertProcessor`
         );
-        if (!emaMatch) {
-          return false;
-        }
+        // Return true to not block, RealTimeAlertProcessor will handle it
       }
 
       // Check Alert Count conditions (optional) - this is handled by the lock check above
@@ -279,18 +283,8 @@ class AlertWorker {
     }
   }
 
-  // Evaluate EMA conditions
-  async evaluateEMAConditions(emaConditions, marketData) {
-    try {
-      // TODO: Implement EMA calculation and crossover detection
-      // This would require historical price data to calculate EMAs
-      console.log(`📉 Evaluating EMA conditions for ${marketData.symbol}`);
-      return true; // Placeholder - implement actual EMA logic
-    } catch (error) {
-      console.error("❌ Error evaluating EMA conditions:", error);
-      return false;
-    }
-  }
+  // Open Interest evaluation is handled in RealTimeAlertProcessor
+  // This method is kept for backward compatibility but no longer used
 
   async triggerAlert(alert, marketData) {
     try {

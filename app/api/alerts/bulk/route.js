@@ -184,6 +184,42 @@ export async function POST(request) {
       }
     }
 
+    // Fetch open interest for symbols if openInterest condition is present
+    const openInterestData = {};
+    if (
+      conditions.openInterest &&
+      conditions.openInterest.timeframes?.length > 0
+    ) {
+      console.log("📊 Fetching Open Interest data from Binance Futures API...");
+      for (const symbol of favoriteSymbols) {
+        try {
+          // Convert spot symbol to futures symbol (e.g., BTCUSDT -> BTCUSDT)
+          const futuresSymbol = symbol.toUpperCase();
+          const response = await fetch(
+            `https://fapi.binance.com/fapi/v1/openInterest?symbol=${futuresSymbol}`
+          );
+          if (response.ok) {
+            const data = await response.json();
+            openInterestData[symbol] = parseFloat(data.openInterest || 0);
+            console.log(
+              `✅ Fetched Open Interest for ${symbol}: ${openInterestData[symbol]}`
+            );
+          } else {
+            console.warn(
+              `⚠️ Could not fetch Open Interest for ${symbol}: ${response.status}`
+            );
+            openInterestData[symbol] = null;
+          }
+        } catch (error) {
+          console.warn(
+            `⚠️ Error fetching Open Interest for ${symbol}:`,
+            error.message
+          );
+          openInterestData[symbol] = null;
+        }
+      }
+    }
+
     // Prepare alert documents for bulk insert
     const alertDocuments = favoriteSymbols.map((symbol) => {
       let alertConditions = { ...conditions };
@@ -204,16 +240,17 @@ export async function POST(request) {
       // Get current price for baseline
       const currentPrice = currentPrices[symbol]?.price || 0;
       const currentVolume = currentPrices[symbol]?.volume || 0;
+      const currentOpenInterest = openInterestData[symbol] || null;
 
       console.log(
-        `🔍 Debug - ${symbol}: currentPrice=${currentPrice}, currentVolume=${currentVolume}`
+        `🔍 Debug - ${symbol}: currentPrice=${currentPrice}, currentVolume=${currentVolume}, currentOpenInterest=${currentOpenInterest}`
       );
       console.log(
         `🔍 Debug - currentPrices[${symbol}]:`,
         currentPrices[symbol]
       );
 
-      return {
+      const alertDoc = {
         symbol: symbol,
         userId: decoded.userId,
         conditions: alertConditions,
@@ -230,6 +267,13 @@ export async function POST(request) {
         createdAt: new Date(),
         updatedAt: new Date(),
       };
+
+      // Add baselineOpenInterest if openInterest condition is present
+      if (currentOpenInterest !== null) {
+        alertDoc.baselineOpenInterest = currentOpenInterest;
+      }
+
+      return alertDoc;
     });
 
     // No need to remove undefined conditions since we only pass set conditions

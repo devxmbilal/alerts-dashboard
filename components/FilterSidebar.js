@@ -152,7 +152,7 @@ const FilterSidebar = forwardRef(
       candle: {},
       rsiRange: {},
       volume: {},
-      ema: {},
+      openInterest: {},
     });
 
     const [isCreating, setIsCreating] = useState(false);
@@ -174,7 +174,7 @@ const FilterSidebar = forwardRef(
           candle: {},
           rsiRange: {},
           volume: {},
-          ema: {},
+          openInterest: {},
         });
       },
     }));
@@ -309,7 +309,7 @@ const FilterSidebar = forwardRef(
         const hasVolume = Object.values(filters.volume).some(
           (value) => value === true
         );
-        const hasEma = Object.values(filters.ema).some(
+        const hasOpenInterest = Object.values(filters.openInterest).some(
           (value) => value === true
         );
 
@@ -359,17 +359,18 @@ const FilterSidebar = forwardRef(
           };
         }
 
-        if (hasEma) {
-          const emaTimeframes = Object.keys(filters.ema).filter(
+        if (hasOpenInterest) {
+          const openInterestTimeframes = Object.keys(
+            filters.openInterest
+          ).filter(
             (key) =>
-              !["fast", "slow", "condition"].includes(key) &&
-              filters.ema[key] === true
+              !["direction", "percentage"].includes(key) &&
+              filters.openInterest[key] === true
           );
-          alertConditions.ema = {
-            timeframes: emaTimeframes,
-            fast: filters.ema.fast || "12",
-            slow: filters.ema.slow || "26",
-            condition: filters.ema.condition || "ABOVE",
+          alertConditions.openInterest = {
+            timeframes: openInterestTimeframes,
+            direction: filters.openInterest.direction || "INCREASING",
+            percentage: filters.openInterest.percentage || "",
           };
         }
 
@@ -522,22 +523,21 @@ const FilterSidebar = forwardRef(
       { value: "BELOW", label: "BELOW" },
     ];
 
-    // EMA timeframe options - matching the image
-    const emaTimeframeOptions = [
+    // OPEN INTEREST timeframe options
+    const openInterestTimeframeOptions = [
+      { value: "1MIN", label: "1MIN" },
       { value: "5MIN", label: "5MIN" },
       { value: "15MIN", label: "15MIN" },
       { value: "1HR", label: "1HR" },
-      { value: "4HR", label: "4HR" },
-      { value: "12HR", label: "12HR" },
-      { value: "D", label: "D" },
+      { value: "4H", label: "4H" },
     ];
 
-    // EMA condition options - matching the image
-    const emaConditionOptions = [
+    // OPEN INTEREST direction options
+    const openInterestDirectionOptions = [
+      { value: "INCREASING", label: "INCREASING" },
+      { value: "DECREASING", label: "DECREASING" },
       { value: "ABOVE", label: "ABOVE" },
       { value: "BELOW", label: "BELOW" },
-      { value: "CROSSING_UP", label: "CROSSING UP" },
-      { value: "CROSSING_DOWN", label: "CROSSING DOWN" },
     ];
 
     return (
@@ -1009,7 +1009,7 @@ const FilterSidebar = forwardRef(
             </AccordionDetails>
           </DarkAccordion>
 
-          {/* EMA Filter */}
+          {/* OPEN INTEREST Filter */}
           <DarkAccordion>
             <AccordionSummary
               expandIcon={<ExpandMoreIcon sx={{ color: "white" }} />}
@@ -1017,21 +1017,21 @@ const FilterSidebar = forwardRef(
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <ShowChartIcon sx={{ color: "#3f51b5" }} />
                 <Typography sx={{ color: "white" }}>
-                  EMA Fast / Slow (Multiple)
+                  OPEN INTEREST (Multiple)
                 </Typography>
               </Box>
             </AccordionSummary>
             <AccordionDetails>
-              {/* Timeframe checkboxes in two rows */}
+              {/* Timeframe checkboxes */}
               <Grid container spacing={1} sx={{ mb: 2 }}>
-                {emaTimeframeOptions.map((option) => (
+                {openInterestTimeframeOptions.map((option) => (
                   <Grid item xs={4} key={option.value}>
                     <FormControlLabel
                       control={
                         <CustomCheckbox
-                          checked={filters.ema[option.value] || false}
+                          checked={filters.openInterest[option.value] || false}
                           onChange={() =>
-                            handleCheckboxChange("ema", option.value)
+                            handleCheckboxChange("openInterest", option.value)
                           }
                         />
                       }
@@ -1047,61 +1047,74 @@ const FilterSidebar = forwardRef(
                 ))}
               </Grid>
 
-              {/* Input fields */}
+              {/* Direction dropdown */}
               <Grid container spacing={2} sx={{ mb: 2 }}>
-                <Grid item xs={6}>
+                <Grid item xs={12}>
                   <CustomTextField
                     fullWidth
+                    select
                     size="small"
-                    label="Fast"
-                    value={filters.ema.fast || "12"}
+                    label="Direction"
+                    value={filters.openInterest.direction || "INCREASING"}
                     onChange={(e) =>
-                      handleInputChange("ema", "fast", e.target.value)
+                      handleInputChange(
+                        "openInterest",
+                        "direction",
+                        e.target.value
+                      )
                     }
-                  />
-                </Grid>
-                <Grid item xs={6}>
-                  <CustomTextField
-                    fullWidth
-                    size="small"
-                    label="Slow"
-                    value={filters.ema.slow || "26"}
-                    onChange={(e) =>
-                      handleInputChange("ema", "slow", e.target.value)
-                    }
-                  />
+                    SelectProps={{
+                      MenuProps: {
+                        PaperProps: {
+                          sx: {
+                            backgroundColor: "#1e1e1e",
+                            color: "white",
+                            "& .MuiMenuItem-root": {
+                              color: "white",
+                              "&:hover": {
+                                backgroundColor: "#333",
+                              },
+                              "&.Mui-selected": {
+                                backgroundColor: "#1890ff",
+                              },
+                            },
+                          },
+                        },
+                      },
+                    }}
+                  >
+                    {openInterestDirectionOptions.map((option) => (
+                      <MenuItem key={option.value} value={option.value}>
+                        {option.label}
+                      </MenuItem>
+                    ))}
+                  </CustomTextField>
                 </Grid>
               </Grid>
 
-              {/* Condition buttons */}
-              <Grid container spacing={1}>
-                {emaConditionOptions.map((option) => (
-                  <Grid item xs={12} key={option.value}>
-                    <Button
-                      fullWidth
-                      variant={
-                        filters.ema.condition === option.value
-                          ? "contained"
-                          : "outlined"
-                      }
-                      onClick={() =>
-                        handleInputChange("ema", "condition", option.value)
-                      }
-                      sx={{
-                        mb: 1,
-                        fontSize: "12px",
-                        textTransform: "none",
-                        borderColor: "#444",
-                        color: "white",
-                        "&:hover": {
-                          borderColor: "#666",
-                        },
-                      }}
-                    >
-                      {option.label}
-                    </Button>
-                  </Grid>
-                ))}
+              {/* Percentage input */}
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <CustomTextField
+                    fullWidth
+                    size="small"
+                    label="Percentage %"
+                    type="number"
+                    value={filters.openInterest.percentage || ""}
+                    onChange={(e) =>
+                      handleInputChange(
+                        "openInterest",
+                        "percentage",
+                        e.target.value
+                      )
+                    }
+                    InputProps={{
+                      endAdornment: (
+                        <InputAdornment position="end">%</InputAdornment>
+                      ),
+                    }}
+                  />
+                </Grid>
               </Grid>
             </AccordionDetails>
           </DarkAccordion>
@@ -1133,7 +1146,7 @@ const FilterSidebar = forwardRef(
                 candle: {},
                 rsiRange: {},
                 volume: {},
-                ema: {},
+                openInterest: {},
               });
             }}
             sx={{ mb: 1 }}
