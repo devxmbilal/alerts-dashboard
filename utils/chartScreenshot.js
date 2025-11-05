@@ -1,0 +1,335 @@
+import puppeteer from "puppeteer";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+class ChartScreenshotService {
+  constructor() {
+    this.browser = null;
+    this.isInitialized = false;
+    this.screenshotQueue = [];
+    this.isProcessing = false;
+  }
+
+  /**
+   * Initialize Puppeteer browser with optimized settings
+   */
+  async initialize() {
+    try {
+      // Force cleanup if browser exists but not properly initialized
+      if (this.browser) {
+        try {
+          await this.browser.close();
+        } catch (e) {
+          // Ignore close errors
+        }
+        this.browser = null;
+        this.isInitialized = false;
+      }
+
+      if (this.isInitialized && this.browser) {
+        return;
+      }
+
+      console.log("🚀 Initializing Puppeteer browser for chart screenshots...");
+
+      this.browser = await puppeteer.launch({
+        headless: "new", // Use new headless mode
+        pipe: true, // Use pipe instead of WebSocket for Windows compatibility
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-blink-features=AutomationControlled", // Hide automation
+          "--no-first-run",
+          "--disable-gpu",
+          "--window-size=800,400",
+          "--disable-web-security", // Allow cross-origin
+          "--disable-features=IsolateOrigins,site-per-process",
+        ],
+        defaultViewport: {
+          width: 800,
+          height: 400,
+        },
+        ignoreHTTPSErrors: true,
+        timeout: 60000, // Increase timeout for Windows
+      });
+
+      this.isInitialized = true;
+      console.log("✅ Puppeteer browser initialized successfully");
+    } catch (error) {
+      console.error("❌ Error initializing Puppeteer browser:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Capture TradingView chart screenshot
+   * @param {string} symbol - Trading pair symbol (e.g., VANAUSDT, BTCUSDT)
+   * @param {string} timeframe - Chart timeframe (1m, 5m, 15m, 1h, 4h, 1d)
+   * @returns {Promise<Buffer>} - Screenshot buffer
+   */
+  async captureChart(symbol, timeframe = "5m") {
+    let page = null;
+    
+    try {
+      // Initialize browser if not already done
+      if (!this.isInitialized) {
+        await this.initialize();
+      }
+
+      console.log(`[${symbol}] Starting chart screenshot capture...`);
+
+      // Create a new page
+      page = await this.browser.newPage();
+
+      // Set viewport for optimal chart display
+      await page.setViewport({
+        width: 800,
+        height: 400,
+        deviceScaleFactor: 2, // Higher resolution
+      });
+
+      // Set user agent to avoid being blocked
+      await page.setUserAgent(
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      );
+
+      // Hide webdriver property to avoid bot detection
+      await page.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, 'webdriver', {
+          get: () => false,
+        });
+        // Add Chrome object
+        window.chrome = {
+          runtime: {},
+        };
+        // Override permissions
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) =>
+          parameters.name === 'notifications'
+            ? Promise.resolve({ state: Notification.permission })
+            : originalQuery(parameters);
+      });
+
+      // Construct TradingView chart URL
+      const tradingViewUrl = this.constructTradingViewUrl(symbol, timeframe);
+      console.log(`[${symbol}] Loading TradingView chart: ${tradingViewUrl}`);
+
+      // Navigate to TradingView chart with timeout
+      try {
+        await page.goto(tradingViewUrl, {
+          waitUntil: "domcontentloaded", // More lenient than networkidle2
+          timeout: 45000, // Increased for Windows
+        });
+      } catch (navError) {
+        console.warn(`[${symbol}] Navigation with domcontentloaded failed, trying with load...`);
+        // Fallback: try with 'load' event
+        await page.goto(tradingViewUrl, {
+          waitUntil: "load",
+          timeout: 60000,
+        });
+      }
+
+      // Wait for chart to load
+      await page.waitForSelector("canvas", { timeout: 20000 });
+      console.log(`[${symbol}] Chart canvas found, waiting for render...`);
+
+      // Additional wait for chart rendering (increased for Windows)
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+
+      // Hide unnecessary elements (optional)
+      await page.evaluate(() => {
+        // Hide TradingView header/footer if needed
+        const elements = document.querySelectorAll(
+          ".tv-header, .tv-footer, .chart-controls-bar"
+        );
+        elements.forEach((el) => (el.style.display = "none"));
+      });
+
+      // Capture screenshot
+      const screenshot = await page.screenshot({
+        type: "jpeg",
+        quality: 85,
+        fullPage: false,
+      });
+
+      console.log(`[${symbol}] Screenshot captured successfully`);
+
+      return screenshot;
+    } catch (error) {
+      console.error(`[${symbol}] Error capturing chart screenshot:`, error);
+      throw error;
+    } finally {
+      // Always close the page to prevent memory leaks
+      if (page) {
+        await page.close();
+      }
+    }
+  }
+
+  /**
+   * Construct TradingView public chart URL
+   * @param {string} symbol - Trading pair symbol
+   * @param {string} timeframe - Chart timeframe
+   * @returns {string} - TradingView chart URL
+   */
+  constructTradingViewUrl(symbol, timeframe) {
+    // Map timeframe to TradingView format
+    const timeframeMap = {
+      "1m": "1",
+      "5m": "5",
+      "15m": "15",
+      "1h": "60",
+      "4h": "240",
+      "1d": "D",
+    };
+
+    const tvTimeframe = timeframeMap[timeframe.toLowerCase()] || "5";
+
+    // Construct URL for Binance trading pair
+    return `https://www.tradingview.com/chart/?symbol=BINANCE:${symbol}&interval=${tvTimeframe}`;
+  }
+
+  /**
+   * Capture multiple charts concurrently
+   * @param {Array<{symbol: string, timeframe: string}>} chartRequests
+   * @returns {Promise<Array<{symbol: string, screenshot: Buffer}>>}
+   */
+  async captureMultipleCharts(chartRequests) {
+    try {
+      console.log(`📊 Capturing ${chartRequests.length} charts concurrently...`);
+
+      const screenshots = await Promise.all(
+        chartRequests.map(async ({ symbol, timeframe }) => {
+          try {
+            const screenshot = await this.captureChart(symbol, timeframe);
+            return { symbol, screenshot, success: true };
+          } catch (error) {
+            console.error(`[${symbol}] Failed to capture chart:`, error);
+            return { symbol, screenshot: null, success: false };
+          }
+        })
+      );
+
+      const successCount = screenshots.filter((s) => s.success).length;
+      console.log(
+        `✅ Successfully captured ${successCount}/${chartRequests.length} charts`
+      );
+
+      return screenshots;
+    } catch (error) {
+      console.error("❌ Error capturing multiple charts:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Save screenshot to file (for testing/debugging)
+   * @param {Buffer} screenshot - Screenshot buffer
+   * @param {string} filename - Output filename
+   * @returns {Promise<string>} - File path
+   */
+  async saveScreenshot(screenshot, filename) {
+    try {
+      const tmpDir = path.join(__dirname, "..", "tmp");
+
+      // Create tmp directory if it doesn't exist
+      if (!fs.existsSync(tmpDir)) {
+        fs.mkdirSync(tmpDir, { recursive: true });
+      }
+
+      const filePath = path.join(tmpDir, filename);
+      fs.writeFileSync(filePath, screenshot);
+
+      console.log(`💾 Screenshot saved to: ${filePath}`);
+      return filePath;
+    } catch (error) {
+      console.error("❌ Error saving screenshot:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Clean up old screenshots from tmp directory
+   * @param {number} maxAgeMs - Maximum age in milliseconds
+   */
+  async cleanupOldScreenshots(maxAgeMs = 3600000) {
+    // Default: 1 hour
+    try {
+      const tmpDir = path.join(__dirname, "..", "tmp");
+
+      if (!fs.existsSync(tmpDir)) {
+        return;
+      }
+
+      const files = fs.readdirSync(tmpDir);
+      const now = Date.now();
+
+      files.forEach((file) => {
+        const filePath = path.join(tmpDir, file);
+        const stats = fs.statSync(filePath);
+
+        if (now - stats.mtimeMs > maxAgeMs) {
+          fs.unlinkSync(filePath);
+          console.log(`🗑️ Deleted old screenshot: ${file}`);
+        }
+      });
+    } catch (error) {
+      console.error("❌ Error cleaning up old screenshots:", error);
+    }
+  }
+
+  /**
+   * Close browser and cleanup
+   */
+  async shutdown() {
+    try {
+      if (this.browser) {
+        const pages = await this.browser.pages();
+        // Close all pages first
+        for (const page of pages) {
+          try {
+            await page.close();
+          } catch (e) {
+            // Ignore individual page errors
+          }
+        }
+        // Then close browser
+        await this.browser.close();
+        this.browser = null;
+        this.isInitialized = false;
+        console.log("✅ Puppeteer browser closed");
+      }
+    } catch (error) {
+      console.error("❌ Error shutting down Puppeteer browser:", error);
+      // Force null even on error
+      this.browser = null;
+      this.isInitialized = false;
+    }
+  }
+
+  /**
+   * Health check - verify browser is running
+   * @returns {boolean}
+   */
+  async healthCheck() {
+    try {
+      if (!this.browser || !this.isInitialized) {
+        return false;
+      }
+
+      const pages = await this.browser.pages();
+      return pages.length >= 0; // Browser is responsive
+    } catch (error) {
+      console.error("❌ Browser health check failed:", error);
+      return false;
+    }
+  }
+}
+
+// Export singleton instance
+export default new ChartScreenshotService();
