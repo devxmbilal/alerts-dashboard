@@ -26,6 +26,7 @@ class RealTimeAlertProcessor {
     this.roundInterval = null; // Round processing interval
     // Concurrency limit for parallel alert processing (20-50 alerts at once)
     this.processLimit = pLimit(50);
+    this.rsiData = new Map(); // Track RSI values for each symbol+timeframe: key = "symbol_timeframe_period", value = { current: number, previous: number }
   }
 
   async loadAlertsFromRedis(userId) {
@@ -473,40 +474,30 @@ class RealTimeAlertProcessor {
         conditions.rsiRange.timeframes &&
         conditions.rsiRange.timeframes.length > 0
       ) {
-        const rsiLevel = parseFloat(conditions.rsiRange.level || "70");
-        const rsiCondition = conditions.rsiRange.condition || "ABOVE";
-        const rsiPeriod = parseInt(conditions.rsiRange.period || "14");
-
         console.log(
-          `📊 Checking RSI condition: ${rsiCondition} ${rsiLevel} on timeframes: ${conditions.rsiRange.timeframes.join(
-            ", "
-          )}`
+          `📊 Checking RSI condition: ${conditions.rsiRange.condition} ${
+            conditions.rsiRange.level
+          } on timeframes: ${conditions.rsiRange.timeframes.join(", ")}`
         );
 
-        // Simplified RSI estimation based on price change
-        // Real implementation would require historical data
-        const priceChangePercent = Math.abs(
-          parseFloat(liveData.priceChangePercent || 0)
-        );
-        const estimatedRSI = 50 + priceChangePercent * 2; // Very simplified estimation
-
-        console.log(
-          `📊 Estimated RSI: ${estimatedRSI.toFixed(
-            2
-          )} (based on ${priceChangePercent}% change)`
+        // Use the evaluateRSIConditions method for consistent logic
+        const rsiMatch = await this.evaluateRSIConditions(
+          conditions.rsiRange,
+          liveData,
+          alert.symbol
         );
 
-        if (rsiCondition === "ABOVE" && estimatedRSI > rsiLevel) {
+        if (!rsiMatch) {
           console.log(
-            `✅ RSI condition PASSED: ${estimatedRSI.toFixed(2)} > ${rsiLevel}`
+            `❌ RSI condition FAILED: ${conditions.rsiRange.condition} ${
+              conditions.rsiRange.level
+            } not met for ${conditions.rsiRange.timeframes.join(", ")}`
           );
-        } else if (rsiCondition === "BELOW" && estimatedRSI < rsiLevel) {
-          console.log(
-            `✅ RSI condition PASSED: ${estimatedRSI.toFixed(2)} < ${rsiLevel}`
-          );
-        } else {
-          console.log(`❌ RSI condition FAILED`);
           conditionsMet = false;
+        } else {
+          console.log(
+            `✅ RSI condition PASSED: ${conditions.rsiRange.condition} ${conditions.rsiRange.level} met for all timeframes`
+          );
         }
       }
 
@@ -1128,9 +1119,10 @@ class RealTimeAlertProcessor {
         conditions.rsiRange.timeframes &&
         conditions.rsiRange.timeframes.length > 0
       ) {
-        const rsiMatch = this.evaluateRSIConditions(
+        const rsiMatch = await this.evaluateRSIConditions(
           conditions.rsiRange,
-          priceData
+          priceData,
+          alert.symbol
         );
         if (!rsiMatch) {
           conditionsMet = false;
@@ -1692,8 +1684,13 @@ class RealTimeAlertProcessor {
           // Capture chart screenshot
           let chartScreenshot = null;
           try {
-            console.log(`[${alert.symbol}] Capturing TradingView chart screenshot...`);
-            const timeframe = alertData.timeframe || alert.conditions?.changePercent?.timeframe || "5m";
+            console.log(
+              `[${alert.symbol}] Capturing TradingView chart screenshot...`
+            );
+            const timeframe =
+              alertData.timeframe ||
+              alert.conditions?.changePercent?.timeframe ||
+              "5m";
             chartScreenshot = await ChartScreenshotService.captureChart(
               alert.symbol,
               timeframe
@@ -1737,7 +1734,9 @@ class RealTimeAlertProcessor {
                   user.telegramChatId,
                   alertData
                 );
-                console.log(`[${alert.symbol}] Telegram alert sent (text only)`);
+                console.log(
+                  `[${alert.symbol}] Telegram alert sent (text only)`
+                );
               }
 
               if (telegramSent) {
@@ -1824,6 +1823,115 @@ class RealTimeAlertProcessor {
     } catch (error) {
       console.error("❌ Error sending real-time notification:", error);
     }
+  }
+
+  // Calculate RSI from Binance klines data
+  async calculateRSI(symbol, timeframe, period = 14) {
+    try {
+      const binanceInterval = this.getBinanceInterval(timeframe);
+      // Fetch enough candles for RSI calculation (period + 1 for safety)
+      const limit = period + 5;
+
+      const response = await fetch(
+        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`
+      );
+
+      if (!response.ok) {
+        console.warn(
+          `⚠️ Failed to fetch klines for RSI calculation: ${response.status}`
+        );
+        return null;
+      }
+
+      const klines = await response.json();
+
+      if (klines.length < period + 1) {
+        console.warn(
+          `⚠️ Not enough data for RSI calculation: need ${period + 1}, got ${
+            klines.length
+          }`
+        );
+        return null;
+      }
+
+      // Extract close prices
+      const closes = klines.map((kline) => parseFloat(kline[4]));
+
+      // Calculate price changes
+      const changes = [];
+      for (let i = 1; i < closes.length; i++) {
+        changes.push(closes[i] - closes[i - 1]);
+      }
+
+      // Separate gains and losses
+      const gains = changes.map((change) => (change > 0 ? change : 0));
+      const losses = changes.map((change) =>
+        change < 0 ? Math.abs(change) : 0
+      );
+
+      // Calculate initial average gain and loss (first period)
+      let avgGain = 0;
+      let avgLoss = 0;
+
+      for (let i = 0; i < period; i++) {
+        avgGain += gains[i];
+        avgLoss += losses[i];
+      }
+
+      avgGain = avgGain / period;
+      avgLoss = avgLoss / period;
+
+      // Calculate RSI using Wilder's smoothing method
+      for (let i = period; i < changes.length; i++) {
+        avgGain = (avgGain * (period - 1) + gains[i]) / period;
+        avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+      }
+
+      // Avoid division by zero
+      if (avgLoss === 0) {
+        return avgGain > 0 ? 100 : 50;
+      }
+
+      const rs = avgGain / avgLoss;
+      const rsi = 100 - 100 / (1 + rs);
+
+      console.log(
+        `📈 RSI calculated for ${symbol} (${timeframe}): ${rsi.toFixed(
+          2
+        )} (Period: ${period})`
+      );
+
+      return rsi;
+    } catch (error) {
+      console.error(
+        `❌ Error calculating RSI for ${symbol} (${timeframe}):`,
+        error.message
+      );
+      return null;
+    }
+  }
+
+  // Get RSI value for a symbol and timeframe (with caching)
+  async getRSI(symbol, timeframe, period = 14) {
+    const key = `${symbol}_${timeframe}_${period}`;
+    const rsiValue = await this.calculateRSI(symbol, timeframe, period);
+
+    if (rsiValue !== null) {
+      // Store previous RSI value before updating
+      const existing = this.rsiData.get(key);
+      if (existing) {
+        existing.previous = existing.current;
+      }
+
+      // Update current RSI
+      this.rsiData.set(key, {
+        current: rsiValue,
+        previous: existing?.previous || rsiValue,
+        timestamp: Date.now(),
+      });
+    }
+
+    return this.rsiData.get(key);
   }
 
   // Technical analysis helper methods
@@ -2126,67 +2234,118 @@ class RealTimeAlertProcessor {
     }
   }
 
-  evaluateRSIConditions(rsiConditions, priceData) {
-    const { condition, level } = rsiConditions;
+  async evaluateRSIConditions(rsiConditions, priceData, symbol = null) {
+    const { condition, level, period, timeframes } = rsiConditions;
     const targetLevel = parseFloat(level) || 50;
+    const rsiPeriod = parseInt(period) || 14;
 
-    // Estimate RSI based on 24h price change
-    // This is a simplified approximation - real RSI needs 14 periods of data
-    const priceChangePercent = parseFloat(priceData.priceChangePercent) || 0;
+    console.log(
+      `📈 RSI Evaluation: ${condition} ${targetLevel} (Period: ${rsiPeriod})`
+    );
 
-    // Map price change to RSI estimate:
-    // -10% or less -> RSI ~30 (oversold)
-    // 0% -> RSI ~50 (neutral)
-    // +10% or more -> RSI ~70 (overbought)
-    let estimatedRSI = 50 + priceChangePercent * 2;
-    estimatedRSI = Math.max(0, Math.min(100, estimatedRSI)); // Clamp between 0-100
+    // If timeframes are specified, check ALL timeframes
+    if (timeframes && timeframes.length > 0 && symbol) {
+      let allTimeframesPassed = true;
+      let verifiedTimeframes = 0;
 
-    console.log(`📈 RSI Evaluation: ${condition} ${targetLevel}`);
-    console.log(`   Price Change: ${priceChangePercent}%`);
-    console.log(`   Estimated RSI: ${estimatedRSI.toFixed(2)}`);
+      for (const timeframe of timeframes) {
+        console.log(`   Checking timeframe: ${timeframe}`);
 
-    switch (condition) {
-      case "ABOVE":
-        const isAbove = estimatedRSI > targetLevel;
+        // Get RSI value for this timeframe
+        const rsiData = await this.getRSI(symbol, timeframe, rsiPeriod);
+
+        if (!rsiData || rsiData.current === null) {
+          console.log(
+            `   ⚠️ Timeframe ${timeframe}: RSI data not available, cannot verify`
+          );
+          allTimeframesPassed = false;
+          break;
+        }
+
+        const currentRSI = rsiData.current;
+        const previousRSI = rsiData.previous || currentRSI;
+        verifiedTimeframes++;
+
         console.log(
-          `   Check: RSI ${estimatedRSI.toFixed(
+          `   Timeframe ${timeframe}: Current RSI=${currentRSI.toFixed(
             2
-          )} > ${targetLevel}? ${isAbove}`
+          )}, Previous RSI=${previousRSI.toFixed(2)}`
         );
-        return isAbove;
 
-      case "BELOW":
-        const isBelow = estimatedRSI < targetLevel;
-        console.log(
-          `   Check: RSI ${estimatedRSI.toFixed(
-            2
-          )} < ${targetLevel}? ${isBelow}`
-        );
-        return isBelow;
+        let timeframePassed = false;
 
-      case "OVERBOUGHT":
-        // RSI > 70 is typically overbought
-        const isOverbought = estimatedRSI > 70;
-        console.log(
-          `   Overbought check: RSI ${estimatedRSI.toFixed(
-            2
-          )} > 70? ${isOverbought}`
-        );
-        return isOverbought;
+        switch (condition) {
+          case "ABOVE":
+            timeframePassed = currentRSI > targetLevel;
+            console.log(
+              `   Timeframe ${timeframe}: RSI ${currentRSI.toFixed(
+                2
+              )} > ${targetLevel}? ${timeframePassed}`
+            );
+            break;
 
-      case "OVERSOLD":
-        // RSI < 30 is typically oversold
-        const isOversold = estimatedRSI < 30;
-        console.log(
-          `   Oversold check: RSI ${estimatedRSI.toFixed(
-            2
-          )} < 30? ${isOversold}`
-        );
-        return isOversold;
+          case "BELOW":
+            timeframePassed = currentRSI < targetLevel;
+            console.log(
+              `   Timeframe ${timeframe}: RSI ${currentRSI.toFixed(
+                2
+              )} < ${targetLevel}? ${timeframePassed}`
+            );
+            break;
 
-      default:
-        console.log(`   Unknown RSI condition: ${condition}`);
-        return true;
+          case "CROSSING_UP":
+            // Previous RSI was below or equal, now above
+            timeframePassed =
+              previousRSI <= targetLevel && currentRSI > targetLevel;
+            console.log(
+              `   Timeframe ${timeframe}: Crossing Up check - Previous ${previousRSI.toFixed(
+                2
+              )} <= ${targetLevel} AND Current ${currentRSI.toFixed(
+                2
+              )} > ${targetLevel}? ${timeframePassed}`
+            );
+            break;
+
+          case "CROSSING_DOWN":
+            // Previous RSI was above or equal, now below
+            timeframePassed =
+              previousRSI >= targetLevel && currentRSI < targetLevel;
+            console.log(
+              `   Timeframe ${timeframe}: Crossing Down check - Previous ${previousRSI.toFixed(
+                2
+              )} >= ${targetLevel} AND Current ${currentRSI.toFixed(
+                2
+              )} < ${targetLevel}? ${timeframePassed}`
+            );
+            break;
+
+          default:
+            console.log(`   Unknown RSI condition: ${condition}`);
+            timeframePassed = false;
+        }
+
+        if (!timeframePassed) {
+          allTimeframesPassed = false;
+          console.log(
+            `   ❌ Timeframe ${timeframe} FAILED: Condition ${condition} not met`
+          );
+          break; // One timeframe failed, condition invalid
+        } else {
+          console.log(
+            `   ✅ Timeframe ${timeframe} PASSED: Condition ${condition} met`
+          );
+        }
+      }
+
+      console.log(
+        `   RSI check (multi-timeframe): ${allTimeframesPassed} (${verifiedTimeframes}/${timeframes.length} timeframes verified, ALL must pass)`
+      );
+      return allTimeframesPassed;
+    } else {
+      // Fallback: use single RSI calculation if no timeframes specified
+      // This should not happen in normal flow, but keeping for compatibility
+      console.log(`   ⚠️ No timeframes specified, using fallback calculation`);
+      return true; // Skip if no timeframes
     }
   }
 

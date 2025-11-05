@@ -39,7 +39,7 @@
     "nodemailer": "^6.10.1",
     "p-limit": "^7.2.0",
     "pm2": "^6.0.13",
-    "puppeteer": "^24.28.0",
+    "puppeteer": "^24.29.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "redis": "^5.8.3",
