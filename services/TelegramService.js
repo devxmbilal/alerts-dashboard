@@ -12,7 +12,6 @@ class TelegramService {
     try {
       if (this.initialized) return;
 
-
       if (!this.botToken) {
         console.warn("⚠️ Telegram bot token not configured");
         return;
@@ -82,15 +81,26 @@ ${changeEmoji} Change: \`${
 🕐 *Timestamp (PKT)*
 ━━━━━━━━━━━━━━━━━━━━
 
-⏰ Time: \`${new Date(triggeredAt).toLocaleTimeString('en-PK', { timeZone: 'Asia/Karachi', hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}\`
-📅 Date: \`${new Date(triggeredAt).toLocaleDateString('en-PK', { timeZone: 'Asia/Karachi', year: 'numeric', month: 'short', day: 'numeric' })}\`
+⏰ Time: \`${new Date(triggeredAt).toLocaleTimeString("en-PK", {
+      timeZone: "Asia/Karachi",
+      hour12: true,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    })}\`
+📅 Date: \`${new Date(triggeredAt).toLocaleDateString("en-PK", {
+      timeZone: "Asia/Karachi",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    })}\`
 
 ━━━━━━━━━━━━━━━━━━━━
 
 _Automated alert from Crypto Alerts Dashboard_
     `.trim();
   }
-
+z
   // Send alert to Telegram
   async sendAlertMessage(chatId, alertData) {
     try {

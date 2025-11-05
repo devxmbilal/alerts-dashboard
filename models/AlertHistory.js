@@ -46,11 +46,10 @@ const alertHistorySchema = new mongoose.Schema(
         condition: String,
         percentage: String,
       },
-      ema: {
+      openInterest: {
         timeframes: [String],
-        fast: String,
-        slow: String,
-        condition: String,
+        direction: String,
+        percentage: String,
       },
     },
     conditions: {

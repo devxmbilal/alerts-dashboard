@@ -438,8 +438,13 @@ class RealTimeAlertProcessor {
           )}`
         );
 
+        // CRITICAL: Initialize/update candle data for all required timeframes before evaluation
+        for (const timeframe of conditions.candle.timeframes) {
+          await this.updateCandleData(alert.symbol, timeframe, liveData);
+        }
+
         // Use the evaluateCandleConditions method for consistent logic
-        const candleMatch = this.evaluateCandleConditions(
+        const candleMatch = await this.evaluateCandleConditions(
           conditions.candle,
           liveData,
           alert.symbol
@@ -512,9 +517,7 @@ class RealTimeAlertProcessor {
         conditions.volume.timeframes.length > 0
       ) {
         const volumeCondition = conditions.volume.condition || "INCREASING";
-        const volumePercentage = parseFloat(
-          conditions.volume.percentage || "20"
-        );
+        const volumePercentage = parseFloat(conditions.volume.percentage);
 
         console.log(
           `📈 Checking Volume condition: ${volumeCondition} by ${volumePercentage}% on timeframes: ${conditions.volume.timeframes.join(
@@ -849,19 +852,31 @@ class RealTimeAlertProcessor {
       console.log(`🔍 Found ${alerts.length} active alerts for ${symbol}`);
 
       // Update candle data for all timeframes used by alerts
+      // Include timeframes from both changePercent and candle conditions
       const timeframes = new Set();
       for (const alert of alerts) {
+        // Add changePercent timeframes
         if (
           alert.conditions.changePercent &&
           alert.conditions.changePercent.timeframe
         ) {
           timeframes.add(alert.conditions.changePercent.timeframe);
         }
+        // Add candle condition timeframes
+        if (
+          alert.conditions.candle &&
+          alert.conditions.candle.timeframes &&
+          Array.isArray(alert.conditions.candle.timeframes)
+        ) {
+          for (const tf of alert.conditions.candle.timeframes) {
+            timeframes.add(tf);
+          }
+        }
       }
 
       // Update candle data for each timeframe
       for (const timeframe of timeframes) {
-        this.updateCandleData(symbol, timeframe, priceData);
+        await this.updateCandleData(symbol, timeframe, priceData);
       }
 
       // Process each alert for this symbol
@@ -1090,7 +1105,12 @@ class RealTimeAlertProcessor {
         conditions.candle.timeframes &&
         conditions.candle.timeframes.length > 0
       ) {
-        const candleMatch = this.evaluateCandleConditions(
+        // CRITICAL: Initialize/update candle data for all required timeframes before evaluation
+        for (const timeframe of conditions.candle.timeframes) {
+          await this.updateCandleData(alert.symbol, timeframe, priceData);
+        }
+
+        const candleMatch = await this.evaluateCandleConditions(
           conditions.candle,
           priceData,
           alert.symbol
@@ -1300,11 +1320,12 @@ class RealTimeAlertProcessor {
       }
 
       // Update alert lock if alert count is set
+      let updatedConditions = null;
       if (
         alert.conditions.alertCount &&
         alert.conditions.alertCount.timeframe
       ) {
-        const updatedConditions = updateAlertLock(alert);
+        updatedConditions = updateAlertLock(alert);
 
         // Update alert conditions with new lock time and new baseline
         await Alert.findByIdAndUpdate(alert._id, {
@@ -1776,7 +1797,7 @@ class RealTimeAlertProcessor {
   }
 
   // Technical analysis helper methods
-  evaluateCandleConditions(candleConditions, priceData, symbol = null) {
+  async evaluateCandleConditions(candleConditions, priceData, symbol = null) {
     // Get current live price for timeframe confirmation
     const currentPrice = priceData.price || priceData.close;
     const { open, high, low, close } = priceData;
@@ -1798,11 +1819,77 @@ class RealTimeAlertProcessor {
     switch (condition) {
       case "CANDLE_ABOVE_OPEN":
         // Bullish candle: Close > Open
-        const isAboveOpen = close > open;
-        console.log(
-          `   Candle Above Open check: ${isAboveOpen} (Close ${close} > Open ${open})`
-        );
-        return isAboveOpen;
+        // For multiple timeframes: ALL selected timeframes must have Close > Open
+        let allTimeframesAboveOpen = true;
+
+        if (timeframes.length > 0 && symbol) {
+          // Check ALL selected timeframes - ALL must pass
+          let verifiedTimeframes = 0;
+          for (const timeframe of timeframes) {
+            let candle = this.getCandleData(symbol, timeframe);
+
+            // If candle data is missing or null, fetch from Binance API
+            if (!candle || candle.open === null || candle.close === null) {
+              console.log(
+                `   ⚠️ Timeframe ${timeframe}: Local candle data missing, fetching from Binance...`
+              );
+              const binanceCandle = await this.fetchCandleFromBinance(
+                symbol,
+                timeframe
+              );
+              if (binanceCandle) {
+                // Update local candle data with Binance data
+                candle = this.getCandleData(symbol, timeframe);
+                candle.open = binanceCandle.open;
+                candle.high = binanceCandle.high;
+                candle.low = binanceCandle.low;
+                candle.close = binanceCandle.close;
+                candle.volume = binanceCandle.volume;
+                candle.startTime = binanceCandle.startTime;
+                candle.endTime = binanceCandle.endTime;
+                candle.isComplete = binanceCandle.isComplete;
+                console.log(
+                  `   ✅ Fetched candle from Binance for ${timeframe}: O=${candle.open}, C=${candle.close}`
+                );
+              }
+            }
+
+            if (candle && candle.open !== null && candle.close !== null) {
+              const tfAboveOpen = candle.close > candle.open;
+              verifiedTimeframes++;
+              console.log(
+                `   Timeframe ${timeframe}: Close ${candle.close} > Open ${candle.open}? ${tfAboveOpen}`
+              );
+              if (!tfAboveOpen) {
+                allTimeframesAboveOpen = false;
+                console.log(
+                  `   ❌ Timeframe ${timeframe} FAILED: Close ${candle.close} <= Open ${candle.open}`
+                );
+                break; // One timeframe failed, condition invalid
+              }
+            } else {
+              console.log(
+                `   ⚠️ Timeframe ${timeframe}: Missing candle data (open/close), cannot verify`
+              );
+              // If candle data is missing for a required timeframe, we can't verify
+              // This means the condition cannot be confirmed, so fail it
+              allTimeframesAboveOpen = false;
+              break;
+            }
+          }
+
+          console.log(
+            `   Candle Above Open check (multi-timeframe): ${allTimeframesAboveOpen} (${verifiedTimeframes}/${timeframes.length} timeframes verified, ALL must pass)`
+          );
+          return allTimeframesAboveOpen;
+        } else {
+          // Fallback: use current priceData if no timeframes specified
+          const isAboveOpen = close > open;
+          console.log(
+            `   Candle Above Open check: ${isAboveOpen} (Close ${close} > Open ${open})`
+          );
+          return isAboveOpen;
+        }
 
       case "HAMMER":
         // Hammer: Bullish reversal pattern
@@ -1835,7 +1922,34 @@ class RealTimeAlertProcessor {
         if (timeframes.length > 0 && symbol) {
           // Check confirmation for each selected timeframe
           for (const timeframe of timeframes) {
-            const candle = this.getCandleData(symbol, timeframe);
+            let candle = this.getCandleData(symbol, timeframe);
+
+            // If candle data is missing or null, fetch from Binance API
+            if (!candle || candle.open === null) {
+              console.log(
+                `   ⚠️ Timeframe ${timeframe}: Local candle data missing, fetching from Binance...`
+              );
+              const binanceCandle = await this.fetchCandleFromBinance(
+                symbol,
+                timeframe
+              );
+              if (binanceCandle) {
+                // Update local candle data with Binance data
+                candle = this.getCandleData(symbol, timeframe);
+                candle.open = binanceCandle.open;
+                candle.high = binanceCandle.high;
+                candle.low = binanceCandle.low;
+                candle.close = binanceCandle.close;
+                candle.volume = binanceCandle.volume;
+                candle.startTime = binanceCandle.startTime;
+                candle.endTime = binanceCandle.endTime;
+                candle.isComplete = binanceCandle.isComplete;
+                console.log(
+                  `   ✅ Fetched candle from Binance for ${timeframe}: O=${candle.open}, C=${candle.close}`
+                );
+              }
+            }
+
             if (candle && candle.open) {
               const tfConfirmed = currentPrice > candle.open;
               console.log(
@@ -1907,7 +2021,34 @@ class RealTimeAlertProcessor {
         if (timeframes.length > 0 && symbol) {
           // Check confirmation for each selected timeframe
           for (const timeframe of timeframes) {
-            const candle = this.getCandleData(symbol, timeframe);
+            let candle = this.getCandleData(symbol, timeframe);
+
+            // If candle data is missing or null, fetch from Binance API
+            if (!candle || candle.open === null) {
+              console.log(
+                `   ⚠️ Timeframe ${timeframe}: Local candle data missing, fetching from Binance...`
+              );
+              const binanceCandle = await this.fetchCandleFromBinance(
+                symbol,
+                timeframe
+              );
+              if (binanceCandle) {
+                // Update local candle data with Binance data
+                candle = this.getCandleData(symbol, timeframe);
+                candle.open = binanceCandle.open;
+                candle.high = binanceCandle.high;
+                candle.low = binanceCandle.low;
+                candle.close = binanceCandle.close;
+                candle.volume = binanceCandle.volume;
+                candle.startTime = binanceCandle.startTime;
+                candle.endTime = binanceCandle.endTime;
+                candle.isComplete = binanceCandle.isComplete;
+                console.log(
+                  `   ✅ Fetched candle from Binance for ${timeframe}: O=${candle.open}, C=${candle.close}`
+                );
+              }
+            }
+
             if (candle && candle.open) {
               const tfConfirmed = currentPrice > candle.open;
               console.log(
@@ -2554,6 +2695,87 @@ class RealTimeAlertProcessor {
     return timeframes[normalized] || timeframes["5MIN"]; // Default to 5 minutes
   }
 
+  // Get Binance interval from our timeframe format
+  getBinanceInterval(timeframe) {
+    const tf = timeframe.toUpperCase();
+    switch (tf) {
+      case "1MIN":
+      case "1M":
+        return "1m";
+      case "5MIN":
+      case "5M":
+        return "5m";
+      case "15MIN":
+      case "15M":
+        return "15m";
+      case "1HR":
+      case "1H":
+      case "1HOUR":
+        return "1h";
+      case "4HR":
+      case "4H":
+      case "4HOUR":
+        return "4h";
+      case "12HR":
+      case "12H":
+      case "12HOUR":
+        return "12h";
+      case "D":
+      case "DAY":
+      case "DAILY":
+        return "1d";
+      case "W":
+      case "WEEK":
+      case "WEEKLY":
+        return "1w";
+      case "M":
+      case "MONTH":
+      case "MONTHLY":
+        return "1M";
+      default:
+        return "5m";
+    }
+  }
+
+  // Fetch latest candle from Binance API for accurate OHLC data
+  async fetchCandleFromBinance(symbol, timeframe) {
+    try {
+      const binanceInterval = this.getBinanceInterval(timeframe);
+      const response = await fetch(
+        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=1`
+      );
+
+      if (!response.ok) {
+        console.warn(
+          `⚠️ Failed to fetch candle from Binance for ${symbol} ${timeframe}: ${response.status}`
+        );
+        return null;
+      }
+
+      const klines = await response.json();
+      if (klines && klines.length > 0) {
+        const kline = klines[klines.length - 1]; // Get latest candle
+        return {
+          open: parseFloat(kline[1]),
+          high: parseFloat(kline[2]),
+          low: parseFloat(kline[3]),
+          close: parseFloat(kline[4]),
+          volume: parseFloat(kline[5]),
+          startTime: kline[0],
+          endTime: kline[6],
+          isComplete: true, // Binance returns completed candles
+        };
+      }
+      return null;
+    } catch (error) {
+      console.warn(
+        `⚠️ Error fetching candle from Binance for ${symbol} ${timeframe}:`,
+        error.message
+      );
+      return null;
+    }
+  }
+
   // Get or create candle data for a symbol and timeframe
   getCandleData(symbol, timeframe) {
     const key = `${symbol}_${timeframe}`;
@@ -2573,7 +2795,7 @@ class RealTimeAlertProcessor {
   }
 
   // Update candle data with new price
-  updateCandleData(symbol, timeframe, priceData) {
+  async updateCandleData(symbol, timeframe, priceData) {
     const candle = this.getCandleData(symbol, timeframe);
     const currentTime = Date.now();
     const timeframeMs = this.getTimeframeMs(timeframe);
@@ -2595,24 +2817,45 @@ class RealTimeAlertProcessor {
         );
       }
 
-      // Start new candle
-      candle.open = parseFloat(priceData.price);
-      candle.high = parseFloat(priceData.price);
-      candle.low = parseFloat(priceData.price);
-      candle.close = parseFloat(priceData.price);
-      candle.volume = parseFloat(priceData.volume) || 0;
-      candle.startTime = candleStartTime;
-      candle.endTime = candleStartTime + timeframeMs;
-      candle.isComplete = false;
-
-      console.log(
-        `🕯️ New candle started for ${symbol} (${timeframe}): Open=${candle.open}`
+      // Try to fetch the actual candle from Binance for accurate open price
+      // This ensures we get the real open price when a new candle period starts
+      const binanceCandle = await this.fetchCandleFromBinance(
+        symbol,
+        timeframe
       );
+
+      if (binanceCandle && binanceCandle.startTime === candleStartTime) {
+        // Use Binance candle data for accuracy
+        candle.open = binanceCandle.open;
+        candle.high = binanceCandle.high;
+        candle.low = binanceCandle.low;
+        candle.close = binanceCandle.close;
+        candle.volume = binanceCandle.volume;
+        candle.startTime = binanceCandle.startTime;
+        candle.endTime = binanceCandle.endTime;
+        candle.isComplete = binanceCandle.isComplete;
+        console.log(
+          `🕯️ New candle started for ${symbol} (${timeframe}) from Binance: Open=${candle.open}, Close=${candle.close}`
+        );
+      } else {
+        // Fallback: use current price data if Binance fetch fails
+        candle.open = parseFloat(priceData.price);
+        candle.high = parseFloat(priceData.price);
+        candle.low = parseFloat(priceData.price);
+        candle.close = parseFloat(priceData.price);
+        candle.volume = parseFloat(priceData.volume) || 0;
+        candle.startTime = candleStartTime;
+        candle.endTime = candleStartTime + timeframeMs;
+        candle.isComplete = false;
+        console.log(
+          `🕯️ New candle started for ${symbol} (${timeframe}): Open=${candle.open} (using live price)`
+        );
+      }
     } else {
       // Update existing candle
       const price = parseFloat(priceData.price);
-      candle.high = Math.max(candle.high, price);
-      candle.low = Math.min(candle.low, price);
+      candle.high = Math.max(candle.high || price, price);
+      candle.low = Math.min(candle.low || price, price);
       candle.close = price;
       candle.volume += parseFloat(priceData.volume) || 0;
 
