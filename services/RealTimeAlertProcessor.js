@@ -4,6 +4,7 @@ import AlertHistoryService from "./AlertHistoryService.js";
 import NotificationService from "./NotificationService.js";
 import EmailService from "./EmailService.js";
 import TelegramService from "./TelegramService.js";
+import ChartScreenshotService from "../utils/chartScreenshot.js";
 import Alert from "../models/Alert.js";
 import AlertHistory from "../models/AlertHistory.js";
 import User from "../models/User.js";
@@ -1667,6 +1668,24 @@ class RealTimeAlertProcessor {
             `📱 Sending Telegram message to ${user.telegramChatId} for alert history ${alertHistory._id}...`
           );
 
+          // Capture chart screenshot
+          let chartScreenshot = null;
+          try {
+            console.log(`[${alert.symbol}] Capturing TradingView chart screenshot...`);
+            const timeframe = alertData.timeframe || alert.conditions?.changePercent?.timeframe || "5m";
+            chartScreenshot = await ChartScreenshotService.captureChart(
+              alert.symbol,
+              timeframe
+            );
+            console.log(`[${alert.symbol}] Screenshot captured successfully`);
+          } catch (screenshotError) {
+            console.error(
+              `[${alert.symbol}] Failed to capture chart screenshot:`,
+              screenshotError.message
+            );
+            console.log(`[${alert.symbol}] Will send text-only alert`);
+          }
+
           // Retry logic: try up to 3 times with minimal delay (max 3 seconds total)
           let telegramSent = false;
           let retryCount = 0;
@@ -1684,10 +1703,21 @@ class RealTimeAlertProcessor {
                 await new Promise((resolve) => setTimeout(resolve, delay));
               }
 
-              telegramSent = await TelegramService.sendAlertMessage(
-                user.telegramChatId,
-                alertData
-              );
+              // Send with photo if screenshot was captured, otherwise send text only
+              if (chartScreenshot) {
+                telegramSent = await TelegramService.sendPhotoAlert(
+                  user.telegramChatId,
+                  chartScreenshot,
+                  alertData
+                );
+                console.log(`[${alert.symbol}] Telegram alert sent with chart`);
+              } else {
+                telegramSent = await TelegramService.sendAlertMessage(
+                  user.telegramChatId,
+                  alertData
+                );
+                console.log(`[${alert.symbol}] Telegram alert sent (text only)`);
+              }
 
               if (telegramSent) {
                 console.log(

@@ -1,4 +1,6 @@
 import dotenv from "dotenv";
+import FormData from "form-data";
+import axios from "axios";
 dotenv.config();
 class TelegramService {
   constructor() {
@@ -29,10 +31,7 @@ class TelegramService {
   formatAlertMessage(alertData) {
     const {
       symbol,
-      targetValue,
       actualValue,
-      direction,
-      timeframe,
       triggeredPrice,
       baselinePrice,
       changeFromBaselinePercent,
@@ -41,27 +40,15 @@ class TelegramService {
     } = alertData;
 
     const changeEmoji = changeFromBaselinePercent >= 0 ? "📈" : "📉";
-    const alertEmoji = "🚨";
 
-    // Format with Telegram markdown
+    // Format with Telegram markdown - Simple & Clean Design
     return `
-${alertEmoji} *ALERT TRIGGERED!* ${alertEmoji}
+🚨 *ALERT TRIGGERED!* 🚨
 
-🪙 *${symbol}*
+💠 *${symbol}*
+━━━━━━━━━━━━━━━━━━━
 
-━━━━━━━━━━━━━━━━━━━━
-📊 *Alert Details*
-━━━━━━━━━━━━━━━━━━━━
-
-🎯 Target: \`${targetValue || "N/A"}%\`
-📉 Actual 24h change: \`${actualValue ? actualValue.toFixed(3) : "N/A"}%\`
-⏱ Timeframe: \`${timeframe || "5MIN"}\`
-🔄 Direction: \`${direction || "Increase"}\`
-
-━━━━━━━━━━━━━━━━━━━━
-💰 *Price Information*
-━━━━━━━━━━━━━━━━━━━━
-
+📄 Actual 24h change: \`${actualValue ? actualValue.toFixed(3) : "N/A"}%\`
 💵 Current Price: \`$${triggeredPrice ? triggeredPrice.toFixed(6) : "N/A"}\`
 📍 Last Price: \`$${baselinePrice ? baselinePrice.toFixed(6) : "N/A"}\`
 ${changeEmoji} Change: \`${
@@ -69,23 +56,12 @@ ${changeEmoji} Change: \`${
         ? changeFromBaselinePercent.toFixed(3)
         : "N/A"
     }%\`
-
-━━━━━━━━━━━━━━━━━━━━
-📈 *Trading Volume*
-━━━━━━━━━━━━━━━━━━━━
-
 📊 24h Volume: \`${
       volume ? new Intl.NumberFormat("en-US").format(volume) : "N/A"
     }\`
-
-━━━━━━━━━━━━━━━━━━━━
-🕐 *Timestamp (PKT)*
-━━━━━━━━━━━━━━━━━━━━
-
 ⏰ Time: \`${new Date(triggeredAt).toLocaleTimeString('en-PK', { timeZone: 'Asia/Karachi', hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}\`
 📅 Date: \`${new Date(triggeredAt).toLocaleDateString('en-PK', { timeZone: 'Asia/Karachi', year: 'numeric', month: 'short', day: 'numeric' })}\`
-
-━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━
 
 _Automated alert from Crypto Alerts Dashboard_
     `.trim();
@@ -129,6 +105,68 @@ _Automated alert from Crypto Alerts Dashboard_
     } catch (error) {
       console.error("❌ Error sending Telegram message:", error);
       return false;
+    }
+  }
+
+  /**
+   * Send photo with caption to Telegram
+   * @param {string} chatId - Telegram chat ID
+   * @param {Buffer} photo - Image buffer
+   * @param {Object} alertData - Alert data for caption
+   * @returns {Promise<boolean>}
+   */
+  async sendPhotoAlert(chatId, photo, alertData) {
+    try {
+      if (!this.initialized) {
+        this.initialize();
+      }
+
+      if (!this.botToken) {
+        console.error("❌ Telegram bot token not configured");
+        return false;
+      }
+
+      const caption = this.formatAlertMessage(alertData);
+
+      // Create FormData for multipart/form-data
+      const formData = new FormData();
+      formData.append("chat_id", chatId);
+      formData.append("photo", photo, {
+        filename: `${alertData.symbol}_chart.jpg`,
+        contentType: "image/jpeg",
+      });
+      formData.append("caption", caption);
+      formData.append("parse_mode", "Markdown");
+
+      // Use axios for better multipart/form-data handling
+      const response = await axios.post(`${this.apiUrl}/sendPhoto`, formData, {
+        headers: {
+          ...formData.getHeaders(),
+        },
+        timeout: 30000, // 30 second timeout
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+      });
+
+      if (response.data.ok) {
+        console.log(`✅ Telegram photo alert sent to chat ${chatId}`);
+        return true;
+      } else {
+        console.error("❌ Telegram API error:", response.data.description);
+        // Fallback to text message if photo fails
+        console.log("⚠️ Falling back to text-only message...");
+        return await this.sendAlertMessage(chatId, alertData);
+      }
+    } catch (error) {
+      console.error("❌ Error sending Telegram photo:", error.message);
+      // Fallback to text message
+      console.log("⚠️ Falling back to text-only message...");
+      try {
+        return await this.sendAlertMessage(chatId, alertData);
+      } catch (fallbackError) {
+        console.error("❌ Fallback text message also failed:", fallbackError);
+        return false;
+      }
     }
   }
 
