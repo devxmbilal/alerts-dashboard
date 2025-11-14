@@ -27,6 +27,7 @@ class RealTimeAlertProcessor {
     // Concurrency limit for parallel alert processing (20-50 alerts at once)
     this.processLimit = pLimit(50);
     this.rsiData = new Map(); // Track RSI values for each symbol+timeframe: key = "symbol_timeframe_period", value = { current: number, previous: number }
+    this.openInterestData = new Map(); // Track Open Interest for each symbol+timeframe: key = "symbol_timeframe", value = { current: number, baseline: number, timestamp: number }
   }
 
   async loadAlertsFromRedis(userId) {
@@ -508,56 +509,32 @@ class RealTimeAlertProcessor {
         conditions.volume.timeframes &&
         conditions.volume.timeframes.length > 0
       ) {
-        const volumeCondition = conditions.volume.condition || "INCREASING";
-        const volumePercentage = parseFloat(conditions.volume.percentage);
-
         console.log(
-          `📈 Checking Volume condition: ${volumeCondition} by ${volumePercentage}% on timeframes: ${conditions.volume.timeframes.join(
-            ", "
-          )}`
+          `📈 Checking Volume condition: ${conditions.volume.condition}${
+            conditions.volume.percentage
+              ? ` by ${conditions.volume.percentage}%`
+              : ""
+          } on timeframes: ${conditions.volume.timeframes.join(", ")}`
         );
 
-        // Compare current volume with baseline volume
-        const currentVolume = parseFloat(
-          liveData.volume || liveData.volume24h || 0
+        // Use the evaluateVolumeConditions method for consistent logic
+        const volumeMatch = await this.evaluateVolumeConditions(
+          conditions.volume,
+          liveData,
+          alert.symbol,
+          alert
         );
-        const baselineVolume = parseFloat(alert.baselineVolume || 0);
 
-        if (baselineVolume > 0) {
-          const volumeChange =
-            ((currentVolume - baselineVolume) / baselineVolume) * 100;
-
+        if (!volumeMatch) {
           console.log(
-            `📈 Volume change: ${volumeChange.toFixed(
-              2
-            )}% (Current: ${currentVolume}, Baseline: ${baselineVolume})`
+            `❌ Volume condition FAILED: ${
+              conditions.volume.condition
+            } not met for ${conditions.volume.timeframes.join(", ")}`
           );
-
-          if (
-            volumeCondition === "INCREASING" &&
-            volumeChange >= volumePercentage
-          ) {
-            console.log(
-              `✅ Volume INCREASING condition PASSED: ${volumeChange.toFixed(
-                2
-              )}% >= ${volumePercentage}%`
-            );
-          } else if (
-            volumeCondition === "DECREASING" &&
-            volumeChange <= -volumePercentage
-          ) {
-            console.log(
-              `✅ Volume DECREASING condition PASSED: ${volumeChange.toFixed(
-                2
-              )}% <= -${volumePercentage}%`
-            );
-          } else {
-            console.log(`❌ Volume condition FAILED`);
-            conditionsMet = false;
-          }
+          conditionsMet = false;
         } else {
           console.log(
-            `⚠️ No baseline volume available, skipping volume condition`
+            `✅ Volume condition PASSED: ${conditions.volume.condition} met for all timeframes`
           );
         }
       }
@@ -1136,9 +1113,11 @@ class RealTimeAlertProcessor {
         conditions.volume.timeframes &&
         conditions.volume.timeframes.length > 0
       ) {
-        const volumeMatch = this.evaluateVolumeConditions(
+        const volumeMatch = await this.evaluateVolumeConditions(
           conditions.volume,
-          priceData
+          priceData,
+          alert.symbol,
+          alert
         );
         if (!volumeMatch) {
           conditionsMet = false;
@@ -2349,101 +2328,263 @@ class RealTimeAlertProcessor {
     }
   }
 
-  evaluateVolumeConditions(volumeConditions, priceData) {
-    const { condition, percentage } = volumeConditions;
-    const currentVolume =
-      parseFloat(priceData.volume || priceData.volume24h) || 0;
+  async evaluateVolumeConditions(
+    volumeConditions,
+    priceData,
+    symbol = null,
+    alert = null
+  ) {
+    const { condition, percentage, timeframes } = volumeConditions;
+    const requiredPercentage = parseFloat(percentage) || 0;
 
-    if (currentVolume === 0) {
-      console.log("⚠️ Volume data missing, skipping volume condition");
-      return true;
-    }
-
-    console.log(`📉 Volume Evaluation: ${condition}`);
-    console.log(`   Current Volume: ${currentVolume.toLocaleString()}`);
-
-    // For INCREASING/DECREASING, we need historical volume data
-    // As a workaround, we'll use the alert's baseline volume if available
-    const baselineVolume = this.alertBaselines.get(
-      `volume_${priceData.symbol}`
+    console.log(
+      `📉 Volume Evaluation: ${condition}${
+        percentage ? ` by ${percentage}%` : ""
+      }`
     );
 
-    switch (condition) {
-      case "INCREASING":
-        if (baselineVolume && baselineVolume > 0) {
-          const volumeChange =
-            ((currentVolume - baselineVolume) / baselineVolume) * 100;
-          const isIncreasing = volumeChange > 5; // 5% increase threshold
-          console.log(`   Baseline Volume: ${baselineVolume.toLocaleString()}`);
-          console.log(`   Volume Change: ${volumeChange.toFixed(2)}%`);
-          console.log(`   Increasing check: ${isIncreasing} (change > 5%)`);
-          return isIncreasing;
-        }
-        // If no baseline, assume true
-        console.log(`   No baseline volume, assuming INCREASING`);
-        return true;
+    // If timeframes are specified, check ALL timeframes
+    if (timeframes && timeframes.length > 0 && symbol) {
+      let allTimeframesPassed = true;
+      let verifiedTimeframes = 0;
 
-      case "DECREASING":
-        if (baselineVolume && baselineVolume > 0) {
-          const volumeChange =
-            ((currentVolume - baselineVolume) / baselineVolume) * 100;
-          const isDecreasing = volumeChange < -5; // 5% decrease threshold
-          console.log(`   Baseline Volume: ${baselineVolume.toLocaleString()}`);
-          console.log(`   Volume Change: ${volumeChange.toFixed(2)}%`);
-          console.log(`   Decreasing check: ${isDecreasing} (change < -5%)`);
-          return isDecreasing;
-        }
-        // If no baseline, assume true
-        console.log(`   No baseline volume, assuming DECREASING`);
-        return true;
+      for (const timeframe of timeframes) {
+        console.log(`   Checking timeframe: ${timeframe}`);
 
-      case "ABOVE_AVERAGE":
-        // Use a simple heuristic: if volume is significantly higher than typical
-        // We'll use 150% of baseline as "above average"
-        if (baselineVolume && baselineVolume > 0) {
-          const isAboveAverage = currentVolume > baselineVolume * 1.5;
-          console.log(`   Baseline Volume: ${baselineVolume.toLocaleString()}`);
+        // Get candle data for this timeframe to get volume
+        let candle = this.getCandleData(symbol, timeframe);
+
+        // If candle data is missing, fetch from Binance
+        if (!candle || candle.volume === null || candle.volume === 0) {
           console.log(
-            `   Above Average check: ${isAboveAverage} (${currentVolume} > ${
-              baselineVolume * 1.5
-            })`
+            `   ⚠️ Timeframe ${timeframe}: Candle volume data missing, fetching from Binance...`
           );
-          return isAboveAverage;
+          const binanceCandle = await this.fetchCandleFromBinance(
+            symbol,
+            timeframe
+          );
+          if (binanceCandle) {
+            candle = this.getCandleData(symbol, timeframe);
+            candle.volume = binanceCandle.volume;
+            candle.open = binanceCandle.open;
+            candle.close = binanceCandle.close;
+            console.log(
+              `   ✅ Fetched candle volume from Binance for ${timeframe}: ${binanceCandle.volume.toLocaleString()}`
+            );
+          }
         }
-        return true;
 
-      case "SPIKE":
-        // Volume spike: 200% or more of baseline
-        if (baselineVolume && baselineVolume > 0) {
-          const isSpike = currentVolume > baselineVolume * 2;
-          console.log(`   Baseline Volume: ${baselineVolume.toLocaleString()}`);
+        if (!candle || !candle.volume || candle.volume === 0) {
           console.log(
-            `   Spike check: ${isSpike} (${currentVolume} > ${
-              baselineVolume * 2
-            })`
+            `   ⚠️ Timeframe ${timeframe}: Volume data not available, cannot verify`
           );
-          return isSpike;
+          allTimeframesPassed = false;
+          break;
         }
-        return true;
 
-      case "PERCENTAGE":
-        // Custom percentage change
-        if (percentage && baselineVolume && baselineVolume > 0) {
-          const targetPercentage = parseFloat(percentage);
-          const volumeChange =
-            ((currentVolume - baselineVolume) / baselineVolume) * 100;
-          const meetsPercentage = volumeChange >= targetPercentage;
-          console.log(`   Target: ${targetPercentage}% change`);
-          console.log(`   Actual: ${volumeChange.toFixed(2)}% change`);
-          console.log(`   Percentage check: ${meetsPercentage}`);
-          return meetsPercentage;
+        const currentVolume = candle.volume;
+        const baselineVolume = alert ? alert.baselineVolume || 0 : 0;
+        verifiedTimeframes++;
+
+        console.log(
+          `   Timeframe ${timeframe}: Current Volume=${currentVolume.toLocaleString()}, Baseline Volume=${baselineVolume.toLocaleString()}`
+        );
+
+        let timeframePassed = false;
+
+        switch (condition) {
+          case "INCREASING":
+            if (baselineVolume > 0) {
+              const volumeChange =
+                ((currentVolume - baselineVolume) / baselineVolume) * 100;
+              timeframePassed = volumeChange >= requiredPercentage;
+              console.log(
+                `   Timeframe ${timeframe}: Volume INCREASING check - Change ${volumeChange.toFixed(
+                  2
+                )}% >= ${requiredPercentage}%? ${timeframePassed}`
+              );
+            } else {
+              console.log(
+                `   ⚠️ Timeframe ${timeframe}: No baseline volume, skipping INCREASING check`
+              );
+              timeframePassed = true; // Skip if no baseline
+            }
+            break;
+
+          case "DECREASING":
+            if (baselineVolume > 0) {
+              const volumeChange =
+                ((currentVolume - baselineVolume) / baselineVolume) * 100;
+              timeframePassed = volumeChange <= -requiredPercentage;
+              console.log(
+                `   Timeframe ${timeframe}: Volume DECREASING check - Change ${volumeChange.toFixed(
+                  2
+                )}% <= -${requiredPercentage}%? ${timeframePassed}`
+              );
+            } else {
+              console.log(
+                `   ⚠️ Timeframe ${timeframe}: No baseline volume, skipping DECREASING check`
+              );
+              timeframePassed = true; // Skip if no baseline
+            }
+            break;
+
+          case "ABOVE":
+            timeframePassed = currentVolume > requiredPercentage;
+            console.log(
+              `   Timeframe ${timeframe}: Volume ABOVE check - ${currentVolume.toLocaleString()} > ${requiredPercentage.toLocaleString()}? ${timeframePassed}`
+            );
+            break;
+
+          case "BELOW":
+            timeframePassed = currentVolume < requiredPercentage;
+            console.log(
+              `   Timeframe ${timeframe}: Volume BELOW check - ${currentVolume.toLocaleString()} < ${requiredPercentage.toLocaleString()}? ${timeframePassed}`
+            );
+            break;
+
+          default:
+            console.log(`   Unknown volume condition: ${condition}`);
+            timeframePassed = false;
         }
-        return true;
 
-      default:
-        console.log(`   Unknown volume condition: ${condition}`);
+        if (!timeframePassed) {
+          allTimeframesPassed = false;
+          console.log(
+            `   ❌ Timeframe ${timeframe} FAILED: Volume condition ${condition} not met`
+          );
+          break; // One timeframe failed, condition invalid
+        } else {
+          console.log(
+            `   ✅ Timeframe ${timeframe} PASSED: Volume condition ${condition} met`
+          );
+        }
+      }
+
+      console.log(
+        `   Volume check (multi-timeframe): ${allTimeframesPassed} (${verifiedTimeframes}/${timeframes.length} timeframes verified, ALL must pass)`
+      );
+      return allTimeframesPassed;
+    } else {
+      // Fallback: use single volume check if no timeframes specified
+      const currentVolume =
+        parseFloat(priceData.volume || priceData.volume24h) || 0;
+
+      if (currentVolume === 0) {
+        console.log("⚠️ Volume data missing, skipping volume condition");
         return true;
+      }
+
+      console.log(`   Current Volume: ${currentVolume.toLocaleString()}`);
+
+      switch (condition) {
+        case "ABOVE":
+          const isAbove = currentVolume > requiredPercentage;
+          console.log(
+            `   Above check: ${currentVolume.toLocaleString()} > ${requiredPercentage.toLocaleString()}? ${isAbove}`
+          );
+          return isAbove;
+
+        case "BELOW":
+          const isBelow = currentVolume < requiredPercentage;
+          console.log(
+            `   Below check: ${currentVolume.toLocaleString()} < ${requiredPercentage.toLocaleString()}? ${isBelow}`
+          );
+          return isBelow;
+
+        default:
+          console.log(
+            `   ⚠️ No timeframes specified, using fallback calculation`
+          );
+          return true; // Skip if no timeframes
+      }
     }
+  }
+
+  // Fetch Open Interest from Binance Futures API
+  async fetchOpenInterest(symbol) {
+    try {
+      const futuresSymbol = symbol.toUpperCase();
+      const response = await fetch(
+        `https://fapi.binance.com/fapi/v1/openInterest?symbol=${futuresSymbol}`
+      );
+
+      if (!response.ok) {
+        console.warn(
+          `⚠️ Failed to fetch Open Interest for ${symbol}: ${response.status}`
+        );
+        return null;
+      }
+
+      const data = await response.json();
+      const openInterest = parseFloat(data.openInterest || 0);
+
+      console.log(
+        `✅ Fetched Open Interest for ${symbol}: ${openInterest.toLocaleString()}`
+      );
+
+      return openInterest;
+    } catch (error) {
+      console.warn(
+        `⚠️ Error fetching Open Interest for ${symbol}:`,
+        error.message
+      );
+      return null;
+    }
+  }
+
+  // Get or initialize Open Interest data for a symbol and timeframe
+  async getOpenInterestData(symbol, timeframe, alert = null) {
+    const key = `${symbol}_${timeframe}`;
+    const currentTime = Date.now();
+    const timeframeMs = this.getTimeframeMs(timeframe);
+
+    // Fetch current Open Interest
+    let currentOI = await this.fetchOpenInterest(symbol);
+
+    if (currentOI === null) {
+      // If fetch failed, try to use existing data
+      const existing = this.openInterestData.get(key);
+      if (existing) {
+        return existing;
+      }
+      return null;
+    }
+
+    // Check if we need to update baseline (at timeframe intervals)
+    const existing = this.openInterestData.get(key);
+
+    if (!existing) {
+      // Initialize with alert baseline or current OI
+      const baseline = alert?.baselineOpenInterest || currentOI;
+      this.openInterestData.set(key, {
+        current: currentOI,
+        baseline: baseline,
+        timestamp: currentTime,
+        lastUpdateTime: currentTime,
+      });
+      console.log(
+        `📊 Initialized Open Interest for ${symbol} (${timeframe}): Current=${currentOI.toLocaleString()}, Baseline=${baseline.toLocaleString()}`
+      );
+    } else {
+      // Check if timeframe interval has passed - update baseline
+      const timeSinceLastUpdate = currentTime - existing.lastUpdateTime;
+
+      if (timeSinceLastUpdate >= timeframeMs) {
+        // Timeframe interval passed - update baseline to previous current
+        existing.baseline = existing.current;
+        existing.timestamp = existing.lastUpdateTime;
+        console.log(
+          `📊 Updated Open Interest baseline for ${symbol} (${timeframe}): New baseline=${existing.baseline.toLocaleString()}`
+        );
+      }
+
+      // Update current OI
+      existing.current = currentOI;
+      existing.lastUpdateTime = currentTime;
+    }
+
+    return this.openInterestData.get(key);
   }
 
   async evaluateOpenInterestConditions(
@@ -2452,154 +2593,183 @@ class RealTimeAlertProcessor {
     priceData
   ) {
     const { direction, timeframes, percentage } = openInterestConditions;
+    const requiredPercentage = parseFloat(percentage) || 0;
 
     console.log(
-      `📊 Open Interest Evaluation: ${direction} on timeframes: ${timeframes.join(
-        ", "
-      )}${percentage ? ` (${percentage}%)` : ""}`
+      `📊 Open Interest Evaluation: ${direction}${
+        percentage ? ` by ${percentage}%` : ""
+      } on timeframes: ${timeframes?.join(", ") || "N/A"}`
     );
 
-    // Fetch open interest from Binance Futures API
-    let currentOpenInterest = priceData.openInterest || null;
+    // If timeframes are specified, check ALL timeframes
+    if (timeframes && timeframes.length > 0 && alert?.symbol) {
+      let allTimeframesPassed = true;
+      let verifiedTimeframes = 0;
 
-    if (!currentOpenInterest) {
-      try {
-        // Fetch from Binance Futures API
-        const futuresSymbol = alert.symbol.toUpperCase();
-        const response = await fetch(
-          `https://fapi.binance.com/fapi/v1/openInterest?symbol=${futuresSymbol}`
+      for (const timeframe of timeframes) {
+        console.log(`   Checking timeframe: ${timeframe}`);
+
+        // Get Open Interest data for this timeframe
+        const oiData = await this.getOpenInterestData(
+          alert.symbol,
+          timeframe,
+          alert
         );
-        if (response.ok) {
-          const data = await response.json();
-          currentOpenInterest = parseFloat(data.openInterest || 0);
+
+        if (!oiData || oiData.current === null) {
           console.log(
-            `✅ Fetched Open Interest for ${alert.symbol}: ${currentOpenInterest}`
+            `   ⚠️ Timeframe ${timeframe}: Open Interest data not available, cannot verify`
           );
-        } else {
-          console.warn(
-            `⚠️ Could not fetch Open Interest for ${alert.symbol}: ${response.status}`
-          );
-          // If we can't fetch and no baseline exists, skip the condition
-          if (!alert.baselineOpenInterest) {
-            console.log(
-              "⚠️ No baseline Open Interest and could not fetch current. Skipping condition."
-            );
-            return true;
-          }
+          allTimeframesPassed = false;
+          break;
         }
-      } catch (error) {
-        console.warn(
-          `⚠️ Error fetching Open Interest for ${alert.symbol}:`,
-          error.message
+
+        const currentOI = oiData.current;
+        const baselineOI = oiData.baseline || currentOI;
+        verifiedTimeframes++;
+
+        const oiChange = ((currentOI - baselineOI) / baselineOI) * 100;
+
+        console.log(
+          `   Timeframe ${timeframe}: Current OI=${currentOI.toLocaleString()}, Baseline OI=${baselineOI.toLocaleString()}, Change=${oiChange.toFixed(
+            2
+          )}%`
         );
-        // If we can't fetch and no baseline exists, skip the condition
-        if (!alert.baselineOpenInterest) {
+
+        let timeframePassed = false;
+
+        switch (direction) {
+          case "INCREASING":
+            if (percentage) {
+              timeframePassed = oiChange >= requiredPercentage;
+              console.log(
+                `   Timeframe ${timeframe}: Open Interest INCREASING check - Change ${oiChange.toFixed(
+                  2
+                )}% >= ${requiredPercentage}%? ${timeframePassed}`
+              );
+            } else {
+              timeframePassed = oiChange > 0;
+              console.log(
+                `   Timeframe ${timeframe}: Open Interest INCREASING check - Change ${oiChange.toFixed(
+                  2
+                )}% > 0? ${timeframePassed}`
+              );
+            }
+            break;
+
+          case "DECREASING":
+            if (percentage) {
+              timeframePassed = oiChange <= -requiredPercentage;
+              console.log(
+                `   Timeframe ${timeframe}: Open Interest DECREASING check - Change ${oiChange.toFixed(
+                  2
+                )}% <= -${requiredPercentage}%? ${timeframePassed}`
+              );
+            } else {
+              timeframePassed = oiChange < 0;
+              console.log(
+                `   Timeframe ${timeframe}: Open Interest DECREASING check - Change ${oiChange.toFixed(
+                  2
+                )}% < 0? ${timeframePassed}`
+              );
+            }
+            break;
+
+          case "ABOVE":
+            if (percentage) {
+              timeframePassed = oiChange >= requiredPercentage;
+              console.log(
+                `   Timeframe ${timeframe}: Open Interest ABOVE check - Change ${oiChange.toFixed(
+                  2
+                )}% >= ${requiredPercentage}%? ${timeframePassed}`
+              );
+            } else {
+              timeframePassed = currentOI > baselineOI;
+              console.log(
+                `   Timeframe ${timeframe}: Open Interest ABOVE check - ${currentOI.toLocaleString()} > ${baselineOI.toLocaleString()}? ${timeframePassed}`
+              );
+            }
+            break;
+
+          case "BELOW":
+            if (percentage) {
+              timeframePassed = oiChange <= -requiredPercentage;
+              console.log(
+                `   Timeframe ${timeframe}: Open Interest BELOW check - Change ${oiChange.toFixed(
+                  2
+                )}% <= -${requiredPercentage}%? ${timeframePassed}`
+              );
+            } else {
+              timeframePassed = currentOI < baselineOI;
+              console.log(
+                `   Timeframe ${timeframe}: Open Interest BELOW check - ${currentOI.toLocaleString()} < ${baselineOI.toLocaleString()}? ${timeframePassed}`
+              );
+            }
+            break;
+
+          default:
+            console.log(`   Unknown Open Interest direction: ${direction}`);
+            timeframePassed = false;
+        }
+
+        if (!timeframePassed) {
+          allTimeframesPassed = false;
           console.log(
-            "⚠️ No baseline Open Interest and fetch failed. Skipping condition."
+            `   ❌ Timeframe ${timeframe} FAILED: Open Interest condition ${direction} not met`
           );
-          return true;
+          break; // One timeframe failed, condition invalid
+        } else {
+          console.log(
+            `   ✅ Timeframe ${timeframe} PASSED: Open Interest condition ${direction} met`
+          );
         }
       }
-    }
 
-    // Get baseline open interest from alert (should be stored when alert is created)
-    const baselineOpenInterest =
-      alert.baselineOpenInterest || currentOpenInterest;
-
-    if (!baselineOpenInterest) {
       console.log(
-        "⚠️ Baseline Open Interest not found. Using current value as baseline."
+        `   Open Interest check (multi-timeframe): ${allTimeframesPassed} (${verifiedTimeframes}/${timeframes.length} timeframes verified, ALL must pass)`
       );
-      // Store current as baseline for future comparisons
-      alert.baselineOpenInterest = currentOpenInterest;
-    }
-
-    const oiChange =
-      ((currentOpenInterest - baselineOpenInterest) / baselineOpenInterest) *
-      100;
-
-    console.log(
-      `   Current OI: ${currentOpenInterest}, Baseline OI: ${baselineOpenInterest}`
-    );
-    console.log(`   OI Change: ${oiChange.toFixed(2)}%`);
-
-    let conditionMet = false;
-
-    switch (direction) {
-      case "INCREASING":
-        conditionMet = oiChange > 0;
-        if (percentage) {
-          const threshold = parseFloat(percentage);
-          conditionMet = conditionMet && oiChange >= threshold;
-        }
-        console.log(
-          `   INCREASING check: ${oiChange.toFixed(2)}% > 0${
-            percentage ? ` AND >= ${percentage}%` : ""
-          }? ${conditionMet}`
-        );
-        break;
-
-      case "DECREASING":
-        conditionMet = oiChange < 0;
-        if (percentage) {
-          const threshold = parseFloat(percentage);
-          conditionMet = conditionMet && Math.abs(oiChange) >= threshold;
-        }
-        console.log(
-          `   DECREASING check: ${oiChange.toFixed(2)}% < 0${
-            percentage ? ` AND |${oiChange.toFixed(2)}%| >= ${percentage}%` : ""
-          }? ${conditionMet}`
-        );
-        break;
-
-      case "ABOVE":
-        if (percentage) {
-          const threshold = parseFloat(percentage);
-          conditionMet = oiChange >= threshold;
-          console.log(
-            `   ABOVE check: ${oiChange.toFixed(
-              2
-            )}% >= ${threshold}%? ${conditionMet}`
-          );
-        } else {
-          // Without percentage, just check if OI is above baseline
-          conditionMet = currentOpenInterest > baselineOpenInterest;
-          console.log(
-            `   ABOVE check: ${currentOpenInterest} > ${baselineOpenInterest}? ${conditionMet}`
-          );
-        }
-        break;
-
-      case "BELOW":
-        if (percentage) {
-          const threshold = parseFloat(percentage);
-          conditionMet = oiChange <= -threshold;
-          console.log(
-            `   BELOW check: ${oiChange.toFixed(
-              2
-            )}% <= -${threshold}%? ${conditionMet}`
-          );
-        } else {
-          // Without percentage, just check if OI is below baseline
-          conditionMet = currentOpenInterest < baselineOpenInterest;
-          console.log(
-            `   BELOW check: ${currentOpenInterest} < ${baselineOpenInterest}? ${conditionMet}`
-          );
-        }
-        break;
-
-      default:
-        console.log(`   Unknown Open Interest direction: ${direction}`);
-        return true;
-    }
-
-    if (conditionMet) {
-      console.log(`✅ Open Interest condition PASSED: ${direction}`);
+      return allTimeframesPassed;
     } else {
-      console.log(`❌ Open Interest condition FAILED: ${direction}`);
-    }
+      // Fallback: use single Open Interest check if no timeframes specified
+      let currentOpenInterest = priceData.openInterest || null;
 
-    return conditionMet;
+      if (!currentOpenInterest) {
+        currentOpenInterest = await this.fetchOpenInterest(alert?.symbol || "");
+      }
+
+      if (!currentOpenInterest) {
+        console.log("⚠️ Open Interest data missing, skipping condition");
+        return true;
+      }
+
+      const baselineOpenInterest =
+        alert?.baselineOpenInterest || currentOpenInterest;
+      const oiChange =
+        ((currentOpenInterest - baselineOpenInterest) / baselineOpenInterest) *
+        100;
+
+      console.log(
+        `   Current OI: ${currentOpenInterest.toLocaleString()}, Baseline OI: ${baselineOpenInterest.toLocaleString()}`
+      );
+      console.log(`   OI Change: ${oiChange.toFixed(2)}%`);
+
+      switch (direction) {
+        case "INCREASING":
+          return percentage ? oiChange >= requiredPercentage : oiChange > 0;
+        case "DECREASING":
+          return percentage ? oiChange <= -requiredPercentage : oiChange < 0;
+        case "ABOVE":
+          return percentage
+            ? oiChange >= requiredPercentage
+            : currentOpenInterest > baselineOpenInterest;
+        case "BELOW":
+          return percentage
+            ? oiChange <= -requiredPercentage
+            : currentOpenInterest < baselineOpenInterest;
+        default:
+          return true;
+      }
+    }
   }
 
   async getUserFavorites(userId) {

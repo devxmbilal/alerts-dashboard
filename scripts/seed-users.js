@@ -13,10 +13,10 @@ async function seedUsers() {
       username: "admin",
       password: "admin123",
       name: "Admin User",
-      email: "admin@alerts.com",
-      telegramChatId: "", // Add your Telegram chat ID here
+      email: "wiclauuk@gnail.com",
+      telegramChatId: "5630545835", // Add your Telegram chat ID here
       notificationPreferences: {
-        email: true,
+        email: false,
         telegram: false, // Enable after adding telegramChatId
       },
     };
