@@ -13,12 +13,157 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: SSH into EC2 and deploy
+      - name: 🔍 Debug - Verify Secrets
+        run: |
+          echo "🔍 Checking GitHub Secrets..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          if [ -z "${{ secrets.EC2_HOST }}" ]; then
+            echo "❌ ERROR: EC2_HOST secret is missing!"
+            exit 1
+          else
+            echo "✅ EC2_HOST: ${{ secrets.EC2_HOST }}"
+          fi
+
+          if [ -z "${{ secrets.EC2_USER }}" ]; then
+            echo "❌ ERROR: EC2_USER secret is missing!"
+            exit 1
+          else
+            echo "✅ EC2_USER: ${{ secrets.EC2_USER }}"
+          fi
+
+          if [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
+            echo "❌ ERROR: EC2_SSH_KEY secret is missing!"
+            exit 1
+          else
+            echo "✅ EC2_SSH_KEY: [PRESENT]"
+            # Show first few characters for verification (without exposing full key)
+            KEY_PREVIEW=$(echo "${{ secrets.EC2_SSH_KEY }}" | head -c 50)
+            echo "   Key preview (first 50 chars): $KEY_PREVIEW..."
+          fi
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ All secrets are configured"
+
+      - name: 🔍 Debug - Test SSH Connection
+        run: |
+          echo "🧪 Testing SSH connection..."
+          echo "📍 Connecting to: ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}"
+
+          # Create temporary SSH key file
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/temp_key
+          chmod 600 ~/.ssh/temp_key
+
+          # Test connection with verbose output
+          ssh -v -i ~/.ssh/temp_key \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=10 \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+            "echo '✅ SSH connection successful!' && whoami && pwd" || {
+            echo "❌ SSH connection failed!"
+            echo "🔍 Debugging info:"
+            echo "   - Host: ${{ secrets.EC2_HOST }}"
+            echo "   - User: ${{ secrets.EC2_USER }}"
+            echo "   - Key file exists: $(test -f ~/.ssh/temp_key && echo 'YES' || echo 'NO')"
+            echo "   - Key file permissions: $(ls -la ~/.ssh/temp_key 2>/dev/null || echo 'N/A')"
+            exit 1
+          }
+
+          # Cleanup
+          rm -f ~/.ssh/temp_key
+          echo "✅ SSH connection test passed!"
+
+      - name: 🚀 SSH into EC2 and deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          timeout: 30s
+          command_timeout: 10m
+          debug: true
           script: |
+            set -e  # Exit on error
+            set -x  # Debug mode - show all commands
+
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🚀 Starting deployment..."
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📍 Current directory: $(pwd)"
+            echo "👤 Current user: $(whoami)"
+            echo "🖥️  Hostname: $(hostname)"
+            echo "📅 Date: $(date)"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+            # Check if directory exists
+            if [ ! -d "/var/www/alerts-dashboard" ]; then
+              echo "❌ ERROR: /var/www/alerts-dashboard directory does not exist!"
+              echo "📁 Creating directory..."
+              sudo mkdir -p /var/www/alerts-dashboard
+              sudo chown -R $USER:$USER /var/www/alerts-dashboard
+            fi
+
             cd /var/www/alerts-dashboard
-            ./deploy.sh
+            echo "✅ Changed to: $(pwd)"
+            echo "📂 Directory contents:"
+            ls -la || echo "⚠️ Cannot list directory"
+
+            # Check if it's a git repository
+            if [ ! -d ".git" ]; then
+              echo "⚠️ Not a git repository. Initializing..."
+              git init
+              git remote add origin https://github.com/${{ github.repository }}.git || echo "Remote might already exist"
+            fi
+
+            # Show current git status
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📊 Current Git Status:"
+            git status || echo "⚠️ Git not available"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+            # Pull latest code
+            echo "🔄 Pulling latest code from main branch..."
+            git fetch origin main || {
+              echo "⚠️ Fetch failed, trying to set upstream..."
+              git branch --set-upstream-to=origin/main main || true
+            }
+            git pull origin main || {
+              echo "❌ Git pull failed!"
+              echo "🔍 Trying to reset and pull..."
+              git reset --hard origin/main
+              git pull origin main
+            }
+
+            # Show what changed
+            echo "📝 Recent commits:"
+            git log --oneline -5 || echo "No commits found"
+
+            # Check if deploy.sh exists
+            if [ ! -f "./deploy.sh" ]; then
+              echo "❌ ERROR: deploy.sh file not found!"
+              echo "📂 Listing files in current directory:"
+              ls -la
+              exit 1
+            fi
+
+            # Make deploy.sh executable
+            chmod +x ./deploy.sh
+            echo "✅ deploy.sh is executable"
+
+            # Run deploy.sh with error handling
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📜 Running deploy.sh script..."
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            ./deploy.sh || {
+              echo "❌ deploy.sh failed with exit code: $?"
+              echo "🔍 Checking error details..."
+              exit 1
+            }
+
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "✅ Deployment completed successfully!"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
