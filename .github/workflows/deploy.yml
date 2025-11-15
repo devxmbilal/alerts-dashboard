@@ -10,268 +10,139 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      # Step 1 – Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: 🔍 Debug - Verify Secrets
+      # Step 2 – Prepare SSH Key
+      - name: Setup SSH Key
         run: |
-          echo "🔍 Checking GitHub Secrets..."
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-          if [ -z "${{ secrets.EC2_HOST }}" ]; then
-            echo "❌ ERROR: EC2_HOST secret is missing!"
-            exit 1
-          else
-            echo "✅ EC2_HOST: ${{ secrets.EC2_HOST }}"
-          fi
-
-          if [ -z "${{ secrets.EC2_USER }}" ]; then
-            echo "❌ ERROR: EC2_USER secret is missing!"
-            exit 1
-          else
-            echo "✅ EC2_USER: ${{ secrets.EC2_USER }}"
-          fi
-
-          if [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
-            echo "❌ ERROR: EC2_SSH_KEY secret is missing!"
-            exit 1
-          else
-            echo "✅ EC2_SSH_KEY: [PRESENT]"
-            # Show first few characters for verification (without exposing full key)
-            KEY_PREVIEW=$(echo "${{ secrets.EC2_SSH_KEY }}" | head -c 50)
-            echo "   Key preview (first 50 chars): $KEY_PREVIEW..."
-          fi
-
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "✅ All secrets are configured"
-
-      - name: 🔍 Debug - Verify Hostname/IP
-        run: |
-          echo "🔍 Verifying EC2 Host Configuration..."
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-          EC2_HOST="${{ secrets.EC2_HOST }}"
-
-          if [ -z "$EC2_HOST" ]; then
-            echo "❌ ERROR: EC2_HOST secret is empty!"
-            exit 1
-          fi
-
-          echo "📍 EC2_HOST value: $EC2_HOST"
-          echo "📏 EC2_HOST length: ${#EC2_HOST} characters"
-
-          # Check if it looks like an IP address
-          if [[ $EC2_HOST =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-            echo "✅ Detected as IP address format"
-            echo "🔍 Testing IP address connectivity..."
-            ping -c 2 -W 2 $EC2_HOST || {
-              echo "⚠️ WARNING: IP address not reachable via ping (might be normal)"
-            }
-          else
-            echo "⚠️ Detected as hostname/domain"
-            echo "🔍 Testing DNS resolution..."
-            
-            # Try to resolve hostname
-            nslookup $EC2_HOST || {
-              echo "❌ ERROR: Cannot resolve hostname: $EC2_HOST"
-              echo "💡 Solutions:"
-              echo "   1. Use IP address instead of hostname in EC2_HOST secret"
-              echo "   2. Check if hostname is correct"
-              echo "   3. Verify DNS settings"
-              exit 1
-            }
-            
-            # Get IP address from hostname
-            RESOLVED_IP=$(getent hosts $EC2_HOST | awk '{ print $1 }' | head -1)
-            if [ -z "$RESOLVED_IP" ]; then
-              echo "❌ ERROR: Cannot resolve hostname to IP address"
-              echo "💡 Try using IP address directly in EC2_HOST secret"
-              exit 1
-            else
-              echo "✅ Hostname resolved to IP: $RESOLVED_IP"
-              echo "💡 Tip: Consider using IP address ($RESOLVED_IP) directly for better reliability"
-            fi
-          fi
-
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-      - name: 🔍 Debug - Test SSH Connection
-        run: |
-          echo "🧪 Testing SSH connection..."
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📍 Connecting to: ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}"
-
-          EC2_HOST="${{ secrets.EC2_HOST }}"
-          EC2_USER="${{ secrets.EC2_USER }}"
-
-          # Validate host is not empty
-          if [ -z "$EC2_HOST" ] || [ "$EC2_HOST" = "***" ] || [ "$EC2_HOST" = "your-ec2-ip" ]; then
-            echo "❌ ERROR: EC2_HOST is not properly configured!"
-            echo "   Current value: '$EC2_HOST'"
-            echo "   💡 Please set EC2_HOST secret to your actual EC2 IP address"
-            echo "   Example: 54.123.45.67"
-            exit 1
-          fi
-
-          # Validate user is not empty
-          if [ -z "$EC2_USER" ] || [ "$EC2_USER" = "***" ] || [ "$EC2_USER" = "your-username" ]; then
-            echo "❌ ERROR: EC2_USER is not properly configured!"
-            echo "   Current value: '$EC2_USER'"
-            echo "   💡 Please set EC2_USER secret (usually 'ubuntu' or 'ec2-user')"
-            exit 1
-          fi
-
-          # Create temporary SSH key file
           mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
 
-          if [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
-            echo "❌ ERROR: EC2_SSH_KEY secret is empty!"
-            exit 1
-          fi
+      # Step 3 – Test SSH Connection (debug)
+      - name: Test SSH Connection
+        run: |
+          echo "🔍 Testing SSH..."
+          ssh -o StrictHostKeyChecking=no \
+              -i ~/.ssh/deploy_key \
+              ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+              "echo '✅ SSH Connection Successful'" || exit 1
 
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/temp_key
-          chmod 600 ~/.ssh/temp_key
+      # Step 4 – Deploy to EC2
+      - name: Deploy to EC2
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+              -i ~/.ssh/deploy_key \
+              ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
 
-          echo "🔍 Key file created:"
-          echo "   - File exists: $(test -f ~/.ssh/temp_key && echo 'YES' || echo 'NO')"
-          echo "   - File size: $(wc -c < ~/.ssh/temp_key) bytes"
-          echo "   - Permissions: $(ls -la ~/.ssh/temp_key | awk '{print $1}')"
+              set -e
+              set -x  # Debug mode
 
-          # Test DNS resolution first
-          echo "🔍 Testing hostname resolution..."
-          if ! getent hosts $EC2_HOST > /dev/null 2>&1; then
-            echo "❌ ERROR: Cannot resolve hostname: $EC2_HOST"
-            echo "💡 Solutions:"
-            echo "   1. Use IP address instead of hostname"
-            echo "   2. Check if EC2_HOST secret has correct value"
-            echo "   3. Verify EC2 instance is running"
-            rm -f ~/.ssh/temp_key
-            exit 1
-          fi
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "🚀 Starting Deployment on EC2..."
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "📍 Current directory: $(pwd)"
+              echo "👤 Current user: $(whoami)"
+              echo "📅 Date: $(date)"
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-          # Test connection with verbose output
-          echo "🔗 Attempting SSH connection..."
-          ssh -v -i ~/.ssh/temp_key \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -o ConnectTimeout=10 \
-            -o LogLevel=DEBUG3 \
-            $EC2_USER@$EC2_HOST \
-            "echo '✅ SSH connection successful!' && whoami && pwd" || {
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "❌ SSH connection failed!"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "🔍 Debugging info:"
-            echo "   - Host: $EC2_HOST"
-            echo "   - User: $EC2_USER"
-            echo "   - Hostname resolves: $(getent hosts $EC2_HOST > /dev/null 2>&1 && echo 'YES' || echo 'NO')"
-            echo "   - Key file exists: $(test -f ~/.ssh/temp_key && echo 'YES' || echo 'NO')"
-            echo "   - Key file permissions: $(ls -la ~/.ssh/temp_key 2>/dev/null | awk '{print $1}' || echo 'N/A')"
-            echo ""
-            echo "💡 Common fixes:"
-            echo "   1. Verify EC2_HOST is correct IP address (not hostname if DNS fails)"
-            echo "   2. Check EC2 Security Group allows SSH (port 22) from GitHub Actions"
-            echo "   3. Verify EC2 instance is running"
-            echo "   4. Check SSH key is correct and public key is in EC2's authorized_keys"
-            rm -f ~/.ssh/temp_key
-            exit 1
-          }
+              # Check if directory exists
+              if [ ! -d "/var/www/alerts-dashboard" ]; then
+                echo "❌ ERROR: /var/www/alerts-dashboard directory does not exist!"
+                echo "📁 Creating directory..."
+                sudo mkdir -p /var/www/alerts-dashboard
+                sudo chown -R $USER:$USER /var/www/alerts-dashboard
+              fi
 
-          # Cleanup
-          rm -f ~/.ssh/temp_key
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "✅ SSH connection test passed!"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              cd /var/www/alerts-dashboard || {
+                echo "❌ ERROR: Cannot change to /var/www/alerts-dashboard"
+                exit 1
+              }
 
-      - name: 🚀 SSH into EC2 and deploy
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          port: 22
-          timeout: 30s
-          command_timeout: 10m
-          debug: true
-          script: |
-            set -e  # Exit on error
-            set -x  # Debug mode - show all commands
+              echo "✅ Changed to: $(pwd)"
 
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "🚀 Starting deployment..."
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📍 Current directory: $(pwd)"
-            echo "👤 Current user: $(whoami)"
-            echo "🖥️  Hostname: $(hostname)"
-            echo "📅 Date: $(date)"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              # Check if it's a git repository
+              if [ ! -d ".git" ]; then
+                echo "⚠️ Not a git repository. Initializing..."
+                git init
+                git remote add origin https://github.com/${{ github.repository }}.git || echo "Remote might already exist"
+              fi
 
-            # Check if directory exists
-            if [ ! -d "/var/www/alerts-dashboard" ]; then
-              echo "❌ ERROR: /var/www/alerts-dashboard directory does not exist!"
-              echo "📁 Creating directory..."
-              sudo mkdir -p /var/www/alerts-dashboard
-              sudo chown -R $USER:$USER /var/www/alerts-dashboard
-            fi
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "🔄 Pulling latest code..."
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              
+              git fetch origin main || echo "⚠️ Fetch failed, continuing..."
+              git reset --hard origin/main || {
+                echo "❌ Git reset failed!"
+                exit 1
+              }
+              
+              git pull origin main || {
+                echo "❌ Git pull failed!"
+                exit 1
+              }
 
-            cd /var/www/alerts-dashboard
-            echo "✅ Changed to: $(pwd)"
-            echo "📂 Directory contents:"
-            ls -la || echo "⚠️ Cannot list directory"
+              echo "✅ Code pulled successfully"
+              echo "📝 Latest commit: $(git log -1 --oneline)"
 
-            # Check if it's a git repository
-            if [ ! -d ".git" ]; then
-              echo "⚠️ Not a git repository. Initializing..."
-              git init
-              git remote add origin https://github.com/${{ github.repository }}.git || echo "Remote might already exist"
-            fi
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "📦 Installing dependencies..."
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-            # Show current git status
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📊 Current Git Status:"
-            git status || echo "⚠️ Git not available"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              # Check if package.json exists
+              if [ ! -f "package.json" ]; then
+                echo "❌ ERROR: package.json not found!"
+                exit 1
+              fi
 
-            # Pull latest code
-            echo "🔄 Pulling latest code from main branch..."
-            git fetch origin main || {
-              echo "⚠️ Fetch failed, trying to set upstream..."
-              git branch --set-upstream-to=origin/main main || true
-            }
-            git pull origin main || {
-              echo "❌ Git pull failed!"
-              echo "🔍 Trying to reset and pull..."
-              git reset --hard origin/main
-              git pull origin main
-            }
+              npm install || {
+                echo "❌ ERROR: npm install failed!"
+                exit 1
+              }
 
-            # Show what changed
-            echo "📝 Recent commits:"
-            git log --oneline -5 || echo "No commits found"
+              echo "✅ Dependencies installed"
 
-            # Check if deploy.sh exists
-            if [ ! -f "./deploy.sh" ]; then
-              echo "❌ ERROR: deploy.sh file not found!"
-              echo "📂 Listing files in current directory:"
-              ls -la
-              exit 1
-            fi
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "🏗️ Building project..."
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-            # Make deploy.sh executable
-            chmod +x ./deploy.sh
-            echo "✅ deploy.sh is executable"
+              npm run build || {
+                echo "❌ ERROR: Build failed!"
+                exit 1
+              }
 
-            # Run deploy.sh with error handling
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📜 Running deploy.sh script..."
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            ./deploy.sh || {
-              echo "❌ deploy.sh failed with exit code: $?"
-              echo "🔍 Checking error details..."
-              exit 1
-            }
+              echo "✅ Build completed successfully"
 
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "✅ Deployment completed successfully!"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "🔁 Restarting PM2 processes..."
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+              # Check if ecosystem.config.cjs exists
+              if [ ! -f "ecosystem.config.cjs" ]; then
+                echo "❌ ERROR: ecosystem.config.cjs not found!"
+                exit 1
+              fi
+
+              # Use ecosystem.config.cjs to restart all processes
+              pm2 restart ecosystem.config.cjs || {
+                echo "⚠️ PM2 restart failed, trying to start..."
+                pm2 start ecosystem.config.cjs || {
+                  echo "❌ ERROR: PM2 start failed!"
+                  pm2 logs --lines 20 --nostream || true
+                  exit 1
+                }
+              }
+
+              # Save PM2 configuration
+              pm2 save || echo "⚠️ PM2 save failed (might need 'pm2 startup')"
+
+              echo "📊 PM2 Status:"
+              pm2 status
+
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "🎉 Deployment Completed Successfully!"
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          EOF
