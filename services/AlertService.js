@@ -7,18 +7,46 @@ class AlertService {
     userId,
     symbol,
     conditions,
-    notificationSettings = {}
+    notificationSettings = {},
+    baselinePrice = null,
+    baselineVolume = null,
+    baselineOpenInterest = null
   ) {
     try {
-      const alert = new Alert({
+      const alertData = {
         userId,
         symbol,
         conditions,
         notificationSettings,
-      });
+      };
+
+      // Add baseline values if provided
+      if (baselinePrice !== null && baselinePrice !== undefined) {
+        alertData.baselinePrice = parseFloat(baselinePrice) || 0;
+      }
+      if (baselineVolume !== null && baselineVolume !== undefined) {
+        alertData.baselineVolume = parseFloat(baselineVolume) || 0;
+      }
+      if (baselineOpenInterest !== null && baselineOpenInterest !== undefined) {
+        alertData.baselineOpenInterest = parseFloat(baselineOpenInterest) || 0;
+      }
+
+      // Set baselineTimestamp if any baseline value is set
+      if (
+        alertData.baselinePrice ||
+        alertData.baselineVolume ||
+        alertData.baselineOpenInterest
+      ) {
+        alertData.baselineTimestamp = new Date();
+      }
+
+      const alert = new Alert(alertData);
 
       await alert.save();
       console.log(`✅ Alert created for ${symbol} by user ${userId}`);
+      if (baselineOpenInterest) {
+        console.log(`   Baseline Open Interest: ${baselineOpenInterest}`);
+      }
       return alert;
     } catch (error) {
       console.error("❌ Error creating alert:", error);

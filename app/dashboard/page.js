@@ -66,6 +66,9 @@ export default function Dashboard() {
         const data = await response.json();
         setUser(data.data);
 
+        // Load user's preferred timeframe from database
+        await loadUserPreferredTimeframe(token);
+
         // Load latest triggered alert after successful auth
         await loadLatestTriggeredAlert(token);
       } else {
@@ -80,6 +83,67 @@ export default function Dashboard() {
       router.push("/login");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Load user's preferred timeframe from database
+  const loadUserPreferredTimeframe = async (token) => {
+    try {
+      const response = await fetch("/api/user/settings", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.user?.preferredTimeframe) {
+          setSelectedTimeframe(data.user.preferredTimeframe);
+          console.log(
+            `✅ Loaded preferred timeframe: ${data.user.preferredTimeframe}`
+          );
+        }
+      }
+    } catch (error) {
+      console.error("Error loading preferred timeframe:", error);
+    }
+  };
+
+  // Handle timeframe change - save to database
+  const handleTimeframeChange = async (newTimeframe) => {
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) return;
+
+      setSelectedTimeframe(newTimeframe);
+
+      // Save to database
+      const response = await fetch("/api/user/settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          preferredTimeframe: newTimeframe,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          console.log(`✅ Timeframe saved to database: ${newTimeframe}`);
+          // Update user state
+          setUser((prev) => ({
+            ...prev,
+            preferredTimeframe: newTimeframe,
+          }));
+        }
+      } else {
+        console.error("Failed to save timeframe");
+      }
+    } catch (error) {
+      console.error("Error saving timeframe:", error);
     }
   };
 
@@ -152,7 +216,7 @@ export default function Dashboard() {
 
   // State management
   const [selectedCoin, setSelectedCoin] = useState("BTCUSDT");
-  const [selectedTimeframe, setSelectedTimeframe] = useState("5m");
+  const [selectedTimeframe, setSelectedTimeframe] = useState("5m"); // Will be loaded from user preferences
   const [lastTriggeredSymbol, setLastTriggeredSymbol] = useState(null);
   const [alerts, setAlerts] = useState([]);
   const [chartSwitchNotification, setChartSwitchNotification] = useState(null);
@@ -374,6 +438,7 @@ export default function Dashboard() {
                 key={`${selectedCoin}-${selectedTimeframe}`}
                 symbol={selectedCoin}
                 timeframe={selectedTimeframe}
+                onTimeframeChange={handleTimeframeChange}
               />
             </Box>
           );
@@ -413,6 +478,7 @@ export default function Dashboard() {
                 key={`${selectedCoin}-${selectedTimeframe}`}
                 symbol={selectedCoin}
                 timeframe={selectedTimeframe}
+                onTimeframeChange={handleTimeframeChange}
               />
             </Box>
           );
@@ -473,6 +539,7 @@ export default function Dashboard() {
                 key={`${selectedCoin}-${selectedTimeframe}`}
                 symbol={selectedCoin}
                 timeframe={selectedTimeframe}
+                onTimeframeChange={handleTimeframeChange}
               />
             </Paper>
           </Box>

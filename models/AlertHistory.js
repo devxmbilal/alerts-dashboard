@@ -74,6 +74,10 @@ const alertHistorySchema = new mongoose.Schema(
         type: Number,
         required: true,
       },
+      openInterest: {
+        type: Number,
+        default: 0,
+      },
       high: {
         type: Number,
         required: true,
@@ -115,6 +119,10 @@ const alertHistorySchema = new mongoose.Schema(
       changeFromBaselinePercent: {
         type: Number,
         required: true,
+      },
+      baselineOpenInterest: {
+        type: Number,
+        default: 0,
       },
     },
     triggeredAt: {

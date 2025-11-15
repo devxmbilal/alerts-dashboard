@@ -38,7 +38,15 @@ export async function POST(request) {
     await connectToMongoDB();
 
     const body = await request.json();
-    const { userId, symbol, conditions, notificationSettings } = body;
+    const {
+      userId,
+      symbol,
+      conditions,
+      notificationSettings,
+      baselinePrice,
+      baselineVolume,
+      baselineOpenInterest,
+    } = body;
 
     if (!userId || !symbol || !conditions) {
       return NextResponse.json(
@@ -47,11 +55,69 @@ export async function POST(request) {
       );
     }
 
+    // Fetch current market data if baseline values not provided
+    let currentPrice = baselinePrice;
+    let currentVolume = baselineVolume;
+    let currentOpenInterest = baselineOpenInterest;
+
+    if (!currentPrice || !currentVolume) {
+      try {
+        // Fetch current price and volume from Binance
+        const priceResponse = await fetch(
+          `https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`
+        );
+        if (priceResponse.ok) {
+          const priceData = await priceResponse.json();
+          currentPrice =
+            currentPrice ||
+            parseFloat(priceData.lastPrice || priceData.price || 0);
+          currentVolume = currentVolume || parseFloat(priceData.volume || 0);
+        }
+      } catch (error) {
+        console.warn(
+          `⚠️ Failed to fetch price data for ${symbol}:`,
+          error.message
+        );
+      }
+    }
+
+    // Fetch Open Interest if openInterest condition is present and not provided
+    if (
+      conditions.openInterest &&
+      conditions.openInterest.timeframes?.length > 0 &&
+      !currentOpenInterest
+    ) {
+      try {
+        // Convert spot symbol to futures symbol (e.g., BTCUSDT -> BTCUSDT)
+        const futuresSymbol = symbol;
+        const oiResponse = await fetch(
+          `https://fapi.binance.com/fapi/v1/openInterest?symbol=${futuresSymbol}`
+        );
+        if (oiResponse.ok) {
+          const oiData = await oiResponse.json();
+          currentOpenInterest = parseFloat(oiData.openInterest || 0);
+          console.log(
+            `✅ Fetched Open Interest for ${symbol}: ${currentOpenInterest}`
+          );
+        }
+      } catch (error) {
+        console.warn(
+          `⚠️ Failed to fetch Open Interest for ${symbol}:`,
+          error.message
+        );
+        currentOpenInterest = null;
+      }
+    }
+
+    // Create alert with baseline values
     const alert = await AlertService.createAlert(
       userId,
       symbol,
       conditions,
-      notificationSettings
+      notificationSettings,
+      currentPrice,
+      currentVolume,
+      currentOpenInterest
     );
 
     return NextResponse.json({

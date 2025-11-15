@@ -62,6 +62,11 @@ const userSchema = new mongoose.Schema(
         default: false,
       },
     },
+    preferredTimeframe: {
+      type: String,
+      enum: ["1m", "5m", "15m", "1h", "4h", "1d", "1w"],
+      default: "5m",
+    },
   },
   {
     timestamps: true,

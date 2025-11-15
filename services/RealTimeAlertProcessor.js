@@ -573,8 +573,13 @@ class RealTimeAlertProcessor {
       // Safely get baseline values with proper defaults
       const baselinePrice = parseFloat(alert.baselinePrice) || 0;
       const baselineVolume = parseFloat(alert.baselineVolume) || 0;
+      const baselineOpenInterest = parseFloat(alert.baselineOpenInterest) || 0;
       const baselineTimestamp = alert.baselineTimestamp || new Date();
       const livePrice = parseFloat(liveData.price) || 0;
+
+      // Get current openInterest from liveData
+      const currentOpenInterest =
+        parseFloat(liveData.openInterest || liveData.openInterest24h) || 0;
 
       // Calculate change from baseline with proper NaN handling
       let changeFromBaseline = 0;
@@ -616,6 +621,7 @@ class RealTimeAlertProcessor {
           priceChange: parseFloat(liveData.priceChange) || 0,
           priceChangePercent: parseFloat(liveData.priceChangePercent) || 0,
           volume24h: parseFloat(liveData.volume || liveData.volume24h) || 0,
+          openInterest: currentOpenInterest,
           high: parseFloat(liveData.high || liveData.price) || 0,
           low: parseFloat(liveData.low || liveData.price) || 0,
           open: parseFloat(liveData.open || liveData.price) || 0,
@@ -625,6 +631,7 @@ class RealTimeAlertProcessor {
         baselineData: {
           baselinePrice: baselinePrice,
           baselineVolume: baselineVolume,
+          baselineOpenInterest: baselineOpenInterest,
           baselineTimestamp: baselineTimestamp,
           changeFromBaseline: changeFromBaseline,
           changeFromBaselinePercent: changeFromBaselinePercent,
@@ -1190,8 +1197,13 @@ class RealTimeAlertProcessor {
       // Safely get baseline values with proper defaults
       const baselinePrice = parseFloat(alert.baselinePrice) || 0;
       const baselineVolume = parseFloat(alert.baselineVolume) || 0;
+      const baselineOpenInterest = parseFloat(alert.baselineOpenInterest) || 0;
       const baselineTimestamp = alert.baselineTimestamp || new Date();
       const livePrice = parseFloat(priceData.price) || 0;
+
+      // Get current openInterest from priceData
+      const currentOpenInterest =
+        parseFloat(priceData.openInterest || priceData.openInterest24h) || 0;
 
       // Calculate change from baseline with proper NaN handling
       let changeFromBaseline = 0;
@@ -1231,6 +1243,7 @@ class RealTimeAlertProcessor {
           priceChange: parseFloat(priceData.priceChange) || 0,
           priceChangePercent: parseFloat(priceData.priceChangePercent) || 0,
           volume24h: parseFloat(priceData.volume || priceData.volume24h) || 0,
+          openInterest: currentOpenInterest,
           high: parseFloat(priceData.high) || 0,
           low: parseFloat(priceData.low) || 0,
           open: parseFloat(priceData.open) || 0,
@@ -1240,6 +1253,7 @@ class RealTimeAlertProcessor {
         baselineData: {
           baselinePrice: baselinePrice,
           baselineVolume: baselineVolume,
+          baselineOpenInterest: baselineOpenInterest,
           baselineTimestamp: baselineTimestamp,
           changeFromBaseline: changeFromBaseline,
           changeFromBaselinePercent: changeFromBaselinePercent,
@@ -1660,16 +1674,22 @@ class RealTimeAlertProcessor {
             `📱 Sending Telegram message to ${user.telegramChatId} for alert history ${alertHistory._id}...`
           );
 
-          // Capture chart screenshot
+          // Capture chart screenshot using user's preferred timeframe
           let chartScreenshot = null;
           try {
             console.log(
               `[${alert.symbol}] Capturing TradingView chart screenshot...`
             );
+            // Use user's preferred timeframe, fallback to alert timeframe or default
+            const userPreferredTimeframe = user.preferredTimeframe || "5m";
             const timeframe =
+              userPreferredTimeframe ||
               alertData.timeframe ||
               alert.conditions?.changePercent?.timeframe ||
               "5m";
+            console.log(
+              `[${alert.symbol}] Using timeframe for chart: ${timeframe} (user preference: ${userPreferredTimeframe})`
+            );
             chartScreenshot = await ChartScreenshotService.captureChart(
               alert.symbol,
               timeframe

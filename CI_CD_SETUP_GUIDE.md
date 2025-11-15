@@ -258,7 +258,8 @@ chmod -R 755 /var/www/alerts-dashboard
 
 ```bash
 # EC2 par SSH karein
-ssh ubuntu@YOUR_EC2_IP
+ssh ubuntu@18.139.210.2
+
 
 # PM2 status
 pm2 status

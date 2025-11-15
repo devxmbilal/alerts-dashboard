@@ -28,6 +28,7 @@ export async function PUT(request) {
       newPassword,
       telegramChatId,
       notificationPreferences,
+      preferredTimeframe,
     } = updateData;
 
     // Find user
@@ -94,9 +95,31 @@ export async function PUT(request) {
     // Update notification preferences if provided
     if (notificationPreferences) {
       user.notificationPreferences = {
-        email: notificationPreferences.email ?? user.notificationPreferences?.email ?? true,
-        telegram: notificationPreferences.telegram ?? user.notificationPreferences?.telegram ?? false,
+        email:
+          notificationPreferences.email ??
+          user.notificationPreferences?.email ??
+          true,
+        telegram:
+          notificationPreferences.telegram ??
+          user.notificationPreferences?.telegram ??
+          false,
       };
+    }
+
+    // Update preferred timeframe if provided
+    if (preferredTimeframe) {
+      const validTimeframes = ["1m", "5m", "15m", "1h", "4h", "1d", "1w"];
+      if (validTimeframes.includes(preferredTimeframe)) {
+        user.preferredTimeframe = preferredTimeframe;
+        console.log(`✅ Updated preferred timeframe to: ${preferredTimeframe}`);
+      } else {
+        return NextResponse.json(
+          {
+            error: "Invalid timeframe. Must be one of: 1m, 5m, 15m, 1h, 4h, 1d",
+          },
+          { status: 400 }
+        );
+      }
     }
 
     // Save updated user
@@ -110,6 +133,7 @@ export async function PUT(request) {
       email: user.email,
       telegramChatId: user.telegramChatId,
       notificationPreferences: user.notificationPreferences,
+      preferredTimeframe: user.preferredTimeframe,
     };
 
     console.log(`✅ User settings updated for ${user.username}`);
@@ -158,6 +182,7 @@ export async function GET(request) {
         email: user.email,
         telegramChatId: user.telegramChatId,
         notificationPreferences: user.notificationPreferences,
+        preferredTimeframe: user.preferredTimeframe,
       },
     });
   } catch (error) {

@@ -1,9 +1,13 @@
 "use client";
 
 import React, { useEffect } from "react";
-import { Box, Typography } from "@mui/material";
+import { Box, Typography, ButtonGroup, Button } from "@mui/material";
 
-const TradingViewChart = ({ symbol = "BTCUSDT", timeframe = "5m" }) => {
+const TradingViewChart = ({
+  symbol = "BTCUSDT",
+  timeframe = "5m",
+  onTimeframeChange,
+}) => {
   useEffect(() => {
     // Clear existing chart container
     const container = document.getElementById("tradingview_chart");
@@ -68,7 +72,7 @@ const TradingViewChart = ({ symbol = "BTCUSDT", timeframe = "5m" }) => {
       createWidget();
     };
     window.addEventListener("resize", onResize);
-    
+
     return () => {
       window.removeEventListener("resize", onResize);
     };
@@ -86,12 +90,15 @@ const TradingViewChart = ({ symbol = "BTCUSDT", timeframe = "5m" }) => {
         flexDirection: "column",
       }}
     >
-      {/* Header - Only show symbol */}
+      {/* Header with Symbol and Timeframe Selector */}
       <Box
         sx={{
           p: 1,
           borderBottom: "1px solid #333",
           backgroundColor: "#1a1a1a",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
         }}
       >
         <Typography
@@ -104,6 +111,53 @@ const TradingViewChart = ({ symbol = "BTCUSDT", timeframe = "5m" }) => {
         >
           {symbol}
         </Typography>
+
+        {/* Timeframe Selector */}
+        {onTimeframeChange && (
+          <ButtonGroup
+            variant="outlined"
+            size="small"
+            sx={{
+              "& .MuiButton-root": {
+                color: "white",
+                borderColor: "#444",
+                fontSize: "0.7rem",
+                py: 0.5,
+                px: 1,
+                minWidth: "40px",
+                "&:hover": {
+                  borderColor: "#1976d2",
+                  backgroundColor: "rgba(25, 118, 210, 0.1)",
+                },
+                "&.Mui-selected": {
+                  backgroundColor: "#1976d2",
+                  color: "white",
+                  "&:hover": {
+                    backgroundColor: "#1565c0",
+                  },
+                },
+              },
+            }}
+          >
+            {[
+              { value: "1m", label: "1M" },
+              { value: "5m", label: "5M" },
+              { value: "15m", label: "15M" },
+              { value: "1h", label: "1H" },
+              { value: "4h", label: "4H" },
+              { value: "1d", label: "1D" },
+              { value: "1w", label: "1W" },
+            ].map((option) => (
+              <Button
+                key={option.value}
+                onClick={() => onTimeframeChange(option.value)}
+                variant={timeframe === option.value ? "contained" : "outlined"}
+              >
+                {option.label}
+              </Button>
+            ))}
+          </ButtonGroup>
+        )}
       </Box>
 
       {/* Chart Container */}

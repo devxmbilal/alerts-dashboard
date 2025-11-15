@@ -30,6 +30,9 @@ class AlertHistoryService {
               alertHistoryData.triggerData.volume ||
               0
           ),
+          openInterest: parseFloat(
+            alertHistoryData.triggerData.openInterest || 0
+          ),
           high: parseFloat(alertHistoryData.triggerData.high),
           low: parseFloat(alertHistoryData.triggerData.low),
           open: parseFloat(alertHistoryData.triggerData.open),
@@ -42,6 +45,9 @@ class AlertHistoryService {
           ),
           baselineVolume: parseFloat(
             alertHistoryData.baselineData.baselineVolume || 0
+          ),
+          baselineOpenInterest: parseFloat(
+            alertHistoryData.baselineData.baselineOpenInterest || 0
           ),
           baselineTimestamp: alertHistoryData.baselineData.baselineTimestamp,
           changeFromBaseline: parseFloat(
