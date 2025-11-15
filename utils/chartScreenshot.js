@@ -22,6 +22,14 @@ class ChartScreenshotService {
       // Force cleanup if browser exists but not properly initialized
       if (this.browser) {
         try {
+          const pages = await this.browser.pages();
+          for (const page of pages) {
+            try {
+              await page.close();
+            } catch (e) {
+              // Ignore
+            }
+          }
           await this.browser.close();
         } catch (e) {
           // Ignore close errors
@@ -31,37 +39,102 @@ class ChartScreenshotService {
       }
 
       if (this.isInitialized && this.browser) {
-        return;
+        // Verify browser is still alive
+        try {
+          const pages = await this.browser.pages();
+          return; // Browser is alive
+        } catch (e) {
+          // Browser is dead, reinitialize
+          this.browser = null;
+          this.isInitialized = false;
+        }
       }
 
       console.log("🚀 Initializing Puppeteer browser for chart screenshots...");
 
-      this.browser = await puppeteer.launch({
-        headless: "new", // Use new headless mode
-        pipe: true, // Use pipe instead of WebSocket for Windows compatibility
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-blink-features=AutomationControlled", // Hide automation
-          "--no-first-run",
-          "--disable-gpu",
-          "--window-size=800,400",
-          "--disable-web-security", // Allow cross-origin
-          "--disable-features=IsolateOrigins,site-per-process",
-        ],
-        defaultViewport: {
-          width: 800,
-          height: 400,
-        },
-        ignoreHTTPSErrors: true,
-        timeout: 60000, // Increase timeout for Windows
-      });
+      // Retry logic for browser initialization
+      let lastError = null;
+      const maxRetries = 3;
 
-      this.isInitialized = true;
-      console.log("✅ Puppeteer browser initialized successfully");
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          this.browser = await puppeteer.launch({
+            headless: "new", // Use new headless mode
+            pipe: true, // Use pipe instead of WebSocket for better compatibility
+            args: [
+              "--no-sandbox",
+              "--disable-setuid-sandbox",
+              "--disable-dev-shm-usage",
+              "--disable-blink-features=AutomationControlled",
+              "--no-first-run",
+              "--disable-gpu",
+              "--disable-software-rasterizer",
+              "--disable-extensions",
+              "--window-size=800,400",
+              "--disable-web-security",
+              "--disable-features=IsolateOrigins,site-per-process",
+              "--disable-background-networking",
+              "--disable-background-timer-throttling",
+              "--disable-renderer-backgrounding",
+              "--disable-backgrounding-occluded-windows",
+              "--disable-ipc-flooding-protection",
+              "--single-process", // Use single process mode for stability
+            ],
+            defaultViewport: {
+              width: 800,
+              height: 400,
+            },
+            ignoreHTTPSErrors: true,
+            timeout: 60000,
+          });
+
+          // Verify browser is actually working
+          const pages = await this.browser.pages();
+          if (pages.length === 0) {
+            // Create a test page to verify browser works
+            const testPage = await this.browser.newPage();
+            await testPage.close();
+          }
+
+          this.isInitialized = true;
+          console.log("✅ Puppeteer browser initialized successfully");
+          return; // Success!
+        } catch (error) {
+          lastError = error;
+          console.error(
+            `❌ Browser initialization attempt ${attempt}/${maxRetries} failed:`,
+            error.message
+          );
+
+          // Cleanup failed browser instance
+          if (this.browser) {
+            try {
+              await this.browser.close();
+            } catch (e) {
+              // Ignore
+            }
+            this.browser = null;
+          }
+
+          // Wait before retry (exponential backoff)
+          if (attempt < maxRetries) {
+            const waitTime = attempt * 2000; // 2s, 4s
+            console.log(`⏳ Waiting ${waitTime}ms before retry...`);
+            await new Promise((resolve) => setTimeout(resolve, waitTime));
+          }
+        }
+      }
+
+      // All retries failed
+      throw new Error(
+        `Failed to initialize browser after ${maxRetries} attempts: ${
+          lastError?.message || "Unknown error"
+        }`
+      );
     } catch (error) {
       console.error("❌ Error initializing Puppeteer browser:", error);
+      this.browser = null;
+      this.isInitialized = false;
       throw error;
     }
   }
@@ -74,17 +147,31 @@ class ChartScreenshotService {
    */
   async captureChart(symbol, timeframe = "5m") {
     let page = null;
-    
+
     try {
       // Initialize browser if not already done
-      if (!this.isInitialized) {
+      if (!this.isInitialized || !this.browser) {
+        await this.initialize();
+      }
+
+      // Verify browser is still alive
+      try {
+        await this.browser.pages();
+      } catch (e) {
+        console.warn(`[${symbol}] Browser is dead, reinitializing...`);
+        this.isInitialized = false;
         await this.initialize();
       }
 
       console.log(`[${symbol}] Starting chart screenshot capture...`);
 
-      // Create a new page
-      page = await this.browser.newPage();
+      // Create a new page with timeout
+      page = await Promise.race([
+        this.browser.newPage(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Page creation timeout")), 10000)
+        ),
+      ]);
 
       // Set viewport for optimal chart display
       await page.setViewport({
@@ -95,12 +182,12 @@ class ChartScreenshotService {
 
       // Set user agent to avoid being blocked
       await page.setUserAgent(
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
       );
 
       // Hide webdriver property to avoid bot detection
       await page.evaluateOnNewDocument(() => {
-        Object.defineProperty(navigator, 'webdriver', {
+        Object.defineProperty(navigator, "webdriver", {
           get: () => false,
         });
         // Add Chrome object
@@ -110,7 +197,7 @@ class ChartScreenshotService {
         // Override permissions
         const originalQuery = window.navigator.permissions.query;
         window.navigator.permissions.query = (parameters) =>
-          parameters.name === 'notifications'
+          parameters.name === "notifications"
             ? Promise.resolve({ state: Notification.permission })
             : originalQuery(parameters);
       });
@@ -126,7 +213,9 @@ class ChartScreenshotService {
           timeout: 45000, // Increased for Windows
         });
       } catch (navError) {
-        console.warn(`[${symbol}] Navigation with domcontentloaded failed, trying with load...`);
+        console.warn(
+          `[${symbol}] Navigation with domcontentloaded failed, trying with load...`
+        );
         // Fallback: try with 'load' event
         await page.goto(tradingViewUrl, {
           waitUntil: "load",
@@ -201,7 +290,9 @@ class ChartScreenshotService {
    */
   async captureMultipleCharts(chartRequests) {
     try {
-      console.log(`📊 Capturing ${chartRequests.length} charts concurrently...`);
+      console.log(
+        `📊 Capturing ${chartRequests.length} charts concurrently...`
+      );
 
       const screenshots = await Promise.all(
         chartRequests.map(async ({ symbol, timeframe }) => {

@@ -117,6 +117,21 @@ jobs:
               echo "✅ Build completed successfully"
 
               echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "🔧 Installing Puppeteer Dependencies (if needed)..."
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              
+              # Check if Chromium/Chrome is installed
+              if ! command -v chromium-browser &> /dev/null && ! command -v google-chrome &> /dev/null; then
+                echo "⚠️ Chromium/Chrome not found. Installing dependencies..."
+                sudo apt-get update -qq
+                sudo apt-get install -y chromium-browser libgbm1 libasound2 libatk-bridge2.0-0 || {
+                  echo "⚠️ Chromium installation failed, continuing..."
+                }
+              else
+                echo "✅ Chromium/Chrome already installed"
+              fi
+
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
               echo "🔁 Restarting PM2 processes..."
               echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
