@@ -45,36 +45,144 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "✅ All secrets are configured"
 
+      - name: 🔍 Debug - Verify Hostname/IP
+        run: |
+          echo "🔍 Verifying EC2 Host Configuration..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          EC2_HOST="${{ secrets.EC2_HOST }}"
+
+          if [ -z "$EC2_HOST" ]; then
+            echo "❌ ERROR: EC2_HOST secret is empty!"
+            exit 1
+          fi
+
+          echo "📍 EC2_HOST value: $EC2_HOST"
+          echo "📏 EC2_HOST length: ${#EC2_HOST} characters"
+
+          # Check if it looks like an IP address
+          if [[ $EC2_HOST =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+            echo "✅ Detected as IP address format"
+            echo "🔍 Testing IP address connectivity..."
+            ping -c 2 -W 2 $EC2_HOST || {
+              echo "⚠️ WARNING: IP address not reachable via ping (might be normal)"
+            }
+          else
+            echo "⚠️ Detected as hostname/domain"
+            echo "🔍 Testing DNS resolution..."
+            
+            # Try to resolve hostname
+            nslookup $EC2_HOST || {
+              echo "❌ ERROR: Cannot resolve hostname: $EC2_HOST"
+              echo "💡 Solutions:"
+              echo "   1. Use IP address instead of hostname in EC2_HOST secret"
+              echo "   2. Check if hostname is correct"
+              echo "   3. Verify DNS settings"
+              exit 1
+            }
+            
+            # Get IP address from hostname
+            RESOLVED_IP=$(getent hosts $EC2_HOST | awk '{ print $1 }' | head -1)
+            if [ -z "$RESOLVED_IP" ]; then
+              echo "❌ ERROR: Cannot resolve hostname to IP address"
+              echo "💡 Try using IP address directly in EC2_HOST secret"
+              exit 1
+            else
+              echo "✅ Hostname resolved to IP: $RESOLVED_IP"
+              echo "💡 Tip: Consider using IP address ($RESOLVED_IP) directly for better reliability"
+            fi
+          fi
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
       - name: 🔍 Debug - Test SSH Connection
         run: |
           echo "🧪 Testing SSH connection..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📍 Connecting to: ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}"
+
+          EC2_HOST="${{ secrets.EC2_HOST }}"
+          EC2_USER="${{ secrets.EC2_USER }}"
+
+          # Validate host is not empty
+          if [ -z "$EC2_HOST" ] || [ "$EC2_HOST" = "***" ] || [ "$EC2_HOST" = "your-ec2-ip" ]; then
+            echo "❌ ERROR: EC2_HOST is not properly configured!"
+            echo "   Current value: '$EC2_HOST'"
+            echo "   💡 Please set EC2_HOST secret to your actual EC2 IP address"
+            echo "   Example: 54.123.45.67"
+            exit 1
+          fi
+
+          # Validate user is not empty
+          if [ -z "$EC2_USER" ] || [ "$EC2_USER" = "***" ] || [ "$EC2_USER" = "your-username" ]; then
+            echo "❌ ERROR: EC2_USER is not properly configured!"
+            echo "   Current value: '$EC2_USER'"
+            echo "   💡 Please set EC2_USER secret (usually 'ubuntu' or 'ec2-user')"
+            exit 1
+          fi
 
           # Create temporary SSH key file
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
+
+          if [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
+            echo "❌ ERROR: EC2_SSH_KEY secret is empty!"
+            exit 1
+          fi
+
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/temp_key
           chmod 600 ~/.ssh/temp_key
 
+          echo "🔍 Key file created:"
+          echo "   - File exists: $(test -f ~/.ssh/temp_key && echo 'YES' || echo 'NO')"
+          echo "   - File size: $(wc -c < ~/.ssh/temp_key) bytes"
+          echo "   - Permissions: $(ls -la ~/.ssh/temp_key | awk '{print $1}')"
+
+          # Test DNS resolution first
+          echo "🔍 Testing hostname resolution..."
+          if ! getent hosts $EC2_HOST > /dev/null 2>&1; then
+            echo "❌ ERROR: Cannot resolve hostname: $EC2_HOST"
+            echo "💡 Solutions:"
+            echo "   1. Use IP address instead of hostname"
+            echo "   2. Check if EC2_HOST secret has correct value"
+            echo "   3. Verify EC2 instance is running"
+            rm -f ~/.ssh/temp_key
+            exit 1
+          fi
+
           # Test connection with verbose output
+          echo "🔗 Attempting SSH connection..."
           ssh -v -i ~/.ssh/temp_key \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             -o ConnectTimeout=10 \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+            -o LogLevel=DEBUG3 \
+            $EC2_USER@$EC2_HOST \
             "echo '✅ SSH connection successful!' && whoami && pwd" || {
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "❌ SSH connection failed!"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "🔍 Debugging info:"
-            echo "   - Host: ${{ secrets.EC2_HOST }}"
-            echo "   - User: ${{ secrets.EC2_USER }}"
+            echo "   - Host: $EC2_HOST"
+            echo "   - User: $EC2_USER"
+            echo "   - Hostname resolves: $(getent hosts $EC2_HOST > /dev/null 2>&1 && echo 'YES' || echo 'NO')"
             echo "   - Key file exists: $(test -f ~/.ssh/temp_key && echo 'YES' || echo 'NO')"
-            echo "   - Key file permissions: $(ls -la ~/.ssh/temp_key 2>/dev/null || echo 'N/A')"
+            echo "   - Key file permissions: $(ls -la ~/.ssh/temp_key 2>/dev/null | awk '{print $1}' || echo 'N/A')"
+            echo ""
+            echo "💡 Common fixes:"
+            echo "   1. Verify EC2_HOST is correct IP address (not hostname if DNS fails)"
+            echo "   2. Check EC2 Security Group allows SSH (port 22) from GitHub Actions"
+            echo "   3. Verify EC2 instance is running"
+            echo "   4. Check SSH key is correct and public key is in EC2's authorized_keys"
+            rm -f ~/.ssh/temp_key
             exit 1
           }
 
           # Cleanup
           rm -f ~/.ssh/temp_key
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "✅ SSH connection test passed!"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: 🚀 SSH into EC2 and deploy
         uses: appleboy/ssh-action@v1.0.3
