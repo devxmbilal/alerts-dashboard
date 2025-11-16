@@ -81,15 +81,20 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
       // FIXED: Use alerts stream instead of notifications stream for real-time alerts
       const user = JSON.parse(localStorage.getItem("user") || "{}");
       const userId = user._id || user.id;
-      
+
       if (!userId) {
         console.error("❌ No user ID found in localStorage");
         return;
       }
 
-      const url = `${
-        process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"
-      }/api/alerts/stream?userId=${userId}`;
+      // Use relative URL for production (works with nginx proxy)
+      // Only use absolute URL in development
+      const baseUrl =
+        typeof window !== "undefined" && window.location.origin
+          ? window.location.origin
+          : process.env.NEXT_PUBLIC_API_URL || "";
+
+      const url = `${baseUrl}/api/alerts/stream?userId=${userId}`;
 
       console.log("🔌 Connecting to alerts stream:", url);
       const eventSource = new EventSource(url);
@@ -122,17 +127,27 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
 
             // Map alert data to history format
             const mappedAlert = {
-              id: alertData.alertId || alertData._id || `realtime_${Date.now()}`,
+              id:
+                alertData.alertId || alertData._id || `realtime_${Date.now()}`,
               symbol: alertData.symbol,
-              targetValue: alertData.targetValue || alertData.conditions?.changePercent?.percentage,
+              targetValue:
+                alertData.targetValue ||
+                alertData.conditions?.changePercent?.percentage,
               actualValue: alertData.actualValue || alertData.triggeredChange,
-              timeframe: alertData.timeframe || alertData.conditions?.changePercent?.timeframe || "5MIN",
-              direction: alertData.direction || alertData.conditions?.changePercent?.direction || "increase",
+              timeframe:
+                alertData.timeframe ||
+                alertData.conditions?.changePercent?.timeframe ||
+                "5MIN",
+              direction:
+                alertData.direction ||
+                alertData.conditions?.changePercent?.direction ||
+                "increase",
               price: alertData.triggeredPrice || alertData.price,
               baselinePrice: alertData.baselinePrice,
               changeFromBaselinePercent: alertData.changeFromBaselinePercent,
               volume: alertData.triggeredVolume || alertData.volume,
-              priceChangePercent: alertData.triggeredChange || alertData.priceChangePercent,
+              priceChangePercent:
+                alertData.triggeredChange || alertData.priceChangePercent,
               triggeredAt: alertData.triggeredAt || new Date().toISOString(),
               read: false,
             };
@@ -424,7 +439,11 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
 
       if (conditions.openInterest) {
         parts.push(
-          `Open Interest: ${conditions.openInterest.direction}${conditions.openInterest.percentage ? ` ${conditions.openInterest.percentage}%` : ""}`
+          `Open Interest: ${conditions.openInterest.direction}${
+            conditions.openInterest.percentage
+              ? ` ${conditions.openInterest.percentage}%`
+              : ""
+          }`
         );
       }
 

@@ -25,7 +25,7 @@ class RealTimeAlertProcessor {
     this.isRoundProcessing = false; // Prevent overlapping rounds
     this.roundInterval = null; // Round processing interval
     // Concurrency limit for parallel alert processing (20-50 alerts at once)
-    this.processLimit = pLimit(50);
+    this.processLimit = pLimit(35);
     this.rsiData = new Map(); // Track RSI values for each symbol+timeframe: key = "symbol_timeframe_period", value = { current: number, previous: number }
     this.openInterestData = new Map(); // Track Open Interest for each symbol+timeframe: key = "symbol_timeframe", value = { current: number, baseline: number, timestamp: number }
   }
@@ -1540,18 +1540,25 @@ class RealTimeAlertProcessor {
           lazyConnect: true,
           retryDelayOnClusterDown: 300,
           maxRetriesPerRequest: 3,
+          enableReadyCheck: false,
         });
+
+        // Ensure connection is ready
+        if (!redis.status || redis.status === "end") {
+          await redis.connect();
+        }
 
         const alertData = {
           type: "alert_triggered",
-          alertId: alert._id,
-          historyId: alertHistory._id,
-          userId: alert.userId,
+          alertId: alert._id?.toString(),
+          historyId: alertHistory._id?.toString(),
+          userId: alert.userId?.toString(),
           symbol: alert.symbol,
-          triggeredAt: new Date(),
-          triggeredPrice: parseFloat(priceData.price),
-          triggeredVolume: parseFloat(priceData.volume || priceData.volume24h),
-          triggeredChange: parseFloat(priceData.priceChangePercent),
+          triggeredAt: new Date().toISOString(),
+          triggeredPrice: parseFloat(priceData.price) || 0,
+          triggeredVolume:
+            parseFloat(priceData.volume || priceData.volume24h) || 0,
+          triggeredChange: parseFloat(priceData.priceChangePercent) || 0,
           conditions: alert.conditions,
           notificationSettings: alert.notificationSettings,
           // Add frontend display data
@@ -1564,9 +1571,12 @@ class RealTimeAlertProcessor {
         };
 
         // Publish to alert triggers channel for real-time updates
-        await redis.publish("alert:triggers", JSON.stringify(alertData));
+        const publishResult = await redis.publish(
+          "alert:triggers",
+          JSON.stringify(alertData)
+        );
         console.log(
-          `🚨 Alert published to Redis for ${alert.symbol}:`,
+          `🚨 Alert published to Redis for ${alert.symbol} (subscribers: ${publishResult}):`,
           alertData
         );
 
@@ -1575,17 +1585,18 @@ class RealTimeAlertProcessor {
           "notifications:alerts",
           JSON.stringify({
             type: "new_alert",
-            userId: alert.userId,
+            userId: alert.userId?.toString(),
             symbol: alert.symbol,
-            timestamp: new Date(),
-            alertId: alert._id,
+            timestamp: new Date().toISOString(),
+            alertId: alert._id?.toString(),
           })
         );
         console.log(
           `📢 Alert notification published to Redis for user ${alert.userId}`
         );
 
-        await redis.quit();
+        // Don't quit - keep connection alive for future publishes
+        // Connection will be reused or auto-closed by ioredis
       } catch (redisError) {
         console.error("❌ Error publishing alert to Redis:", redisError);
         // Don't fail the whole process if Redis fails
@@ -1913,24 +1924,29 @@ class RealTimeAlertProcessor {
   // Get RSI value for a symbol and timeframe (with caching)
   async getRSI(symbol, timeframe, period = 14) {
     const key = `${symbol}_${timeframe}_${period}`;
+    const now = Date.now();
+    const existing = this.rsiData.get(key);
+
+    // TTL: half of timeframe or minimum 10s
+    const ttl = Math.max(this.getTimeframeMs(timeframe) / 2, 10_000);
+
+    if (existing && now - existing.timestamp < ttl) {
+      return existing;
+    }
+
     const rsiValue = await this.calculateRSI(symbol, timeframe, period);
 
     if (rsiValue !== null) {
-      // Store previous RSI value before updating
-      const existing = this.rsiData.get(key);
-      if (existing) {
-        existing.previous = existing.current;
-      }
-
-      // Update current RSI
+      const previous = existing?.current ?? rsiValue;
       this.rsiData.set(key, {
         current: rsiValue,
-        previous: existing?.previous || rsiValue,
-        timestamp: Date.now(),
+        previous,
+        timestamp: now,
       });
+      return this.rsiData.get(key);
     }
 
-    return this.rsiData.get(key);
+    return existing || null;
   }
 
   // Technical analysis helper methods

@@ -43,8 +43,11 @@ export async function GET(request) {
         try {
           const alertData = JSON.parse(message);
 
-          // Only send alerts for this user
-          if (alertData.userId === userId) {
+          // Only send alerts for this user (compare as strings to handle ObjectId)
+          const alertUserId = String(alertData.userId || "");
+          const requestUserId = String(userId || "");
+
+          if (alertUserId === requestUserId) {
             console.log("🚨 Alert triggered for user:", userId, alertData);
 
             const data = JSON.stringify({
@@ -53,9 +56,14 @@ export async function GET(request) {
             });
 
             controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+          } else {
+            console.log(
+              `⚠️ Alert for different user (alert: ${alertUserId}, request: ${requestUserId})`
+            );
           }
         } catch (error) {
           console.error("❌ Error parsing alert message:", error);
+          console.error("❌ Message content:", message);
         }
       });
 
