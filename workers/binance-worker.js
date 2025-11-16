@@ -199,7 +199,7 @@ class BinanceWorker {
       console.log(`✅ Found ${USDT_PAIRS.length} USDT spot pairs`);
 
       // Cache the pairs list in Redis
-      await redis.setex("crypto:usdt_pairs", 3600, JSON.stringify(USDT_PAIRS)); // 1 hour cache
+      await redis.setex("crypto:usdt_pairs", 1800, JSON.stringify(USDT_PAIRS)); // 30 minutes cache
     } catch (error) {
       console.error("❌ Failed to fetch USDT pairs:", error);
       // Fallback to default pairs if API fails

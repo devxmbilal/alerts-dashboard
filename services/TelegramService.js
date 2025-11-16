@@ -13,7 +13,7 @@ class TelegramService {
     // 🔁 Queue + Rate-limit state
     this.queue = [];
     this.isProcessing = false;
-    this.minDelayMs = 1200; // ≈1.2s per message (safe for Telegram)
+    this.minDelayMs = 800; // ≈0.8s per message (safe for Telegram, faster than 1.2s)
     this.lastSentAt = 0;
   }
 

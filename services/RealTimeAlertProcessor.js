@@ -28,6 +28,37 @@ class RealTimeAlertProcessor {
     this.processLimit = pLimit(35);
     this.rsiData = new Map(); // Track RSI values for each symbol+timeframe: key = "symbol_timeframe_period", value = { current: number, previous: number }
     this.openInterestData = new Map(); // Track Open Interest for each symbol+timeframe: key = "symbol_timeframe", value = { current: number, baseline: number, timestamp: number }
+    this.redisPublisher = null; // Cached Redis publisher connection
+  }
+
+  // Get or create Redis publisher connection (reused for performance)
+  async getRedisPublisher() {
+    if (this.redisPublisher && this.redisPublisher.status === "ready") {
+      return this.redisPublisher;
+    }
+
+    const Redis = (await import("ioredis")).default;
+    this.redisPublisher = new Redis({
+      host: process.env.REDIS_HOST || "localhost",
+      port: process.env.REDIS_PORT || 6379,
+      lazyConnect: true,
+      retryDelayOnClusterDown: 300,
+      maxRetriesPerRequest: 3,
+      enableReadyCheck: false,
+    });
+
+    // Ensure connection is ready
+    if (this.redisPublisher.status !== "ready") {
+      await this.redisPublisher.connect();
+    }
+
+    // Handle connection errors
+    this.redisPublisher.on("error", (err) => {
+      console.error("❌ Redis publisher error:", err);
+      this.redisPublisher = null; // Reset on error
+    });
+
+    return this.redisPublisher;
   }
 
   async loadAlertsFromRedis(userId) {
@@ -1462,376 +1493,77 @@ class RealTimeAlertProcessor {
         `📢 sendRealTimeNotification called for ${alert.symbol}, alertHistory._id: ${alertHistory._id}`
       );
 
-      // Get user info for email and telegram
-      const user = await User.findById(alert.userId)
-        .select("email telegramChatId notificationPreferences")
-        .lean();
+      const redis = await this.getRedisPublisher();
 
-      if (!user) {
-        console.error(`❌ User not found: ${alert.userId}`);
-        return;
-      }
-
-      // Prepare notification data for SSE stream with complete alert history info
-      const notification = {
+      // Prepare payload with all required fields for frontend
+      const payload = {
         type: "alert_triggered",
-        _id: alertHistory._id,
-        id: alertHistory._id,
+        historyId: alertHistory._id?.toString(),
+        userId: alert.userId?.toString(),
         symbol: alert.symbol,
-        price: priceData.price,
-        priceChange: priceData.priceChange,
-        priceChangePercent: priceData.priceChangePercent,
-        volume: priceData.volume || priceData.volume24h,
-        high: priceData.high,
-        low: priceData.low,
-        open: priceData.open,
-        close: priceData.close,
-        conditions: alertHistory.conditions,
-        triggeredAt: alertHistory.triggeredAt,
-        alertId: alert._id,
-        userId: alert.userId,
-        // Add detailed alert info for frontend display
+        price: parseFloat(priceData.price) || 0,
+        priceChangePercent: parseFloat(priceData.priceChangePercent) || 0,
+        volume: parseFloat(priceData.volume || priceData.volume24h) || 0,
+        triggeredAt:
+          alertHistory.triggeredAt?.toISOString() || new Date().toISOString(),
+        // Frontend required fields
         targetValue:
           alert.alertConditions?.changePercent?.percentage ||
           alert.conditions?.changePercent?.percentage,
-        actualValue: priceData.priceChangePercent,
+        actualValue: parseFloat(priceData.priceChangePercent) || 0,
+        timeframe:
+          alert.alertConditions?.changePercent?.timeframe ||
+          alert.conditions?.changePercent?.timeframe ||
+          "5MIN",
         direction:
           (alert.alertConditions?.changePercent?.direction ||
             alert.conditions?.changePercent?.direction) === "increase"
             ? "increase"
             : "decrease",
-        timeframe:
-          alert.alertConditions?.changePercent?.timeframe ||
-          alert.conditions?.changePercent?.timeframe ||
-          "5MIN",
         baselinePrice: alertHistory.baselineData?.baselinePrice,
         changeFromBaselinePercent:
           alertHistory.baselineData?.changeFromBaselinePercent,
-        // Add alert history data for complete display
+        triggeredPrice: parseFloat(priceData.price) || 0,
+        triggeredChange: parseFloat(priceData.priceChangePercent) || 0,
+        triggeredVolume:
+          parseFloat(priceData.volume || priceData.volume24h) || 0,
+        conditions: alertHistory.conditions,
         alertConditions: alert.alertConditions || alert.conditions,
         triggerData: {
-          price: priceData.price,
-          priceChangePercent: priceData.priceChangePercent,
-          volume24h: priceData.volume || priceData.volume24h,
+          price: parseFloat(priceData.price) || 0,
+          priceChangePercent: parseFloat(priceData.priceChangePercent) || 0,
+          volume24h: parseFloat(priceData.volume || priceData.volume24h) || 0,
         },
         baselineData: alertHistory.baselineData,
+        // Additional fields for backward compatibility
+        alertId: alert._id?.toString(),
+        _id: alertHistory._id?.toString(),
+        id: alertHistory._id?.toString(),
       };
 
-      console.log(`📢 Sending real-time notification for ${alert.symbol}:`, {
-        userId: alert.userId,
-        symbol: notification.symbol,
-        price: notification.price,
-        targetValue: notification.targetValue,
-        actualValue: notification.actualValue,
-      });
+      // 1) SSE / dashboard ke liye (complete payload)
+      await redis.publish("alerts:stream", JSON.stringify(payload));
 
-      // Send notification via SSE stream
-      await NotificationService.sendNotification(alert.userId, notification);
-      console.log(
-        `✅ Real-time notification sent successfully for ${alert.symbol}`
-      );
-
-      // CRITICAL FIX: Also publish to Redis for real-time alerts
-      try {
-        const Redis = (await import("ioredis")).default;
-        const redis = new Redis({
-          host: process.env.REDIS_HOST || "localhost",
-          port: process.env.REDIS_PORT || 6379,
-          lazyConnect: true,
-          retryDelayOnClusterDown: 300,
-          maxRetriesPerRequest: 3,
-          enableReadyCheck: false,
-        });
-
-        // Ensure connection is ready
-        if (!redis.status || redis.status === "end") {
-          await redis.connect();
-        }
-
-        const alertData = {
-          type: "alert_triggered",
-          alertId: alert._id?.toString(),
-          historyId: alertHistory._id?.toString(),
-          userId: alert.userId?.toString(),
-          symbol: alert.symbol,
-          triggeredAt: new Date().toISOString(),
-          triggeredPrice: parseFloat(priceData.price) || 0,
-          triggeredVolume:
-            parseFloat(priceData.volume || priceData.volume24h) || 0,
-          triggeredChange: parseFloat(priceData.priceChangePercent) || 0,
-          conditions: alert.conditions,
-          notificationSettings: alert.notificationSettings,
-          // Add frontend display data
-          targetValue: notification.targetValue,
-          actualValue: notification.actualValue,
-          direction: notification.direction,
-          timeframe: notification.timeframe,
-          baselinePrice: notification.baselinePrice,
-          changeFromBaselinePercent: notification.changeFromBaselinePercent,
-        };
-
-        // Publish to alert triggers channel for real-time updates
-        const publishResult = await redis.publish(
-          "alert:triggers",
-          JSON.stringify(alertData)
-        );
-        console.log(
-          `🚨 Alert published to Redis for ${alert.symbol} (subscribers: ${publishResult}):`,
-          alertData
-        );
-
-        // Also publish to notifications channel for header badge updates
-        await redis.publish(
-          "notifications:alerts",
-          JSON.stringify({
-            type: "new_alert",
-            userId: alert.userId?.toString(),
-            symbol: alert.symbol,
-            timestamp: new Date().toISOString(),
-            alertId: alert._id?.toString(),
-          })
-        );
-        console.log(
-          `📢 Alert notification published to Redis for user ${alert.userId}`
-        );
-
-        // Don't quit - keep connection alive for future publishes
-        // Connection will be reused or auto-closed by ioredis
-      } catch (redisError) {
-        console.error("❌ Error publishing alert to Redis:", redisError);
-        // Don't fail the whole process if Redis fails
-      }
-
-      // Prepare formatted alert data for Email & Telegram
-      const alertData = {
+      // 2) notification worker ke liye (minimal data - worker will fetch from DB)
+      const workerPayload = {
+        type: "alert_triggered",
+        historyId: alertHistory._id?.toString(),
+        userId: alert.userId?.toString(),
         symbol: alert.symbol,
-        targetValue: alert.conditions?.changePercent?.percentage || "N/A",
-        actualValue: priceData.priceChangePercent || 0,
-        direction:
-          alert.conditions?.changePercent?.direction === "increase"
-            ? "Increase"
-            : alert.conditions?.changePercent?.direction === "decrease"
-            ? "Decrease"
-            : "Increase",
-        timeframe: alert.conditions?.changePercent?.timeframe || "5MIN",
-        triggeredPrice: priceData.price,
-        baselinePrice: alertHistory.baselineData?.baselinePrice,
-        changeFromBaselinePercent:
-          alertHistory.baselineData?.changeFromBaselinePercent,
-        volume: priceData.volume || priceData.volume24h,
-        triggeredAt: alertHistory.triggeredAt,
+        price: parseFloat(priceData.price) || 0,
+        priceChangePercent: parseFloat(priceData.priceChangePercent) || 0,
+        volume: parseFloat(priceData.volume || priceData.volume24h) || 0,
+        triggeredAt:
+          alertHistory.triggeredAt?.toISOString() || new Date().toISOString(),
       };
+      await redis.publish("notifications:queue", JSON.stringify(workerPayload));
 
-      // Debug: Log the alert data being sent to email
-      console.log(`📧 Email Alert Data for ${alert.symbol}:`, {
-        targetValue: alertData.targetValue,
-        actualValue: alertData.actualValue,
-        direction: alertData.direction,
-        timeframe: alertData.timeframe,
-        triggeredPrice: alertData.triggeredPrice,
-        baselinePrice: alertData.baselinePrice,
-        changeFromBaselinePercent: alertData.changeFromBaselinePercent,
-      });
+      console.log(`📤 Published alert for ${alert.symbol} to Redis channels`);
 
-      // Send Email notification if enabled
-      if (user.notificationPreferences?.email !== false && user.email) {
-        console.log(`📧 Sending email to ${user.email}...`);
-        const emailSent = await EmailService.sendAlertEmail(
-          user.email,
-          alertData
-        );
-        if (emailSent) {
-          console.log(`✅ Email sent successfully to ${user.email}`);
-        } else {
-          console.error(`❌ Failed to send email to ${user.email}`);
-        }
-      }
-
-      // Check if Telegram notification should be sent
-      // Since alertHistory was just saved, it should be fresh and notificationSent should not be set
-      // We'll use atomic update in the sending logic to prevent duplicates
-      const shouldSendTelegram =
-        user.notificationPreferences?.telegram &&
-        user.telegramChatId &&
-        alertHistory._id;
-
-      console.log(
-        `🔍 Checking Telegram notification for alertHistory ${alertHistory._id}:`,
-        {
-          telegramEnabled: user.notificationPreferences?.telegram,
-          hasTelegramChatId: !!user.telegramChatId,
-          hasAlertHistoryId: !!alertHistory._id,
-          shouldSendTelegram: shouldSendTelegram,
-          notificationSent: alertHistory.notificationSent,
-        }
-      );
-
-      // Send Telegram notification if enabled
-      // Atomic update will prevent duplicates if multiple alerts try to send simultaneously
-      if (shouldSendTelegram) {
-        // First, atomically check if notification was already sent
-        // This prevents multiple parallel attempts from sending the same notification
-        const checkResult = await AlertHistory.findOne({
-          _id: alertHistory._id,
-          "notificationSent.telegram": { $ne: true }, // Only if not already sent
-        }).lean();
-
-        if (!checkResult) {
-          console.log(
-            `⚠️ Alert history ${alertHistory._id} already has Telegram notification sent, skipping`
-          );
-        } else {
-          console.log(
-            `📱 Sending Telegram message to ${user.telegramChatId} for alert history ${alertHistory._id}...`
-          );
-
-          // Capture chart screenshot using user's preferred timeframe
-          let chartScreenshot = null;
-          try {
-            console.log(
-              `[${alert.symbol}] Capturing TradingView chart screenshot...`
-            );
-            // Use user's preferred timeframe, fallback to alert timeframe or default
-            const userPreferredTimeframe = user.preferredTimeframe || "5m";
-            const timeframe =
-              userPreferredTimeframe ||
-              alertData.timeframe ||
-              alert.conditions?.changePercent?.timeframe ||
-              "5m";
-            console.log(
-              `[${alert.symbol}] Using timeframe for chart: ${timeframe} (user preference: ${userPreferredTimeframe})`
-            );
-            chartScreenshot = await ChartScreenshotService.captureChart(
-              alert.symbol,
-              timeframe
-            );
-            console.log(`[${alert.symbol}] Screenshot captured successfully`);
-          } catch (screenshotError) {
-            console.error(
-              `[${alert.symbol}] Failed to capture chart screenshot:`,
-              screenshotError.message
-            );
-            console.log(`[${alert.symbol}] Will send text-only alert`);
-          }
-
-          // Retry logic: try up to 3 times with minimal delay (max 3 seconds total)
-          let telegramSent = false;
-          let retryCount = 0;
-          const maxRetries = 3;
-
-          while (!telegramSent && retryCount < maxRetries) {
-            try {
-              // Only add delay for retries, not first attempt (immediate send)
-              if (retryCount > 0) {
-                // Fixed 1 second delay per retry (max 2 retries = 2 seconds total, within 3 second limit)
-                const delay = 1100; // 1 second per retry
-                console.log(
-                  `🔄 Retry ${retryCount}/${maxRetries - 1} after ${delay}ms...`
-                );
-                await new Promise((resolve) => setTimeout(resolve, delay));
-              }
-
-              // Send with photo if screenshot was captured, otherwise send text only
-              if (chartScreenshot) {
-                telegramSent = await TelegramService.sendPhotoAlert(
-                  user.telegramChatId,
-                  chartScreenshot,
-                  alertData
-                );
-                console.log(`[${alert.symbol}] Telegram alert sent with chart`);
-              } else {
-                telegramSent = await TelegramService.sendAlertMessage(
-                  user.telegramChatId,
-                  alertData
-                );
-                console.log(
-                  `[${alert.symbol}] Telegram alert sent (text only)`
-                );
-              }
-
-              if (telegramSent) {
-                console.log(
-                  `✅ Telegram message sent successfully to ${user.telegramChatId}`
-                );
-                // Mark as sent in database using atomic update (non-blocking)
-                // Fire and forget - don't wait for DB update to complete
-                AlertHistory.findOneAndUpdate(
-                  {
-                    _id: alertHistory._id,
-                    "notificationSent.telegram": { $ne: true }, // Only update if not already true
-                  },
-                  {
-                    $set: { "notificationSent.telegram": true },
-                  },
-                  { new: true }
-                )
-                  .then((updateResult) => {
-                    if (updateResult) {
-                      console.log(
-                        `✅ Alert history ${alertHistory._id} marked as Telegram sent`
-                      );
-                    } else {
-                      console.log(
-                        `⚠️ Alert history ${alertHistory._id} was already marked as Telegram sent (atomic check)`
-                      );
-                    }
-                  })
-                  .catch((error) => {
-                    console.error(
-                      `❌ Error marking alert history ${alertHistory._id} as sent:`,
-                      error.message
-                    );
-                  });
-              } else {
-                retryCount++;
-                if (retryCount < maxRetries) {
-                  console.log(
-                    `⚠️ Telegram send failed, will retry (${retryCount}/${
-                      maxRetries - 1
-                    })`
-                  );
-                }
-              }
-            } catch (error) {
-              retryCount++;
-              console.error(
-                `❌ Error sending Telegram message (attempt ${retryCount}/${maxRetries}):`,
-                error.message
-              );
-              if (retryCount >= maxRetries) {
-                console.error(
-                  `❌ Failed to send Telegram message after ${maxRetries} attempts`
-                );
-              }
-            }
-          } // End of while loop
-        } // End of else block for checkResult
-      } else {
-        // Telegram notification was not sent - log the reason
-        console.log(
-          `⚠️ Telegram notification skipped for alert history ${alertHistory._id}:`,
-          {
-            telegramEnabled: user.notificationPreferences?.telegram,
-            hasTelegramChatId: !!user.telegramChatId,
-            hasAlertHistoryId: !!alertHistory._id,
-            reason: !user.notificationPreferences?.telegram
-              ? "Telegram disabled in preferences"
-              : !user.telegramChatId
-              ? "No Telegram chat ID"
-              : !alertHistory._id
-              ? "No alert history ID"
-              : "Already sent or check failed",
-          }
-        );
-      }
-
-      console.log(`📢 Notification: ${alert.symbol} alert triggered!`);
-      console.log(`   Price: $${priceData.price}`);
-      console.log(`   Change: ${priceData.priceChangePercent}%`);
-      console.log(`   Volume: ${priceData.volume || priceData.volume24h}`);
-      console.log(`   Conditions: ${alertHistory.conditions}`);
-    } catch (error) {
-      console.error("❌ Error sending real-time notification:", error);
+      // Also publish to alert:triggers for backward compatibility (complete payload)
+      await redis.publish("alert:triggers", JSON.stringify(payload));
+    } catch (err) {
+      console.error("❌ Error publishing alert notification:", err.message);
     }
   }
 
@@ -2569,58 +2301,58 @@ class RealTimeAlertProcessor {
     }
   }
 
-  // Get or initialize Open Interest data for a symbol and timeframe
+  // Get or initialize Open Interest data for a symbol and timeframe (cached)
   async getOpenInterestData(symbol, timeframe, alert = null) {
     const key = `${symbol}_${timeframe}`;
-    const currentTime = Date.now();
+    const now = Date.now();
     const timeframeMs = this.getTimeframeMs(timeframe);
 
-    // Fetch current Open Interest
+    const existing = this.openInterestData.get(key);
+
+    // TTL: full timeframe (e.g. 5m, 15m) — OI fast change nahi chahiye
+    const ttl = timeframeMs || 60_000;
+
+    if (existing && now - existing.lastUpdateTime < ttl) {
+      return existing;
+    }
+
+    // Fetch current Open Interest (only when needed)
     let currentOI = await this.fetchOpenInterest(symbol);
 
     if (currentOI === null) {
-      // If fetch failed, try to use existing data
-      const existing = this.openInterestData.get(key);
-      if (existing) {
-        return existing;
-      }
-      return null;
+      // fallback: if we have old data, keep it
+      return existing || null;
     }
 
-    // Check if we need to update baseline (at timeframe intervals)
-    const existing = this.openInterestData.get(key);
-
     if (!existing) {
-      // Initialize with alert baseline or current OI
       const baseline = alert?.baselineOpenInterest || currentOI;
-      this.openInterestData.set(key, {
+      const data = {
         current: currentOI,
-        baseline: baseline,
-        timestamp: currentTime,
-        lastUpdateTime: currentTime,
-      });
+        baseline,
+        timestamp: now,
+        lastUpdateTime: now,
+      };
+      this.openInterestData.set(key, data);
       console.log(
-        `📊 Initialized Open Interest for ${symbol} (${timeframe}): Current=${currentOI.toLocaleString()}, Baseline=${baseline.toLocaleString()}`
+        `📊 Init OI for ${symbol} (${timeframe}): current=${currentOI.toLocaleString()}, baseline=${baseline.toLocaleString()}`
       );
+      return data;
     } else {
-      // Check if timeframe interval has passed - update baseline
-      const timeSinceLastUpdate = currentTime - existing.lastUpdateTime;
+      // maybe shift baseline if timeframe passed
+      const timeSinceLastBaseline = now - existing.timestamp;
 
-      if (timeSinceLastUpdate >= timeframeMs) {
-        // Timeframe interval passed - update baseline to previous current
+      if (timeSinceLastBaseline >= timeframeMs) {
         existing.baseline = existing.current;
         existing.timestamp = existing.lastUpdateTime;
         console.log(
-          `📊 Updated Open Interest baseline for ${symbol} (${timeframe}): New baseline=${existing.baseline.toLocaleString()}`
+          `📊 OI baseline updated for ${symbol} (${timeframe}): ${existing.baseline.toLocaleString()}`
         );
       }
 
-      // Update current OI
       existing.current = currentOI;
-      existing.lastUpdateTime = currentTime;
+      existing.lastUpdateTime = now;
+      return existing;
     }
-
-    return this.openInterestData.get(key);
   }
 
   async evaluateOpenInterestConditions(
