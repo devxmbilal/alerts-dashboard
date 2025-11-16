@@ -12,17 +12,106 @@ class ChartScreenshotService {
     this.isInitialized = false;
     this.screenshotQueue = [];
     this.isProcessing = false;
+    // Browser state management
+    this.consecutiveFailures = 0;
+    this.maxConsecutiveFailures = 5; // Disable after 5 consecutive failures
+    this.isDisabled = false;
+    this.lastFailureTime = 0;
+    this.cooldownPeriod = 60000; // 1 minute cooldown after failures
+    this.initializationInProgress = false;
+    this.lastHealthCheck = 0;
+    this.healthCheckInterval = 30000; // Check health every 30 seconds
+  }
+
+  /**
+   * Check if browser is healthy and responsive
+   */
+  async isBrowserHealthy() {
+    if (!this.browser || !this.isInitialized) {
+      return false;
+    }
+
+    try {
+      // Quick health check - just verify connection
+      const pages = await Promise.race([
+        this.browser.pages(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Health check timeout")), 2000)
+        ),
+      ]);
+      return true;
+    } catch (error) {
+      return false;
+    }
   }
 
   /**
    * Initialize Puppeteer browser with optimized settings
    */
   async initialize() {
+    // Prevent concurrent initialization
+    if (this.initializationInProgress) {
+      console.log("⏳ Browser initialization already in progress, waiting...");
+      // Wait for ongoing initialization
+      let waitCount = 0;
+      while (this.initializationInProgress && waitCount < 10) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        waitCount++;
+      }
+      if (this.isInitialized && (await this.isBrowserHealthy())) {
+        return; // Initialization completed by another call
+      }
+    }
+
+    // Check cooldown period
+    const timeSinceLastFailure = Date.now() - this.lastFailureTime;
+    if (
+      timeSinceLastFailure < this.cooldownPeriod &&
+      this.consecutiveFailures > 0
+    ) {
+      const remainingCooldown = Math.ceil(
+        (this.cooldownPeriod - timeSinceLastFailure) / 1000
+      );
+      console.log(
+        `⏸️ Browser in cooldown period (${remainingCooldown}s remaining). Skipping initialization.`
+      );
+      throw new Error(
+        `Browser initialization in cooldown period (${remainingCooldown}s remaining)`
+      );
+    }
+
+    // Check if disabled due to too many failures
+    if (this.isDisabled) {
+      console.warn(
+        "⚠️ Browser initialization is disabled due to consecutive failures. Reset required."
+      );
+      throw new Error(
+        "Browser initialization disabled due to consecutive failures"
+      );
+    }
+
+    this.initializationInProgress = true;
+
     try {
+      // Check if browser is already healthy
+      if (
+        this.isInitialized &&
+        this.browser &&
+        (await this.isBrowserHealthy())
+      ) {
+        this.initializationInProgress = false;
+        return; // Browser is already healthy
+      }
+
       // Force cleanup if browser exists but not properly initialized
       if (this.browser) {
         try {
-          const pages = await this.browser.pages();
+          const pages = await Promise.race([
+            this.browser.pages(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("Cleanup timeout")), 3000)
+            ),
+          ]);
           for (const page of pages) {
             try {
               await page.close();
@@ -30,24 +119,17 @@ class ChartScreenshotService {
               // Ignore
             }
           }
-          await this.browser.close();
+          await Promise.race([
+            this.browser.close(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("Close timeout")), 3000)
+            ),
+          ]);
         } catch (e) {
-          // Ignore close errors
+          // Ignore close errors - browser might already be dead
         }
         this.browser = null;
         this.isInitialized = false;
-      }
-
-      if (this.isInitialized && this.browser) {
-        // Verify browser is still alive
-        try {
-          const pages = await this.browser.pages();
-          return; // Browser is alive
-        } catch (e) {
-          // Browser is dead, reinitialize
-          this.browser = null;
-          this.isInitialized = false;
-        }
       }
 
       console.log("🚀 Initializing Puppeteer browser for chart screenshots...");
@@ -88,28 +170,44 @@ class ChartScreenshotService {
             timeout: 60000,
           });
 
-          // Verify browser is actually working
-          const pages = await this.browser.pages();
-          if (pages.length === 0) {
-            // Create a test page to verify browser works
-            const testPage = await this.browser.newPage();
-            await testPage.close();
-          }
+          // Verify browser is actually working with a test
+          const testPage = await this.browser.newPage();
+          await testPage.goto("about:blank", {
+            waitUntil: "domcontentloaded",
+            timeout: 5000,
+          });
+          await testPage.close();
 
           this.isInitialized = true;
+          this.consecutiveFailures = 0; // Reset failure count on success
+          this.lastFailureTime = 0;
           console.log("✅ Puppeteer browser initialized successfully");
+          this.initializationInProgress = false;
           return; // Success!
         } catch (error) {
           lastError = error;
-          console.error(
-            `❌ Browser initialization attempt ${attempt}/${maxRetries} failed:`,
-            error.message
-          );
+
+          // Only log detailed error on last attempt
+          if (attempt === maxRetries) {
+            console.error(
+              `❌ Browser initialization attempt ${attempt}/${maxRetries} failed:`,
+              error.message
+            );
+          } else {
+            console.warn(
+              `⚠️ Browser initialization attempt ${attempt}/${maxRetries} failed, retrying...`
+            );
+          }
 
           // Cleanup failed browser instance
           if (this.browser) {
             try {
-              await this.browser.close();
+              await Promise.race([
+                this.browser.close(),
+                new Promise((_, reject) =>
+                  setTimeout(() => reject(new Error("Close timeout")), 2000)
+                ),
+              ]);
             } catch (e) {
               // Ignore
             }
@@ -119,20 +217,39 @@ class ChartScreenshotService {
           // Wait before retry (exponential backoff)
           if (attempt < maxRetries) {
             const waitTime = attempt * 2000; // 2s, 4s
-            console.log(`⏳ Waiting ${waitTime}ms before retry...`);
             await new Promise((resolve) => setTimeout(resolve, waitTime));
           }
         }
       }
 
-      // All retries failed
+      // All retries failed - track failures
+      this.consecutiveFailures++;
+      this.lastFailureTime = Date.now();
+
+      // Disable after too many consecutive failures
+      if (this.consecutiveFailures >= this.maxConsecutiveFailures) {
+        this.isDisabled = true;
+        console.error(
+          `❌ Browser initialization disabled after ${this.consecutiveFailures} consecutive failures. ` +
+            `Screenshots will be disabled until service restart.`
+        );
+      }
+
+      this.initializationInProgress = false;
       throw new Error(
         `Failed to initialize browser after ${maxRetries} attempts: ${
           lastError?.message || "Unknown error"
         }`
       );
     } catch (error) {
-      console.error("❌ Error initializing Puppeteer browser:", error);
+      this.initializationInProgress = false;
+      if (
+        error.message.includes("cooldown") ||
+        error.message.includes("disabled")
+      ) {
+        throw error; // Re-throw cooldown/disabled errors
+      }
+      console.error("❌ Error initializing Puppeteer browser:", error.message);
       this.browser = null;
       this.isInitialized = false;
       throw error;
@@ -149,18 +266,50 @@ class ChartScreenshotService {
     let page = null;
 
     try {
-      // Initialize browser if not already done
-      if (!this.isInitialized || !this.browser) {
-        await this.initialize();
+      // Check if disabled
+      if (this.isDisabled) {
+        throw new Error(
+          "Browser initialization is disabled due to consecutive failures"
+        );
       }
 
-      // Verify browser is still alive
-      try {
-        await this.browser.pages();
-      } catch (e) {
-        console.warn(`[${symbol}] Browser is dead, reinitializing...`);
-        this.isInitialized = false;
-        await this.initialize();
+      // Periodic health check (not on every request)
+      const now = Date.now();
+      const needsHealthCheck =
+        now - this.lastHealthCheck > this.healthCheckInterval;
+
+      if (needsHealthCheck) {
+        this.lastHealthCheck = now;
+        if (
+          !this.isInitialized ||
+          !this.browser ||
+          !(await this.isBrowserHealthy())
+        ) {
+          this.isInitialized = false;
+          await this.initialize();
+        }
+      } else {
+        // Quick check - only initialize if not initialized
+        if (!this.isInitialized || !this.browser) {
+          await this.initialize();
+        } else {
+          // Quick health verification without full check
+          try {
+            await Promise.race([
+              this.browser.pages(),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("Quick check timeout")), 1000)
+              ),
+            ]);
+          } catch (e) {
+            // Browser is dead, reinitialize
+            console.warn(
+              `[${symbol}] Browser connection lost, reinitializing...`
+            );
+            this.isInitialized = false;
+            await this.initialize();
+          }
+        }
       }
 
       console.log(`[${symbol}] Starting chart screenshot capture...`);
@@ -408,17 +557,33 @@ class ChartScreenshotService {
    * @returns {boolean}
    */
   async healthCheck() {
-    try {
-      if (!this.browser || !this.isInitialized) {
-        return false;
-      }
+    return await this.isBrowserHealthy();
+  }
 
-      const pages = await this.browser.pages();
-      return pages.length >= 0; // Browser is responsive
-    } catch (error) {
-      console.error("❌ Browser health check failed:", error);
-      return false;
-    }
+  /**
+   * Reset failure tracking and re-enable browser initialization
+   */
+  resetFailures() {
+    this.consecutiveFailures = 0;
+    this.isDisabled = false;
+    this.lastFailureTime = 0;
+    console.log("✅ Browser failure tracking reset. Screenshots re-enabled.");
+  }
+
+  /**
+   * Get browser state information
+   * @returns {object} Browser state
+   */
+  getState() {
+    return {
+      isInitialized: this.isInitialized,
+      isDisabled: this.isDisabled,
+      consecutiveFailures: this.consecutiveFailures,
+      timeSinceLastFailure: this.lastFailureTime
+        ? Date.now() - this.lastFailureTime
+        : 0,
+      initializationInProgress: this.initializationInProgress,
+    };
   }
 }
 
