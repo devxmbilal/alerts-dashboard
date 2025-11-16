@@ -1,10 +1,6 @@
 import { AlertsCache, FavoritesCache } from "../utils/redis.js";
 import { isAlertLocked, updateAlertLock } from "../utils/alertLock.js";
 import AlertHistoryService from "./AlertHistoryService.js";
-import NotificationService from "./NotificationService.js";
-import EmailService from "./EmailService.js";
-import TelegramService from "./TelegramService.js";
-import ChartScreenshotService from "../utils/chartScreenshot.js";
 import Alert from "../models/Alert.js";
 import AlertHistory from "../models/AlertHistory.js";
 import User from "../models/User.js";
@@ -33,32 +29,85 @@ class RealTimeAlertProcessor {
 
   // Get or create Redis publisher connection (reused for performance)
   async getRedisPublisher() {
+    // Return existing connection if ready
     if (this.redisPublisher && this.redisPublisher.status === "ready") {
       return this.redisPublisher;
     }
 
+    // Reconnect if connection exists but not ready
+    if (this.redisPublisher && this.redisPublisher.status !== "ready") {
+      try {
+        await this.redisPublisher.connect();
+        if (this.redisPublisher.status === "ready") {
+          return this.redisPublisher;
+        }
+      } catch (err) {
+        console.warn(
+          "⚠️ Failed to reconnect Redis publisher, creating new:",
+          err.message
+        );
+        this.redisPublisher = null;
+      }
+    }
+
+    // Create new connection
     const Redis = (await import("ioredis")).default;
     this.redisPublisher = new Redis({
       host: process.env.REDIS_HOST || "localhost",
       port: process.env.REDIS_PORT || 6379,
-      lazyConnect: true,
+      lazyConnect: false, // Connect immediately for better performance
       retryDelayOnClusterDown: 300,
-      maxRetriesPerRequest: 3,
+      maxRetriesPerRequest: 5, // More retries for reliability
       enableReadyCheck: false,
+      keepAlive: 30000, // Keep connection alive (30s)
+      connectTimeout: 10000, // 10s connection timeout
     });
 
-    // Ensure connection is ready
-    if (this.redisPublisher.status !== "ready") {
-      await this.redisPublisher.connect();
-    }
-
-    // Handle connection errors
+    // Handle connection errors - reset on error to allow reconnection
     this.redisPublisher.on("error", (err) => {
-      console.error("❌ Redis publisher error:", err);
-      this.redisPublisher = null; // Reset on error
+      console.error("❌ Redis publisher error:", err.message);
+      // Don't reset immediately - let it try to reconnect
+      // Only reset if connection is completely dead
+      if (err.code === "ECONNREFUSED" || err.code === "ENOTFOUND") {
+        this.redisPublisher = null;
+      }
     });
 
-    return this.redisPublisher;
+    // Handle connection close
+    this.redisPublisher.on("close", () => {
+      console.warn("⚠️ Redis publisher connection closed");
+      this.redisPublisher = null;
+    });
+
+    // Wait for connection to be ready (lazyConnect: false means it connects automatically)
+    // But we wait to ensure it's ready before returning
+    return new Promise((resolve, reject) => {
+      if (this.redisPublisher.status === "ready") {
+        console.log("✅ Redis publisher connection ready");
+        resolve(this.redisPublisher);
+        return;
+      }
+
+      this.redisPublisher.once("ready", () => {
+        console.log("✅ Redis publisher connection established");
+        resolve(this.redisPublisher);
+      });
+
+      this.redisPublisher.once("error", (err) => {
+        console.error("❌ Failed to connect Redis publisher:", err.message);
+        this.redisPublisher = null;
+        reject(err);
+      });
+
+      // Timeout after 10 seconds
+      setTimeout(() => {
+        if (this.redisPublisher && this.redisPublisher.status !== "ready") {
+          console.error("❌ Redis publisher connection timeout");
+          this.redisPublisher = null;
+          reject(new Error("Redis connection timeout"));
+        }
+      }, 10000);
+    });
   }
 
   async loadAlertsFromRedis(userId) {
