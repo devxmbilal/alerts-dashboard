@@ -146,9 +146,7 @@ class TelegramService {
 📄 Actual 24h change: \`${safeNumber(actualValue)}%\`
 💵 Current Price: \`$${safePrice(triggeredPrice)}\`
 📍 Last Price: \`$${safePrice(baselinePrice)}\`
-${changeEmoji} Change from Baseline: \`${safeNumber(
-      changeFromBaselinePercent
-    )}%\`
+${changeEmoji} Change %: \`${safeNumber(changeFromBaselinePercent)}%\`
 📊 24h Volume: \`${safeVolume}\`
 ⏰ Time: \`${timeStr}\`
 📅 Date: \`${dateStr}\`
@@ -219,13 +217,62 @@ _Automated alert from Crypto Alerts Dashboard_
         return false;
       }
 
+      // Validate photo buffer
+      if (!photo || !Buffer.isBuffer(photo)) {
+        console.error("❌ Invalid photo buffer provided");
+        throw new Error("Invalid photo buffer");
+      }
+
+      if (photo.length === 0) {
+        console.error("❌ Empty photo buffer");
+        throw new Error("Empty photo buffer");
+      }
+
+      // Detect image format from buffer signature
+      let contentType = "image/jpeg";
+      let fileExtension = "jpg";
+      let filename = `${alertData.symbol || "chart"}_chart.jpg`;
+
+      // Check PNG signature (89 50 4E 47)
+      if (
+        photo[0] === 0x89 &&
+        photo[1] === 0x50 &&
+        photo[2] === 0x4e &&
+        photo[3] === 0x47
+      ) {
+        contentType = "image/png";
+        fileExtension = "png";
+        filename = `${alertData.symbol || "chart"}_chart.png`;
+      }
+      // Check JPEG signature (FF D8)
+      else if (photo[0] === 0xff && photo[1] === 0xd8) {
+        contentType = "image/jpeg";
+        fileExtension = "jpg";
+        filename = `${alertData.symbol || "chart"}_chart.jpg`;
+      }
+      // Check file size (Telegram max 10MB for photos)
+      if (photo.length > 10 * 1024 * 1024) {
+        console.error(
+          `❌ Photo too large: ${(photo.length / 1024 / 1024).toFixed(
+            2
+          )}MB (max 10MB)`
+        );
+        throw new Error("Photo too large");
+      }
+
+      console.log(
+        `📤 Sending ${contentType} photo (${(photo.length / 1024).toFixed(
+          2
+        )}KB) to Telegram...`
+      );
+
       const caption = this.formatAlertMessage(alertData);
 
       const formData = new FormData();
       formData.append("chat_id", chatId);
       formData.append("photo", photo, {
-        filename: `${alertData.symbol || "chart"}_chart.jpg`,
-        contentType: "image/jpeg",
+        filename: filename,
+        contentType: contentType,
       });
       formData.append("caption", caption);
       formData.append("parse_mode", "Markdown");
@@ -245,7 +292,12 @@ _Automated alert from Crypto Alerts Dashboard_
       } else {
         console.error(
           "❌ Telegram API error (photo):",
-          response.data.description
+          response.data.description || response.data
+        );
+        console.error("❌ Error code:", response.data.error_code);
+        console.error(
+          "❌ Full response:",
+          JSON.stringify(response.data, null, 2)
         );
 
         if (
@@ -263,6 +315,19 @@ _Automated alert from Crypto Alerts Dashboard_
       }
     } catch (error) {
       console.error("❌ Error sending Telegram photo:", error.message);
+      if (error.response) {
+        console.error(
+          "❌ Telegram API response:",
+          error.response.status,
+          error.response.statusText
+        );
+        if (error.response.data) {
+          console.error(
+            "❌ Error details:",
+            JSON.stringify(error.response.data, null, 2)
+          );
+        }
+      }
       console.log("⚠️ Falling back to text-only message...");
       try {
         return await this._sendTextNow(chatId, alertData);

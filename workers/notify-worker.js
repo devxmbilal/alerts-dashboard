@@ -276,13 +276,13 @@ redis.on("message", async (channel, message) => {
             chartScreenshot,
             alertData
           );
-          console.log(`✅ Telegram photo alert queued successfully`);
+          console.log(`✅ Telegram photo alert ${alertData.symbol} queued successfully`);
         } else {
           await TelegramService.sendAlertMessage(
             user.telegramChatId,
             alertData
           );
-          console.log(`✅ Telegram text alert queued successfully`);
+          console.log(`✅ Telegram text alert ${alertData.symbol} queued successfully`);
         }
 
         // Mark as sent in database (atomic update)

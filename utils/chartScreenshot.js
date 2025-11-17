@@ -1,4 +1,5 @@
 import puppeteer from "puppeteer";
+import axios from "axios";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -21,6 +22,10 @@ class ChartScreenshotService {
     this.initializationInProgress = false;
     this.lastHealthCheck = 0;
     this.healthCheckInterval = 30000; // Check health every 30 seconds
+    // QuickChart API (PRIMARY METHOD - FAST)
+    this.quickChartBaseUrl = "https://quickchart.io/chart";
+    this.useQuickChart = true; // Use QuickChart by default (fast)
+    this.quickChartTimeout = 15000; // 15 seconds timeout for QuickChart
   }
 
   /**
@@ -257,12 +262,312 @@ class ChartScreenshotService {
   }
 
   /**
-   * Capture TradingView chart screenshot
+   * Fetch Binance Kline data (FREE)
+   * @param {string} symbol - Trading pair symbol
+   * @param {string} interval - Timeframe (1m, 5m, 15m, 1h, 4h, 1d, 1w)
+   * @param {number} limit - Number of candles (default: 50)
+   * @returns {Promise<Array>} - Array of candle objects
+   */
+  async getBinanceCandles(symbol, interval = "5m", limit = 50) {
+    try {
+      // Map timeframe to Binance interval
+      const intervalMap = {
+        "1m": "1m",
+        "5m": "5m",
+        "15m": "15m",
+        "1h": "1h",
+        "4h": "4h",
+        "1d": "1d",
+        "1w": "1w",
+      };
+      const binanceInterval = intervalMap[interval.toLowerCase()] || "5m";
+
+      const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`;
+      const res = await axios.get(url, { timeout: 10000 });
+
+      return res.data.map((c) => ({
+        openTime: c[0],
+        open: parseFloat(c[1]),
+        high: parseFloat(c[2]),
+        low: parseFloat(c[3]),
+        close: parseFloat(c[4]),
+        volume: parseFloat(c[5]),
+      }));
+    } catch (error) {
+      console.error(
+        `❌ Error fetching Binance candles for ${symbol}:`,
+        error.message
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Generate Candlestick chart using QuickChart (FAST - PRIMARY METHOD)
+   * @param {string} symbol - Trading pair symbol
+   * @param {Array} candles - Array of candle objects
+   * @returns {Promise<Buffer>} - Chart image buffer
+   */
+  async captureCandlestickChart(symbol, candles = []) {
+    if (!candles || candles.length === 0) {
+      throw new Error("No candle data provided");
+    }
+
+    try {
+      // Calculate price change for color
+      const firstPrice = candles[0].close;
+      const lastPrice = candles[candles.length - 1].close;
+      const isPositive = lastPrice >= firstPrice;
+
+      // Extract prices and volumes for line chart (QuickChart doesn't support candlestick)
+      const closePrices = candles.map((c) => c.close);
+      const highPrices = candles.map((c) => c.high);
+      const lowPrices = candles.map((c) => c.low);
+      const volumes = candles.map((c) => c.volume);
+
+      // Calculate price change percentage
+      const priceChange = ((lastPrice - firstPrice) / firstPrice) * 100;
+
+      // Color scheme based on price direction
+      const lineColor = isPositive ? "rgb(0, 255, 127)" : "rgb(255, 71, 87)"; // Green or Red
+      const fillColor = isPositive
+        ? "rgba(0, 255, 127, 0.1)"
+        : "rgba(255, 71, 87, 0.1)";
+      const volumeColor = isPositive
+        ? "rgba(0, 200, 0, 0.4)"
+        : "rgba(200, 0, 0, 0.4)";
+
+      // Create labels (empty for cleaner look)
+      const labels = candles.map(() => "");
+
+      const chartConfig = {
+        type: "line",
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: `${symbol} Price`,
+              data: closePrices,
+              borderColor: lineColor,
+              backgroundColor: fillColor,
+              borderWidth: 2,
+              tension: 0.4,
+              fill: true,
+              pointRadius: 0,
+              pointHoverRadius: 4,
+              yAxisID: "y",
+            },
+            {
+              label: "High",
+              data: highPrices,
+              borderColor: "rgba(0, 255, 0, 0.3)",
+              borderWidth: 1,
+              borderDash: [5, 5],
+              pointRadius: 0,
+              fill: false,
+              yAxisID: "y",
+            },
+            {
+              label: "Low",
+              data: lowPrices,
+              borderColor: "rgba(255, 0, 0, 0.3)",
+              borderWidth: 1,
+              borderDash: [5, 5],
+              pointRadius: 0,
+              fill: false,
+              yAxisID: "y",
+            },
+            {
+              type: "bar",
+              label: "Volume",
+              data: volumes,
+              backgroundColor: volumeColor,
+              yAxisID: "volume-axis",
+              order: 2, // Show behind line chart
+            },
+          ],
+        },
+        options: {
+          responsive: false,
+          plugins: {
+            legend: {
+              display: true,
+              position: "top",
+              labels: {
+                color: "white",
+                font: { size: 12, weight: "bold" },
+                usePointStyle: true,
+              },
+            },
+            title: {
+              display: true,
+              text: `${symbol} Price Chart (${
+                priceChange >= 0 ? "+" : ""
+              }${priceChange.toFixed(2)}%)`,
+              color: "white",
+              font: { size: 16, weight: "bold" },
+            },
+            tooltip: {
+              enabled: true,
+              mode: "index",
+              intersect: false,
+            },
+          },
+          scales: {
+            x: {
+              ticks: {
+                color: "white",
+                maxTicksLimit: 10,
+                display: false, // Hide x-axis labels for cleaner look
+              },
+              grid: {
+                color: "rgba(255,255,255,0.1)",
+                display: true,
+              },
+            },
+            y: {
+              position: "left",
+              ticks: {
+                color: "white",
+                font: { size: 11 },
+              },
+              grid: {
+                color: "rgba(255,255,255,0.1)",
+              },
+            },
+            "volume-axis": {
+              type: "linear",
+              position: "right",
+              ticks: {
+                color: "rgba(255,255,255,0.6)",
+                font: { size: 10 },
+              },
+              grid: {
+                display: false,
+              },
+            },
+          },
+        },
+      };
+
+      const url = `${
+        this.quickChartBaseUrl
+      }?width=800&height=500&format=png&backgroundColor=rgb(20,20,20)&c=${encodeURIComponent(
+        JSON.stringify(chartConfig)
+      )}`;
+
+      console.log(`📊 Generating QuickChart for ${symbol}...`);
+
+      // Try GET first, but if URL is too long, use POST
+      let res;
+      try {
+        res = await axios.get(url, {
+          responseType: "arraybuffer",
+          timeout: this.quickChartTimeout,
+          validateStatus: (status) => {
+            // Accept 200-299 and also check if response is valid PNG
+            return status >= 200 && status < 300;
+          },
+        });
+      } catch (getError) {
+        // If GET fails, try POST method (for large configs)
+        if (getError.response && getError.response.data) {
+          const responseData = Buffer.from(getError.response.data);
+          // Check if response is actually a valid PNG image
+          if (
+            responseData.length > 0 &&
+            responseData[0] === 0x89 &&
+            responseData[1] === 0x50
+          ) {
+            // Valid PNG signature (89 50 4E 47)
+            console.log(`✅ QuickChart returned PNG despite status code`);
+            return responseData;
+          }
+        }
+
+        // Try POST method for large configs
+        try {
+          console.log(`📊 Trying POST method for QuickChart (large config)...`);
+          const postUrl = `${this.quickChartBaseUrl}?width=800&height=500&format=png&backgroundColor=rgb(20,20,20)`;
+          res = await axios.post(
+            postUrl,
+            { config: chartConfig },
+            {
+              responseType: "arraybuffer",
+              timeout: this.quickChartTimeout,
+              headers: {
+                "Content-Type": "application/json",
+              },
+            }
+          );
+        } catch (postError) {
+          // If POST also fails, check if response data is valid PNG
+          if (postError.response && postError.response.data) {
+            const responseData = Buffer.from(postError.response.data);
+            if (
+              responseData.length > 0 &&
+              responseData[0] === 0x89 &&
+              responseData[1] === 0x50
+            ) {
+              console.log(`✅ QuickChart returned PNG despite error status`);
+              return responseData;
+            }
+          }
+          throw getError; // Throw original error
+        }
+      }
+
+      // Validate response is PNG
+      const imageBuffer = Buffer.from(res.data);
+      if (imageBuffer.length === 0) {
+        throw new Error("Empty response from QuickChart");
+      }
+
+      // Check PNG signature (89 50 4E 47)
+      if (imageBuffer[0] !== 0x89 || imageBuffer[1] !== 0x50) {
+        throw new Error("Invalid PNG response from QuickChart");
+      }
+
+      console.log(
+        `✅ QuickChart generated for ${symbol} (${imageBuffer.length} bytes)`
+      );
+      return imageBuffer;
+    } catch (error) {
+      console.error(
+        `❌ QuickChart generation failed for ${symbol}:`,
+        error.message
+      );
+      if (error.response) {
+        // Check if response is actually a valid image despite error status
+        if (error.response.data) {
+          const responseData = Buffer.from(error.response.data);
+          if (
+            responseData.length > 0 &&
+            responseData[0] === 0x89 &&
+            responseData[1] === 0x50
+          ) {
+            // Valid PNG - use it even if status is error
+            console.log(
+              `✅ QuickChart returned valid PNG despite error status, using it`
+            );
+            return responseData;
+          }
+        }
+        console.error(
+          `❌ QuickChart API error: ${error.response.status} - ${error.response.statusText}`
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Capture TradingView chart screenshot (FALLBACK METHOD - Puppeteer)
    * @param {string} symbol - Trading pair symbol (e.g., VANAUSDT, BTCUSDT)
    * @param {string} timeframe - Chart timeframe (1m, 5m, 15m, 1h, 4h, 1d)
    * @returns {Promise<Buffer>} - Screenshot buffer
    */
-  async captureChart(symbol, timeframe = "5m") {
+  async captureChartPuppeteer(symbol, timeframe = "5m") {
     let page = null;
 
     try {
@@ -410,6 +715,42 @@ class ChartScreenshotService {
   }
 
   /**
+   * Main capture method - uses QuickChart (FAST), falls back to Puppeteer
+   * @param {string} symbol - Trading pair symbol (e.g., VANAUSDT, BTCUSDT)
+   * @param {string} timeframe - Chart timeframe (1m, 5m, 15m, 1h, 4h, 1d, 1w)
+   * @param {object} options - Options { useQuickChart: true/false, forcePuppeteer: false }
+   * @returns {Promise<Buffer>} - Screenshot buffer
+   */
+  async captureChart(symbol, timeframe = "5m", options = {}) {
+    const useQuickChart = options.useQuickChart !== false && this.useQuickChart;
+    const forcePuppeteer = options.forcePuppeteer === true;
+
+    // Method 1: QuickChart (FAST - Generated charts, 1-2 seconds)
+    if (useQuickChart && !forcePuppeteer) {
+      try {
+        // Fetch candle data from Binance
+        const candles = await this.getBinanceCandles(symbol, timeframe, 50);
+
+        if (candles.length === 0) {
+          throw new Error("No candle data available from Binance");
+        }
+
+        // Generate chart using QuickChart
+        return await this.captureCandlestickChart(symbol, candles);
+      } catch (quickChartError) {
+        console.warn(
+          `⚠️ QuickChart failed for ${symbol}, falling back to Puppeteer:`,
+          quickChartError.message
+        );
+        // Fall through to Puppeteer fallback
+      }
+    }
+
+    // Method 2: Puppeteer (FALLBACK - TradingView screenshots, 5-10 seconds)
+    return await this.captureChartPuppeteer(symbol, timeframe);
+  }
+
+  /**
    * Construct TradingView public chart URL
    * @param {string} symbol - Trading pair symbol
    * @param {string} timeframe - Chart timeframe
@@ -424,6 +765,7 @@ class ChartScreenshotService {
       "1h": "60",
       "4h": "240",
       "1d": "D",
+      "1w": "W",
     };
 
     const tvTimeframe = timeframeMap[timeframe.toLowerCase()] || "5";
