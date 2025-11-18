@@ -28,29 +28,18 @@ export async function GET(request) {
 
     const userId = decoded.userId;
 
-    console.log("🔍 API /api/alerts/latest-triggered - userId:", userId);
-
     // Get the latest triggered alert for the user
     const latestAlert = await AlertHistoryService.getLatestTriggeredAlert(
       userId
     );
 
     if (!latestAlert) {
-      console.log("📭 No triggered alerts found for user:", userId);
       return NextResponse.json({
         success: true,
         data: null,
         message: "No triggered alerts found",
       });
     }
-
-    console.log("✅ Latest triggered alert found:", {
-      id: latestAlert._id,
-      symbol: latestAlert.symbol,
-      triggeredAt: latestAlert.triggeredAt,
-      price: latestAlert.triggerData?.price,
-      priceChangePercent: latestAlert.triggerData?.priceChangePercent,
-    });
 
     // Format the response for chart switching
     const chartData = {

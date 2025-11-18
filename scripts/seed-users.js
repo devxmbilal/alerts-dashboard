@@ -1,5 +1,14 @@
 import { connectToMongoDB } from "../utils/mongodb.js";
 import UserService from "../services/UserService.js";
+import dotenv from "dotenv";
+import { resolve } from "path";
+import { fileURLToPath, pathToFileURL } from "url";
+
+// Load .env file from project root
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = resolve(__filename, "..");
+const projectRoot = resolve(__dirname, "..");
+dotenv.config({ path: resolve(projectRoot, ".env") });
 
 async function seedUsers() {
   try {
@@ -14,11 +23,18 @@ async function seedUsers() {
       password: "admin123",
       name: "Admin User",
       email: "wiclauuk@gnail.com",
-      telegramChatId: "5630545835", // Add your Telegram chat ID here
+      // telegramChatId: "5630545835", // Add your Telegram chat ID here
+      telegramChatId: "5550226808",
       notificationPreferences: {
         email: false,
-        telegram: false, // Enable after adding telegramChatId
+        telegram: true, // Enable after adding telegramChatId
       },
+      preferredTimeframe: "5m",
+      isActive: true,
+      lastLogin: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      favorites: [],
     };
 
     // Check if admin user already exists
@@ -36,31 +52,6 @@ async function seedUsers() {
       email: user.email,
     });
 
-    // Create a test user
-    const testUser = {
-      username: "testuser",
-      password: "test123",
-      name: "Test User",
-      email: "test@alerts.com",
-      telegramChatId: "", // Add your Telegram chat ID here
-      notificationPreferences: {
-        email: true,
-        telegram: false, // Enable after adding telegramChatId
-      },
-    };
-
-    const existingTest = await UserService.findByUsername("testuser");
-    if (!existingTest) {
-      const testUserCreated = await UserService.createUser(testUser);
-      console.log("✅ Test user created:", {
-        username: testUserCreated.username,
-        name: testUserCreated.name,
-        email: testUserCreated.email,
-      });
-    } else {
-      console.log("✅ Test user already exists");
-    }
-
     // Show user statistics
     const stats = await UserService.getUserStats();
     console.log("📊 User statistics:", stats);
@@ -73,7 +64,10 @@ async function seedUsers() {
 }
 
 // Run seeding if called directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+const isMainModule =
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+
+if (isMainModule) {
   seedUsers()
     .then(() => {
       console.log("✅ Seeding completed");

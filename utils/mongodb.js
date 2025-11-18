@@ -1,9 +1,8 @@
-
 import mongoose from "mongoose";
-
 import dotenv from "dotenv";
 dotenv.config();
-
+// Next.js automatically loads .env files, so we don't need dotenv here
+// dotenv is only needed in standalone scripts/workers
 const MONGODB_URI = process.env.MONGODB_URI;
 
 let isConnected = false;

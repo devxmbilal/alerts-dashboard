@@ -9,9 +9,7 @@ class AlertHistoryService {
       console.log(
         `📝 Creating alert history for ${alertHistoryData.symbol}...`
       );
-      console.log(`📝 Alert ID: ${alertHistoryData.alertId}`);
-      console.log(`📝 User ID: ${alertHistoryData.userId}`);
-      console.log(`📝 Trigger Data:`, alertHistoryData.triggerData);
+    
 
       const alertHistory = new AlertHistory({
         alertId: alertHistoryData.alertId,

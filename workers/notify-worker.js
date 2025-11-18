@@ -5,6 +5,7 @@ import EmailService from "../services/EmailService.js";
 import ChartScreenshotService from "../utils/chartScreenshot.js";
 import User from "../models/User.js";
 import AlertHistory from "../models/AlertHistory.js";
+import mongoose from "mongoose";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -47,8 +48,14 @@ redis.on("message", async (channel, message) => {
       `📨 Processing notification for user ${userId}, history ${historyId}`
     );
 
+    // Convert userId string to ObjectId if it's a valid ObjectId string
+    let userQueryId = userId;
+    if (mongoose.Types.ObjectId.isValid(userId)) {
+      userQueryId = new mongoose.Types.ObjectId(userId);
+    }
+
     const [user, history] = await Promise.all([
-      User.findById(userId)
+      User.findById(userQueryId)
         .select(
           "email telegramChatId notificationPreferences preferredTimeframe"
         )
@@ -57,7 +64,114 @@ redis.on("message", async (channel, message) => {
     ]);
 
     if (!user) {
-      console.error(`❌ User not found: ${userId}`);
+      console.error(
+        `❌ User not found: ${userId} (queried as ObjectId: ${userQueryId})`
+      );
+      // Try alternative query methods
+      if (mongoose.Types.ObjectId.isValid(userId)) {
+        // Already tried ObjectId, try as string directly
+        const userByString = await User.findOne({ _id: userId.toString() })
+          .select(
+            "email telegramChatId notificationPreferences preferredTimeframe"
+          )
+          .lean();
+        if (userByString) {
+          console.log(`✅ User found with string ID query`);
+          // Re-run the main logic with found user
+          const history = await AlertHistory.findById(historyId).lean();
+          if (!history) {
+            console.error(`❌ Alert history not found: ${historyId}`);
+            return;
+          }
+          // Continue with userByString and history (code below will handle it)
+          const alertData = {
+            symbol: history.symbol,
+            targetValue:
+              history.alertConditions?.changePercent?.percentage || "N/A",
+            actualValue: history.triggerData?.priceChangePercent || 0,
+            direction:
+              history.alertConditions?.changePercent?.direction === "increase"
+                ? "Increase"
+                : history.alertConditions?.changePercent?.direction ===
+                  "decrease"
+                ? "Decrease"
+                : "Increase",
+            timeframe:
+              history.alertConditions?.changePercent?.timeframe || "5MIN",
+            triggeredPrice: history.triggerData?.price,
+            baselinePrice: history.baselineData?.baselinePrice,
+            changeFromBaselinePercent:
+              history.baselineData?.changeFromBaselinePercent,
+            volume: history.triggerData?.volume24h,
+            triggeredAt: history.triggeredAt,
+          };
+
+          // Send notifications (reuse existing logic)
+          if (
+            userByString.notificationPreferences?.email !== false &&
+            userByString.email
+          ) {
+            EmailService.sendAlertEmail(userByString.email, alertData).catch(
+              (err) => console.error(`❌ Error sending email:`, err.message)
+            );
+          }
+
+          if (
+            userByString.notificationPreferences?.telegram &&
+            userByString.telegramChatId
+          ) {
+            // Screenshot and Telegram logic (same as below)
+            let chartScreenshot = null;
+            try {
+              const timeframe =
+                userByString.preferredTimeframe ||
+                alertData.timeframe?.toLowerCase() ||
+                "5m";
+              const screenshotPromise = ChartScreenshotService.captureChart(
+                history.symbol,
+                timeframe
+              );
+              const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("Screenshot timeout")), 3000)
+              );
+              chartScreenshot = await Promise.race([
+                screenshotPromise,
+                timeoutPromise,
+              ]);
+            } catch (e) {
+              // Screenshot failed, continue with text-only
+            }
+
+            try {
+              if (chartScreenshot) {
+                await TelegramService.sendPhotoAlert(
+                  userByString.telegramChatId,
+                  chartScreenshot,
+                  alertData
+                );
+              } else {
+                await TelegramService.sendAlertMessage(
+                  userByString.telegramChatId,
+                  alertData
+                );
+              }
+              await AlertHistory.findOneAndUpdate(
+                { _id: historyId, "notificationSent.telegram": { $ne: true } },
+                { $set: { "notificationSent.telegram": true } }
+              );
+            } catch (error) {
+              console.error(
+                `❌ Error queuing Telegram message:`,
+                error.message
+              );
+            }
+          }
+          return;
+        }
+      }
+      console.error(
+        `❌ User ${userId} not found in database. Skipping notification.`
+      );
       return;
     }
 
@@ -162,13 +276,13 @@ redis.on("message", async (channel, message) => {
             chartScreenshot,
             alertData
           );
-          console.log(`✅ Telegram photo alert queued successfully`);
+          console.log(`✅ Telegram photo alert ${alertData.symbol} queued successfully`);
         } else {
           await TelegramService.sendAlertMessage(
             user.telegramChatId,
             alertData
           );
-          console.log(`✅ Telegram text alert queued successfully`);
+          console.log(`✅ Telegram text alert ${alertData.symbol} queued successfully`);
         }
 
         // Mark as sent in database (atomic update)

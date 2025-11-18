@@ -37,20 +37,7 @@ export async function GET(request) {
         page,
         limit
       );
-      console.log("🔍 Pagination result:", {
-        dataLength: result?.data?.length,
-        pagination: result?.pagination,
-      });
       alertHistory = result.data; // Extract data from pagination result
-    }
-
-    if (alertHistory?.length > 0) {
-      console.log("🔍 First alert sample:", {
-        id: alertHistory[0]._id,
-        symbol: alertHistory[0].symbol,
-        triggeredAt: alertHistory[0].triggeredAt,
-        hasTriggerData: !!alertHistory[0].triggerData,
-      });
     }
 
     return NextResponse.json({

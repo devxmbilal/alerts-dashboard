@@ -1,4 +1,5 @@
 import puppeteer from "puppeteer";
+import axios from "axios";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -12,17 +13,110 @@ class ChartScreenshotService {
     this.isInitialized = false;
     this.screenshotQueue = [];
     this.isProcessing = false;
+    // Browser state management
+    this.consecutiveFailures = 0;
+    this.maxConsecutiveFailures = 5; // Disable after 5 consecutive failures
+    this.isDisabled = false;
+    this.lastFailureTime = 0;
+    this.cooldownPeriod = 60000; // 1 minute cooldown after failures
+    this.initializationInProgress = false;
+    this.lastHealthCheck = 0;
+    this.healthCheckInterval = 30000; // Check health every 30 seconds
+    // QuickChart API (PRIMARY METHOD - FAST)
+    this.quickChartBaseUrl = "https://quickchart.io/chart";
+    this.useQuickChart = true; // Use QuickChart by default (fast)
+    this.quickChartTimeout = 15000; // 15 seconds timeout for QuickChart
+  }
+
+  /**
+   * Check if browser is healthy and responsive
+   */
+  async isBrowserHealthy() {
+    if (!this.browser || !this.isInitialized) {
+      return false;
+    }
+
+    try {
+      // Quick health check - just verify connection
+      const pages = await Promise.race([
+        this.browser.pages(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Health check timeout")), 2000)
+        ),
+      ]);
+      return true;
+    } catch (error) {
+      return false;
+    }
   }
 
   /**
    * Initialize Puppeteer browser with optimized settings
    */
   async initialize() {
+    // Prevent concurrent initialization
+    if (this.initializationInProgress) {
+      console.log("⏳ Browser initialization already in progress, waiting...");
+      // Wait for ongoing initialization
+      let waitCount = 0;
+      while (this.initializationInProgress && waitCount < 10) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        waitCount++;
+      }
+      if (this.isInitialized && (await this.isBrowserHealthy())) {
+        return; // Initialization completed by another call
+      }
+    }
+
+    // Check cooldown period
+    const timeSinceLastFailure = Date.now() - this.lastFailureTime;
+    if (
+      timeSinceLastFailure < this.cooldownPeriod &&
+      this.consecutiveFailures > 0
+    ) {
+      const remainingCooldown = Math.ceil(
+        (this.cooldownPeriod - timeSinceLastFailure) / 1000
+      );
+      console.log(
+        `⏸️ Browser in cooldown period (${remainingCooldown}s remaining). Skipping initialization.`
+      );
+      throw new Error(
+        `Browser initialization in cooldown period (${remainingCooldown}s remaining)`
+      );
+    }
+
+    // Check if disabled due to too many failures
+    if (this.isDisabled) {
+      console.warn(
+        "⚠️ Browser initialization is disabled due to consecutive failures. Reset required."
+      );
+      throw new Error(
+        "Browser initialization disabled due to consecutive failures"
+      );
+    }
+
+    this.initializationInProgress = true;
+
     try {
+      // Check if browser is already healthy
+      if (
+        this.isInitialized &&
+        this.browser &&
+        (await this.isBrowserHealthy())
+      ) {
+        this.initializationInProgress = false;
+        return; // Browser is already healthy
+      }
+
       // Force cleanup if browser exists but not properly initialized
       if (this.browser) {
         try {
-          const pages = await this.browser.pages();
+          const pages = await Promise.race([
+            this.browser.pages(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("Cleanup timeout")), 3000)
+            ),
+          ]);
           for (const page of pages) {
             try {
               await page.close();
@@ -30,24 +124,17 @@ class ChartScreenshotService {
               // Ignore
             }
           }
-          await this.browser.close();
+          await Promise.race([
+            this.browser.close(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("Close timeout")), 3000)
+            ),
+          ]);
         } catch (e) {
-          // Ignore close errors
+          // Ignore close errors - browser might already be dead
         }
         this.browser = null;
         this.isInitialized = false;
-      }
-
-      if (this.isInitialized && this.browser) {
-        // Verify browser is still alive
-        try {
-          const pages = await this.browser.pages();
-          return; // Browser is alive
-        } catch (e) {
-          // Browser is dead, reinitialize
-          this.browser = null;
-          this.isInitialized = false;
-        }
       }
 
       console.log("🚀 Initializing Puppeteer browser for chart screenshots...");
@@ -88,28 +175,44 @@ class ChartScreenshotService {
             timeout: 60000,
           });
 
-          // Verify browser is actually working
-          const pages = await this.browser.pages();
-          if (pages.length === 0) {
-            // Create a test page to verify browser works
-            const testPage = await this.browser.newPage();
-            await testPage.close();
-          }
+          // Verify browser is actually working with a test
+          const testPage = await this.browser.newPage();
+          await testPage.goto("about:blank", {
+            waitUntil: "domcontentloaded",
+            timeout: 5000,
+          });
+          await testPage.close();
 
           this.isInitialized = true;
+          this.consecutiveFailures = 0; // Reset failure count on success
+          this.lastFailureTime = 0;
           console.log("✅ Puppeteer browser initialized successfully");
+          this.initializationInProgress = false;
           return; // Success!
         } catch (error) {
           lastError = error;
-          console.error(
-            `❌ Browser initialization attempt ${attempt}/${maxRetries} failed:`,
-            error.message
-          );
+
+          // Only log detailed error on last attempt
+          if (attempt === maxRetries) {
+            console.error(
+              `❌ Browser initialization attempt ${attempt}/${maxRetries} failed:`,
+              error.message
+            );
+          } else {
+            console.warn(
+              `⚠️ Browser initialization attempt ${attempt}/${maxRetries} failed, retrying...`
+            );
+          }
 
           // Cleanup failed browser instance
           if (this.browser) {
             try {
-              await this.browser.close();
+              await Promise.race([
+                this.browser.close(),
+                new Promise((_, reject) =>
+                  setTimeout(() => reject(new Error("Close timeout")), 2000)
+                ),
+              ]);
             } catch (e) {
               // Ignore
             }
@@ -119,20 +222,39 @@ class ChartScreenshotService {
           // Wait before retry (exponential backoff)
           if (attempt < maxRetries) {
             const waitTime = attempt * 2000; // 2s, 4s
-            console.log(`⏳ Waiting ${waitTime}ms before retry...`);
             await new Promise((resolve) => setTimeout(resolve, waitTime));
           }
         }
       }
 
-      // All retries failed
+      // All retries failed - track failures
+      this.consecutiveFailures++;
+      this.lastFailureTime = Date.now();
+
+      // Disable after too many consecutive failures
+      if (this.consecutiveFailures >= this.maxConsecutiveFailures) {
+        this.isDisabled = true;
+        console.error(
+          `❌ Browser initialization disabled after ${this.consecutiveFailures} consecutive failures. ` +
+            `Screenshots will be disabled until service restart.`
+        );
+      }
+
+      this.initializationInProgress = false;
       throw new Error(
         `Failed to initialize browser after ${maxRetries} attempts: ${
           lastError?.message || "Unknown error"
         }`
       );
     } catch (error) {
-      console.error("❌ Error initializing Puppeteer browser:", error);
+      this.initializationInProgress = false;
+      if (
+        error.message.includes("cooldown") ||
+        error.message.includes("disabled")
+      ) {
+        throw error; // Re-throw cooldown/disabled errors
+      }
+      console.error("❌ Error initializing Puppeteer browser:", error.message);
       this.browser = null;
       this.isInitialized = false;
       throw error;
@@ -140,27 +262,359 @@ class ChartScreenshotService {
   }
 
   /**
-   * Capture TradingView chart screenshot
+   * Fetch Binance Kline data (FREE)
+   * @param {string} symbol - Trading pair symbol
+   * @param {string} interval - Timeframe (1m, 5m, 15m, 1h, 4h, 1d, 1w)
+   * @param {number} limit - Number of candles (default: 50)
+   * @returns {Promise<Array>} - Array of candle objects
+   */
+  async getBinanceCandles(symbol, interval = "5m", limit = 50) {
+    try {
+      // Map timeframe to Binance interval
+      const intervalMap = {
+        "1m": "1m",
+        "5m": "5m",
+        "15m": "15m",
+        "1h": "1h",
+        "4h": "4h",
+        "1d": "1d",
+        "1w": "1w",
+      };
+      const binanceInterval = intervalMap[interval.toLowerCase()] || "5m";
+
+      const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`;
+      const res = await axios.get(url, { timeout: 10000 });
+
+      return res.data.map((c) => ({
+        openTime: c[0],
+        open: parseFloat(c[1]),
+        high: parseFloat(c[2]),
+        low: parseFloat(c[3]),
+        close: parseFloat(c[4]),
+        volume: parseFloat(c[5]),
+      }));
+    } catch (error) {
+      console.error(
+        `❌ Error fetching Binance candles for ${symbol}:`,
+        error.message
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Generate Candlestick chart using QuickChart (FAST - PRIMARY METHOD)
+   * @param {string} symbol - Trading pair symbol
+   * @param {Array} candles - Array of candle objects
+   * @returns {Promise<Buffer>} - Chart image buffer
+   */
+  async captureCandlestickChart(symbol, candles = []) {
+    if (!candles || candles.length === 0) {
+      throw new Error("No candle data provided");
+    }
+
+    try {
+      // Calculate price change for color
+      const firstPrice = candles[0].close;
+      const lastPrice = candles[candles.length - 1].close;
+      const isPositive = lastPrice >= firstPrice;
+
+      // Extract prices and volumes for line chart (QuickChart doesn't support candlestick)
+      const closePrices = candles.map((c) => c.close);
+      const highPrices = candles.map((c) => c.high);
+      const lowPrices = candles.map((c) => c.low);
+      const volumes = candles.map((c) => c.volume);
+
+      // Calculate price change percentage
+      const priceChange = ((lastPrice - firstPrice) / firstPrice) * 100;
+
+      // Color scheme based on price direction
+      const lineColor = isPositive ? "rgb(0, 255, 127)" : "rgb(255, 71, 87)"; // Green or Red
+      const fillColor = isPositive
+        ? "rgba(0, 255, 127, 0.1)"
+        : "rgba(255, 71, 87, 0.1)";
+      const volumeColor = isPositive
+        ? "rgba(0, 200, 0, 0.4)"
+        : "rgba(200, 0, 0, 0.4)";
+
+      // Create labels (empty for cleaner look)
+      const labels = candles.map(() => "");
+
+      const chartConfig = {
+        type: "line",
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: `${symbol} Price`,
+              data: closePrices,
+              borderColor: lineColor,
+              backgroundColor: fillColor,
+              borderWidth: 2,
+              tension: 0.4,
+              fill: true,
+              pointRadius: 0,
+              pointHoverRadius: 4,
+              yAxisID: "y",
+            },
+            {
+              label: "High",
+              data: highPrices,
+              borderColor: "rgba(0, 255, 0, 0.3)",
+              borderWidth: 1,
+              borderDash: [5, 5],
+              pointRadius: 0,
+              fill: false,
+              yAxisID: "y",
+            },
+            {
+              label: "Low",
+              data: lowPrices,
+              borderColor: "rgba(255, 0, 0, 0.3)",
+              borderWidth: 1,
+              borderDash: [5, 5],
+              pointRadius: 0,
+              fill: false,
+              yAxisID: "y",
+            },
+            {
+              type: "bar",
+              label: "Volume",
+              data: volumes,
+              backgroundColor: volumeColor,
+              yAxisID: "volume-axis",
+              order: 2, // Show behind line chart
+            },
+          ],
+        },
+        options: {
+          responsive: false,
+          plugins: {
+            legend: {
+              display: true,
+              position: "top",
+              labels: {
+                color: "white",
+                font: { size: 12, weight: "bold" },
+                usePointStyle: true,
+              },
+            },
+            title: {
+              display: true,
+              text: `${symbol} Price Chart (${
+                priceChange >= 0 ? "+" : ""
+              }${priceChange.toFixed(2)}%)`,
+              color: "white",
+              font: { size: 16, weight: "bold" },
+            },
+            tooltip: {
+              enabled: true,
+              mode: "index",
+              intersect: false,
+            },
+          },
+          scales: {
+            x: {
+              ticks: {
+                color: "white",
+                maxTicksLimit: 10,
+                display: false, // Hide x-axis labels for cleaner look
+              },
+              grid: {
+                color: "rgba(255,255,255,0.1)",
+                display: true,
+              },
+            },
+            y: {
+              position: "left",
+              ticks: {
+                color: "white",
+                font: { size: 11 },
+              },
+              grid: {
+                color: "rgba(255,255,255,0.1)",
+              },
+            },
+            "volume-axis": {
+              type: "linear",
+              position: "right",
+              ticks: {
+                color: "rgba(255,255,255,0.6)",
+                font: { size: 10 },
+              },
+              grid: {
+                display: false,
+              },
+            },
+          },
+        },
+      };
+
+      const url = `${
+        this.quickChartBaseUrl
+      }?width=800&height=500&format=png&backgroundColor=rgb(20,20,20)&c=${encodeURIComponent(
+        JSON.stringify(chartConfig)
+      )}`;
+
+      console.log(`📊 Generating QuickChart for ${symbol}...`);
+
+      // Try GET first, but if URL is too long, use POST
+      let res;
+      try {
+        res = await axios.get(url, {
+          responseType: "arraybuffer",
+          timeout: this.quickChartTimeout,
+          validateStatus: (status) => {
+            // Accept 200-299 and also check if response is valid PNG
+            return status >= 200 && status < 300;
+          },
+        });
+      } catch (getError) {
+        // If GET fails, try POST method (for large configs)
+        if (getError.response && getError.response.data) {
+          const responseData = Buffer.from(getError.response.data);
+          // Check if response is actually a valid PNG image
+          if (
+            responseData.length > 0 &&
+            responseData[0] === 0x89 &&
+            responseData[1] === 0x50
+          ) {
+            // Valid PNG signature (89 50 4E 47)
+            console.log(`✅ QuickChart returned PNG despite status code`);
+            return responseData;
+          }
+        }
+
+        // Try POST method for large configs
+        try {
+          console.log(`📊 Trying POST method for QuickChart (large config)...`);
+          const postUrl = `${this.quickChartBaseUrl}?width=800&height=500&format=png&backgroundColor=rgb(20,20,20)`;
+          res = await axios.post(
+            postUrl,
+            { config: chartConfig },
+            {
+              responseType: "arraybuffer",
+              timeout: this.quickChartTimeout,
+              headers: {
+                "Content-Type": "application/json",
+              },
+            }
+          );
+        } catch (postError) {
+          // If POST also fails, check if response data is valid PNG
+          if (postError.response && postError.response.data) {
+            const responseData = Buffer.from(postError.response.data);
+            if (
+              responseData.length > 0 &&
+              responseData[0] === 0x89 &&
+              responseData[1] === 0x50
+            ) {
+              console.log(`✅ QuickChart returned PNG despite error status`);
+              return responseData;
+            }
+          }
+          throw getError; // Throw original error
+        }
+      }
+
+      // Validate response is PNG
+      const imageBuffer = Buffer.from(res.data);
+      if (imageBuffer.length === 0) {
+        throw new Error("Empty response from QuickChart");
+      }
+
+      // Check PNG signature (89 50 4E 47)
+      if (imageBuffer[0] !== 0x89 || imageBuffer[1] !== 0x50) {
+        throw new Error("Invalid PNG response from QuickChart");
+      }
+
+      console.log(
+        `✅ QuickChart generated for ${symbol} (${imageBuffer.length} bytes)`
+      );
+      return imageBuffer;
+    } catch (error) {
+      console.error(
+        `❌ QuickChart generation failed for ${symbol}:`,
+        error.message
+      );
+      if (error.response) {
+        // Check if response is actually a valid image despite error status
+        if (error.response.data) {
+          const responseData = Buffer.from(error.response.data);
+          if (
+            responseData.length > 0 &&
+            responseData[0] === 0x89 &&
+            responseData[1] === 0x50
+          ) {
+            // Valid PNG - use it even if status is error
+            console.log(
+              `✅ QuickChart returned valid PNG despite error status, using it`
+            );
+            return responseData;
+          }
+        }
+        console.error(
+          `❌ QuickChart API error: ${error.response.status} - ${error.response.statusText}`
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Capture TradingView chart screenshot (FALLBACK METHOD - Puppeteer)
    * @param {string} symbol - Trading pair symbol (e.g., VANAUSDT, BTCUSDT)
    * @param {string} timeframe - Chart timeframe (1m, 5m, 15m, 1h, 4h, 1d)
    * @returns {Promise<Buffer>} - Screenshot buffer
    */
-  async captureChart(symbol, timeframe = "5m") {
+  async captureChartPuppeteer(symbol, timeframe = "5m") {
     let page = null;
 
     try {
-      // Initialize browser if not already done
-      if (!this.isInitialized || !this.browser) {
-        await this.initialize();
+      // Check if disabled
+      if (this.isDisabled) {
+        throw new Error(
+          "Browser initialization is disabled due to consecutive failures"
+        );
       }
 
-      // Verify browser is still alive
-      try {
-        await this.browser.pages();
-      } catch (e) {
-        console.warn(`[${symbol}] Browser is dead, reinitializing...`);
-        this.isInitialized = false;
-        await this.initialize();
+      // Periodic health check (not on every request)
+      const now = Date.now();
+      const needsHealthCheck =
+        now - this.lastHealthCheck > this.healthCheckInterval;
+
+      if (needsHealthCheck) {
+        this.lastHealthCheck = now;
+        if (
+          !this.isInitialized ||
+          !this.browser ||
+          !(await this.isBrowserHealthy())
+        ) {
+          this.isInitialized = false;
+          await this.initialize();
+        }
+      } else {
+        // Quick check - only initialize if not initialized
+        if (!this.isInitialized || !this.browser) {
+          await this.initialize();
+        } else {
+          // Quick health verification without full check
+          try {
+            await Promise.race([
+              this.browser.pages(),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("Quick check timeout")), 1000)
+              ),
+            ]);
+          } catch (e) {
+            // Browser is dead, reinitialize
+            console.warn(
+              `[${symbol}] Browser connection lost, reinitializing...`
+            );
+            this.isInitialized = false;
+            await this.initialize();
+          }
+        }
       }
 
       console.log(`[${symbol}] Starting chart screenshot capture...`);
@@ -261,6 +715,42 @@ class ChartScreenshotService {
   }
 
   /**
+   * Main capture method - uses QuickChart (FAST), falls back to Puppeteer
+   * @param {string} symbol - Trading pair symbol (e.g., VANAUSDT, BTCUSDT)
+   * @param {string} timeframe - Chart timeframe (1m, 5m, 15m, 1h, 4h, 1d, 1w)
+   * @param {object} options - Options { useQuickChart: true/false, forcePuppeteer: false }
+   * @returns {Promise<Buffer>} - Screenshot buffer
+   */
+  async captureChart(symbol, timeframe = "5m", options = {}) {
+    const useQuickChart = options.useQuickChart !== false && this.useQuickChart;
+    const forcePuppeteer = options.forcePuppeteer === true;
+
+    // Method 1: QuickChart (FAST - Generated charts, 1-2 seconds)
+    if (useQuickChart && !forcePuppeteer) {
+      try {
+        // Fetch candle data from Binance
+        const candles = await this.getBinanceCandles(symbol, timeframe, 50);
+
+        if (candles.length === 0) {
+          throw new Error("No candle data available from Binance");
+        }
+
+        // Generate chart using QuickChart
+        return await this.captureCandlestickChart(symbol, candles);
+      } catch (quickChartError) {
+        console.warn(
+          `⚠️ QuickChart failed for ${symbol}, falling back to Puppeteer:`,
+          quickChartError.message
+        );
+        // Fall through to Puppeteer fallback
+      }
+    }
+
+    // Method 2: Puppeteer (FALLBACK - TradingView screenshots, 5-10 seconds)
+    return await this.captureChartPuppeteer(symbol, timeframe);
+  }
+
+  /**
    * Construct TradingView public chart URL
    * @param {string} symbol - Trading pair symbol
    * @param {string} timeframe - Chart timeframe
@@ -275,6 +765,7 @@ class ChartScreenshotService {
       "1h": "60",
       "4h": "240",
       "1d": "D",
+      "1w": "W",
     };
 
     const tvTimeframe = timeframeMap[timeframe.toLowerCase()] || "5";
@@ -408,17 +899,33 @@ class ChartScreenshotService {
    * @returns {boolean}
    */
   async healthCheck() {
-    try {
-      if (!this.browser || !this.isInitialized) {
-        return false;
-      }
+    return await this.isBrowserHealthy();
+  }
 
-      const pages = await this.browser.pages();
-      return pages.length >= 0; // Browser is responsive
-    } catch (error) {
-      console.error("❌ Browser health check failed:", error);
-      return false;
-    }
+  /**
+   * Reset failure tracking and re-enable browser initialization
+   */
+  resetFailures() {
+    this.consecutiveFailures = 0;
+    this.isDisabled = false;
+    this.lastFailureTime = 0;
+    console.log("✅ Browser failure tracking reset. Screenshots re-enabled.");
+  }
+
+  /**
+   * Get browser state information
+   * @returns {object} Browser state
+   */
+  getState() {
+    return {
+      isInitialized: this.isInitialized,
+      isDisabled: this.isDisabled,
+      consecutiveFailures: this.consecutiveFailures,
+      timeSinceLastFailure: this.lastFailureTime
+        ? Date.now() - this.lastFailureTime
+        : 0,
+      initializationInProgress: this.initializationInProgress,
+    };
   }
 }
 
