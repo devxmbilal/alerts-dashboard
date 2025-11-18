@@ -7,6 +7,7 @@ import User from "../models/User.js";
 import AlertRedisService from "./AlertRedisService.js";
 import pLimit from "p-limit";
 import dotenv from "dotenv";
+import WebSocket from "ws";
 dotenv.config();
 class RealTimeAlertProcessor {
   constructor() {
@@ -25,6 +26,13 @@ class RealTimeAlertProcessor {
     this.rsiData = new Map(); // Track RSI values for each symbol+timeframe: key = "symbol_timeframe_period", value = { current: number, previous: number }
     this.openInterestData = new Map(); // Track Open Interest for each symbol+timeframe: key = "symbol_timeframe", value = { current: number, baseline: number, timestamp: number }
     this.redisPublisher = null; // Cached Redis publisher connection
+    // WebSocket real-time processing
+    this.binanceWebSocket = null; // Binance WebSocket connection
+    this.livePrices = {}; // Live prices cache: symbol -> { price, volume, etc. }
+    this.isWebSocketRunning = false; // Track WebSocket status
+    this.redisClient = null; // Redis client for cache operations
+    this.dbQueueClient = null; // Redis client for database queue operations
+    this.dbQueueStreamName = "db:operations:queue"; // Redis Stream name for DB operations
   }
 
   // Get or create Redis publisher connection (reused for performance)
@@ -83,7 +91,6 @@ class RealTimeAlertProcessor {
     // But we wait to ensure it's ready before returning
     return new Promise((resolve, reject) => {
       if (this.redisPublisher.status === "ready") {
-        console.log("✅ Redis publisher connection ready");
         resolve(this.redisPublisher);
         return;
       }
@@ -114,15 +121,248 @@ class RealTimeAlertProcessor {
     try {
       const alerts = await AlertsCache.getUserAlerts(userId);
       if (alerts && alerts.length > 0) {
-        console.log(
-          `📊 Loaded ${alerts.length} alerts from Redis for user ${userId}`
-        );
         return alerts;
       }
       return [];
     } catch (error) {
       console.error("❌ Error loading alerts from Redis:", error);
       return [];
+    }
+  }
+
+  // Initialize Redis client for cache operations
+  async initRedisClient() {
+    try {
+      if (this.redisClient) {
+        return this.redisClient;
+      }
+
+      const Redis = (await import("ioredis")).default;
+      this.redisClient = new Redis({
+        host: process.env.REDIS_HOST || "localhost",
+        port: process.env.REDIS_PORT || 6379,
+        lazyConnect: false,
+        retryDelayOnClusterDown: 300,
+        maxRetriesPerRequest: 5,
+        enableReadyCheck: false,
+        keepAlive: 30000,
+        connectTimeout: 10000,
+      });
+
+      this.redisClient.on("error", (err) => {
+        console.error("❌ Redis cache client error:", err.message);
+      });
+
+      this.redisClient.on("close", () => {
+        console.warn("⚠️ Redis cache client connection closed");
+        this.redisClient = null;
+      });
+
+      console.log("✅ Redis cache client initialized");
+      return this.redisClient;
+    } catch (error) {
+      console.error("❌ Error initializing Redis cache client:", error);
+      return null;
+    }
+  }
+
+  // Initialize Redis client for database queue operations
+  async initDbQueueClient() {
+    try {
+      if (this.dbQueueClient) {
+        return this.dbQueueClient;
+      }
+
+      const Redis = (await import("ioredis")).default;
+      this.dbQueueClient = new Redis({
+        host: process.env.REDIS_HOST || "localhost",
+        port: process.env.REDIS_PORT || 6379,
+        lazyConnect: false,
+        retryDelayOnClusterDown: 300,
+        maxRetriesPerRequest: 5,
+        enableReadyCheck: false,
+        keepAlive: 30000,
+        connectTimeout: 10000,
+      });
+
+      this.dbQueueClient.on("error", (err) => {
+        console.error("❌ Redis DB queue client error:", err.message);
+      });
+
+      this.dbQueueClient.on("close", () => {
+        console.warn("⚠️ Redis DB queue client connection closed");
+        this.dbQueueClient = null;
+      });
+
+      console.log("✅ Redis DB queue client initialized");
+      return this.dbQueueClient;
+    } catch (error) {
+      console.error("❌ Error initializing Redis DB queue client:", error);
+      return null;
+    }
+  }
+
+  // Enqueue database operation to Redis Stream
+  async enqueueDbOperation(operation) {
+    try {
+      const redis = await this.initDbQueueClient();
+      if (!redis) {
+        console.error("❌ Redis DB queue client not available");
+        return false;
+      }
+
+      const operationData = {
+        type: operation.type, // 'update_alert', 'update_baseline', etc.
+        alertId: operation.alertId,
+        data: operation.data,
+        timestamp: Date.now(),
+        priority: operation.priority || "normal", // 'high', 'normal', 'low'
+      };
+
+      // Add to Redis Stream
+      await redis.xadd(
+        this.dbQueueStreamName,
+        "*", // Auto-generate ID
+        "operation",
+        JSON.stringify(operationData)
+      );
+
+      return true;
+    } catch (error) {
+      console.error("❌ Error enqueueing DB operation:", error.message);
+      return false;
+    }
+  }
+
+  // Load all active alerts from DB and cache in Redis (organized by symbol for fast lookup)
+  async loadAlertsToRedisCache() {
+    try {
+      const redis = await this.initRedisClient();
+      if (!redis) {
+        console.error("❌ Redis client not available for caching alerts");
+        return false;
+      }
+
+      // Get all active alerts from MongoDB
+      const alerts = await Alert.find({
+        status: "active",
+      }).lean();
+
+      if (alerts.length === 0) {
+        console.log("⚠️ No active alerts to cache");
+        // Clear existing cache
+        await redis.del("alerts:cache:all");
+        return true;
+      }
+
+      // Group alerts by symbol for fast lookup
+      const alertsBySymbol = {};
+      const allAlertIds = [];
+
+      for (const alert of alerts) {
+        const symbol = alert.symbol;
+        if (!alertsBySymbol[symbol]) {
+          alertsBySymbol[symbol] = [];
+        }
+        alertsBySymbol[symbol].push(alert);
+        allAlertIds.push(alert._id.toString());
+      }
+
+      // Cache alerts by symbol (for fast lookup when price updates)
+      for (const [symbol, symbolAlerts] of Object.entries(alertsBySymbol)) {
+        const cacheKey = `alerts:cache:${symbol}`;
+        await redis.setEx(
+          cacheKey,
+          3600, // 1 hour TTL
+          JSON.stringify(symbolAlerts)
+        );
+      }
+
+      // Also cache all alerts for full reload
+      await redis.setEx("alerts:cache:all", 3600, JSON.stringify(alerts));
+
+      // Update in-memory activeAlerts map
+      this.activeAlerts.clear();
+      for (const [symbol, symbolAlerts] of Object.entries(alertsBySymbol)) {
+        this.activeAlerts.set(symbol, symbolAlerts);
+      }
+
+      console.log(
+        `✅ Cached ${alerts.length} alerts for ${
+          Object.keys(alertsBySymbol).length
+        } symbols in Redis`
+      );
+      return true;
+    } catch (error) {
+      console.error("❌ Error loading alerts to Redis cache:", error);
+      return false;
+    }
+  }
+
+  // Get alerts for a symbol from Redis cache
+  async getAlertsFromCache(symbol) {
+    try {
+      const redis = await this.initRedisClient();
+      if (!redis) {
+        return [];
+      }
+
+      const cacheKey = `alerts:cache:${symbol}`;
+      const cached = await redis.get(cacheKey);
+
+      if (cached) {
+        return JSON.parse(cached);
+      }
+      return [];
+    } catch (error) {
+      console.error(`❌ Error getting alerts from cache for ${symbol}:`, error);
+      return [];
+    }
+  }
+
+  // Update alert in Redis cache after trigger
+  async updateAlertInCache(alert) {
+    try {
+      const redis = await this.initRedisClient();
+      if (!redis) {
+        return false;
+      }
+
+      const symbol = alert.symbol;
+      const cacheKey = `alerts:cache:${symbol}`;
+
+      // Get existing alerts for this symbol
+      const existingAlerts = await this.getAlertsFromCache(symbol);
+
+      // Update the alert in the array
+      const alertIndex = existingAlerts.findIndex(
+        (a) => a._id.toString() === alert._id.toString()
+      );
+
+      if (alertIndex !== -1) {
+        existingAlerts[alertIndex] = alert;
+      } else {
+        existingAlerts.push(alert);
+      }
+
+      // Update cache
+      await redis.setEx(cacheKey, 3600, JSON.stringify(existingAlerts));
+
+      // Also update in-memory map
+      if (this.activeAlerts.has(symbol)) {
+        const inMemoryAlerts = this.activeAlerts.get(symbol);
+        const inMemoryIndex = inMemoryAlerts.findIndex(
+          (a) => a._id.toString() === alert._id.toString()
+        );
+        if (inMemoryIndex !== -1) {
+          inMemoryAlerts[inMemoryIndex] = alert;
+        }
+      }
+
+      return true;
+    } catch (error) {
+      console.error(`❌ Error updating alert in cache:`, error);
+      return false;
     }
   }
 
@@ -170,6 +410,253 @@ class RealTimeAlertProcessor {
       return [];
     }
   }
+
+  // ============================================
+  // NEW: WebSocket-based Real-Time Processing
+  // ============================================
+
+  // Start WebSocket connection to Binance for real-time price updates
+  startWebSocketPriceFeed() {
+    if (this.isWebSocketRunning) {
+      console.log("⚠️ WebSocket already running");
+      return;
+    }
+
+    console.log("🚀 Starting Binance WebSocket price feed...");
+
+    try {
+      // Connect to Binance !ticker@arr stream (all tickers)
+      const wsUrl = "wss://stream.binance.com:9443/ws/!ticker@arr";
+      this.binanceWebSocket = new WebSocket(wsUrl);
+
+      this.binanceWebSocket.on("open", () => {
+        console.log("✅ Binance WebSocket connected");
+        this.isWebSocketRunning = true;
+      });
+
+      this.binanceWebSocket.on("message", (data) => {
+        try {
+          const tickers = JSON.parse(data.toString());
+
+          // OPTIMIZATION: Batch process multiple symbols in parallel with concurrency limit
+          const symbolsToProcess = new Set();
+          const priceUpdates = {};
+          const startTime = Date.now();
+
+          // Step 1: Update live prices cache and collect symbols (fast - synchronous)
+          tickers.forEach((ticker) => {
+            const symbol = ticker.s;
+            if (!symbol) return; // Skip invalid symbols
+
+            symbolsToProcess.add(symbol);
+
+            priceUpdates[symbol] = {
+              symbol: symbol,
+              price: parseFloat(ticker.c) || 0, // Last price
+              priceChange: parseFloat(ticker.P) || 0, // Price change
+              priceChangePercent: parseFloat(ticker.P) || 0, // Price change percent
+              volume: parseFloat(ticker.v) || 0, // Volume
+              volume24h: parseFloat(ticker.v) || 0, // 24h volume
+              high: parseFloat(ticker.h) || parseFloat(ticker.c) || 0, // High price
+              low: parseFloat(ticker.l) || parseFloat(ticker.c) || 0, // Low price
+              open: parseFloat(ticker.o) || parseFloat(ticker.c) || 0, // Open price
+              close: parseFloat(ticker.c) || 0, // Close price (same as last)
+              timestamp: Date.now(),
+            };
+
+            // Update live prices cache immediately
+            this.livePrices[symbol] = priceUpdates[symbol];
+          });
+
+          // Step 2: Filter symbols that have alerts (fast check - skip symbols with no alerts)
+          const symbolsWithAlerts = Array.from(symbolsToProcess).filter(
+            (symbol) => {
+              // Quick in-memory check first
+              return (
+                this.activeAlerts.has(symbol) || this.activeAlerts.size === 0 // If no alerts loaded yet, process all
+              );
+            }
+          );
+
+          // Step 3: Process symbols with alerts in parallel (with concurrency limit)
+          if (symbolsWithAlerts.length > 0) {
+            // Use processLimit for better concurrency control
+            const symbolPromises = symbolsWithAlerts.map((symbol) =>
+              this.processLimit(async () => {
+                try {
+                  await this.processPriceUpdateRealTime(
+                    symbol,
+                    priceUpdates[symbol]
+                  );
+                } catch (error) {
+                  // Silent fail per symbol - don't block other symbols
+                  console.error(
+                    `❌ Error processing ${symbol} (non-blocking):`,
+                    error.message
+                  );
+                }
+              })
+            );
+
+            // Process all symbols in parallel (non-blocking)
+            Promise.all(symbolPromises)
+              .then(() => {
+                const processingTime = Date.now() - startTime;
+                if (processingTime > 100) {
+                  // Only log if processing takes more than 100ms
+                  console.log(
+                    `⚡ Batch processed ${symbolsWithAlerts.length} symbols in ${processingTime}ms`
+                  );
+                }
+              })
+              .catch((error) => {
+                console.error("❌ Error in batch processing:", error);
+              });
+          }
+        } catch (error) {
+          console.error("❌ Error parsing WebSocket message:", error);
+        }
+      });
+
+      this.binanceWebSocket.on("error", (error) => {
+        console.error("❌ Binance WebSocket error:", error.message);
+        this.isWebSocketRunning = false;
+      });
+
+      this.binanceWebSocket.on("close", () => {
+        console.log(
+          "⚠️ Binance WebSocket closed, reconnecting in 3 seconds..."
+        );
+        this.isWebSocketRunning = false;
+        this.binanceWebSocket = null;
+
+        // Reconnect after 3 seconds
+        setTimeout(() => {
+          this.startWebSocketPriceFeed();
+        }, 3000);
+      });
+    } catch (error) {
+      console.error("❌ Error starting WebSocket:", error);
+      this.isWebSocketRunning = false;
+
+      // Retry after 3 seconds
+      setTimeout(() => {
+        this.startWebSocketPriceFeed();
+      }, 3000);
+    }
+  }
+
+  // Process price update in real-time (from WebSocket)
+  async processPriceUpdateRealTime(symbol, liveData) {
+    try {
+      // OPTIMIZATION: Use in-memory cache FIRST (0.1ms vs 5-20ms Redis)
+      let alerts = this.activeAlerts.get(symbol) || [];
+
+      // Only fallback to Redis if in-memory cache is empty
+      if (alerts.length === 0) {
+        alerts = await this.getAlertsFromCache(symbol);
+        // Update in-memory cache for next time
+        if (alerts.length > 0) {
+          this.activeAlerts.set(symbol, alerts);
+        }
+      }
+
+      if (alerts.length === 0) {
+        return; // No alerts for this symbol
+      }
+
+      // Process all alerts for this symbol in parallel
+      const alertPromises = alerts.map((alert) =>
+        this.processLimit(async () => {
+          try {
+            // Process alert with live data
+            const result = await this.processAlertWithLiveData(alert, liveData);
+
+            // OPTIMIZATION: Update cache without blocking (fire-and-forget)
+            if (result && result.triggered) {
+              // Update in-memory cache immediately (no DB query needed)
+              const alertIndex = alerts.findIndex(
+                (a) => a._id.toString() === alert._id.toString()
+              );
+              if (alertIndex !== -1) {
+                // Update baseline in memory
+                alerts[alertIndex].baselinePrice = liveData.price;
+                alerts[alertIndex].baselineVolume =
+                  liveData.volume || liveData.volume24h;
+                alerts[alertIndex].baselineTimestamp = new Date();
+                alerts[alertIndex].lastTriggeredAt = new Date();
+                alerts[alertIndex].lastTriggeredPrice = liveData.price;
+              }
+
+              // Update Redis cache in background (non-blocking)
+              Alert.findById(alert._id)
+                .lean()
+                .then((updatedAlert) => {
+                  if (updatedAlert) {
+                    this.updateAlertInCache(updatedAlert).catch(() => {});
+                  }
+                })
+                .catch(() => {}); // Silent fail - non-critical
+            }
+
+            return result;
+          } catch (error) {
+            console.error(
+              `❌ Error processing alert ${alert._id} for ${symbol}:`,
+              error.message
+            );
+            return { triggered: false, reason: "error", error: error.message };
+          }
+        })
+      );
+
+      // Wait for all alerts to be processed (non-blocking)
+      Promise.all(alertPromises).catch((error) => {
+        console.error(`❌ Error processing alerts for ${symbol}:`, error);
+      });
+    } catch (error) {
+      console.error(`❌ Error processing price update for ${symbol}:`, error);
+    }
+  }
+
+  // Start WebSocket-based real-time processing
+  async startWebSocketProcessing() {
+    console.log("🚀 Starting WebSocket-based real-time alert processing...");
+
+    // Step 1: Initialize Redis clients
+    await this.initRedisClient();
+    await this.initDbQueueClient(); // Initialize DB queue client
+
+    // Step 2: Load all alerts from DB and cache in Redis
+    await this.loadAlertsToRedisCache();
+    console.log("✅ Alerts loaded and cached in Redis");
+
+    // Step 3: Start WebSocket connection
+    this.startWebSocketPriceFeed();
+
+    // Step 4: Periodically reload alerts from DB to Redis (every 5 minutes)
+    // This ensures cache stays fresh if alerts are added/removed
+    setInterval(async () => {
+      console.log("🔄 Reloading alerts from DB to Redis cache...");
+      await this.loadAlertsToRedisCache();
+    }, 5 * 60 * 1000); // 5 minutes
+
+    console.log("✅ WebSocket-based real-time processing started");
+  }
+
+  // Stop WebSocket connection
+  stopWebSocketPriceFeed() {
+    if (this.binanceWebSocket) {
+      console.log("🛑 Stopping Binance WebSocket...");
+      this.binanceWebSocket.close();
+      this.binanceWebSocket = null;
+      this.isWebSocketRunning = false;
+    }
+  }
+
+  // ============================================
+  // OLD: Round-based processing (kept for backward compatibility)
+  // ============================================
 
   // Task 1: Round-based processing - fetch all alerts from database and process them
   async startRoundBasedProcessing() {
@@ -241,7 +728,6 @@ class RealTimeAlertProcessor {
       const triggeredCount = results.filter(
         (r) => r && r.triggered === true
       ).length;
-
     } catch (error) {
       console.error(`❌ Error in Round ${this.currentRound}:`, error);
     } finally {
@@ -269,6 +755,9 @@ class RealTimeAlertProcessor {
 
         // Check if timeframe interval has passed
         if (timeSinceBaseline >= timeframeMs) {
+          console.log(
+            `🔄 Timeframe interval passed for ${alert.symbol}, updating baseline from ${alert.baselinePrice} to ${liveData.price}`
+          );
 
           // Update baseline to current live price
           alert.baselinePrice = liveData.price;
@@ -287,17 +776,39 @@ class RealTimeAlertProcessor {
             );
           });
 
-          // Update in activeAlerts map
+          // OPTIMIZATION: Update in-memory cache immediately
           const alertsForSymbol = this.activeAlerts.get(alert.symbol);
           if (alertsForSymbol) {
             const alertIndex = alertsForSymbol.findIndex(
               (a) => a._id.toString() === alert._id.toString()
             );
             if (alertIndex !== -1) {
-              alertsForSymbol[alertIndex] = alert;
+              // Update with new baseline values
+              alertsForSymbol[alertIndex] = {
+                ...alertsForSymbol[alertIndex],
+                baselinePrice: liveData.price,
+                baselineVolume: liveData.volume || liveData.volume24h,
+                baselineTimestamp: new Date(),
+              };
             }
           }
 
+          // OPTIMIZATION: Update Redis cache (non-blocking)
+          this.updateAlertInCache({
+            ...alert,
+            baselinePrice: liveData.price,
+            baselineVolume: liveData.volume || liveData.volume24h,
+            baselineTimestamp: new Date(),
+          }).catch((error) => {
+            console.error(
+              `❌ Error updating alert in Redis cache for ${alert.symbol}:`,
+              error.message
+            );
+          });
+
+          console.log(
+            `✅ Baseline updated in memory and Redis cache for ${alert.symbol}`
+          );
         }
       }
 
@@ -333,7 +844,6 @@ class RealTimeAlertProcessor {
         return { triggered: false, reason: "price_unchanged" };
       }
 
-
       // Check alert conditions
       const conditionsMet = await this.checkAlertConditionsWithLiveData(
         alert,
@@ -341,7 +851,6 @@ class RealTimeAlertProcessor {
       );
 
       if (conditionsMet) {
-
         // Trigger the alert (this will apply the lock)
         await this.triggerAlertWithLiveData(alert, liveData);
 
@@ -359,33 +868,50 @@ class RealTimeAlertProcessor {
   async checkAlertConditionsWithLiveData(alert, liveData) {
     try {
       const conditions = alert.conditions;
-      
+
       console.log(`📋 Checking conditions for ${alert.symbol}:`);
 
       // OPTIMIZATION 1: Create array of only SET conditions for hierarchical checking
-      const activeConditions = this.getActiveConditions(conditions, liveData, alert);
-      
+      const activeConditions = this.getActiveConditions(
+        conditions,
+        liveData,
+        alert
+      );
+
       if (activeConditions.length === 0) {
         console.log(`⚠️ No active conditions found for ${alert.symbol}`);
         return false;
       }
 
-      // OPTIMIZATION 2: Hierarchical checking - check conditions in priority order
-      // If any condition fails, immediately return false (early exit)
-      for (const conditionCheck of activeConditions) {
-        const result = await conditionCheck.check();
-        
+      // OPTIMIZATION 2: Parallel condition checking (faster than sequential)
+      // Check all conditions in parallel, but fail fast if any fails
+      const conditionResults = await Promise.all(
+        activeConditions.map(async (conditionCheck) => {
+          try {
+            return await conditionCheck.check();
+          } catch (error) {
+            console.error(`❌ Error checking ${conditionCheck.name}:`, error);
+            return { passed: false, reason: `Error: ${error.message}` };
+          }
+        })
+      );
+
+      // Check if all conditions passed
+      for (let i = 0; i < conditionResults.length; i++) {
+        const result = conditionResults[i];
+        const conditionCheck = activeConditions[i];
+
         if (!result.passed) {
           console.log(`❌ ${conditionCheck.name} FAILED: ${result.reason}`);
-          return false; // Early exit - no need to check remaining conditions
+          return false; // Early exit
         }
-        
         console.log(`✅ ${conditionCheck.name} PASSED: ${result.reason}`);
       }
 
-      console.log(`🎉 All ${activeConditions.length} conditions PASSED for ${alert.symbol}`);
+      console.log(
+        `🎉 All ${activeConditions.length} conditions PASSED for ${alert.symbol}`
+      );
       return true;
-
     } catch (error) {
       console.error(`❌ Error checking conditions for ${alert.symbol}:`, error);
       return false;
@@ -397,19 +923,24 @@ class RealTimeAlertProcessor {
     const activeConditions = [];
 
     // Priority 1: Min Daily (fastest check, most likely to fail)
-    if (this.isConditionSet(conditions.minDaily) && (liveData.volume || liveData.volume24h)) {
+    if (
+      this.isConditionSet(conditions.minDaily) &&
+      (liveData.volume || liveData.volume24h)
+    ) {
       activeConditions.push({
         name: "Min Daily Volume",
         priority: 1,
         check: async () => {
           const minVolume = parseFloat(conditions.minDaily);
-          const actualVolume = parseFloat(liveData.volume || liveData.volume24h);
-          
+          const actualVolume = parseFloat(
+            liveData.volume || liveData.volume24h
+          );
+
           if (actualVolume < minVolume) {
             return { passed: false, reason: `${actualVolume} < ${minVolume}` };
           }
           return { passed: true, reason: `${actualVolume} >= ${minVolume}` };
-        }
+        },
       });
     }
 
@@ -419,28 +950,46 @@ class RealTimeAlertProcessor {
         name: "Change Percent",
         priority: 2,
         check: async () => {
-          const requiredChange = parseFloat(conditions.changePercent.percentage);
+          const requiredChange = parseFloat(
+            conditions.changePercent.percentage
+          );
           const direction = conditions.changePercent.direction || "increase";
-          
+
           // Calculate change from baseline price
-          const changeFromBaseline = ((liveData.price - alert.baselinePrice) / alert.baselinePrice) * 100;
+          const changeFromBaseline =
+            ((liveData.price - alert.baselinePrice) / alert.baselinePrice) *
+            100;
           const absoluteChange = Math.abs(changeFromBaseline);
 
           // Check direction first (fastest)
           if (direction === "increase" && changeFromBaseline < 0) {
-            return { passed: false, reason: `Price decreased but increase required` };
+            return {
+              passed: false,
+              reason: `Price decreased but increase required`,
+            };
           }
           if (direction === "decrease" && changeFromBaseline > 0) {
-            return { passed: false, reason: `Price increased but decrease required` };
+            return {
+              passed: false,
+              reason: `Price increased but decrease required`,
+            };
           }
 
           // Check percentage
           if (absoluteChange < requiredChange) {
-            return { passed: false, reason: `${absoluteChange.toFixed(3)}% < ${requiredChange}%` };
+            return {
+              passed: false,
+              reason: `${absoluteChange.toFixed(3)}% < ${requiredChange}%`,
+            };
           }
-          
-          return { passed: true, reason: `${absoluteChange.toFixed(3)}% >= ${requiredChange}% (${direction})` };
-        }
+
+          return {
+            passed: true,
+            reason: `${absoluteChange.toFixed(
+              3
+            )}% >= ${requiredChange}% (${direction})`,
+          };
+        },
       });
     }
 
@@ -454,17 +1003,20 @@ class RealTimeAlertProcessor {
           if (isAlertLocked(alert)) {
             const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
             const now = new Date();
-            const timeRemaining = Math.max(0, lockUntil.getTime() - now.getTime());
+            const timeRemaining = Math.max(
+              0,
+              lockUntil.getTime() - now.getTime()
+            );
             const minutesRemaining = Math.ceil(timeRemaining / (1000 * 60));
-            
-            return { 
-              passed: false, 
-              reason: `Alert locked for ${minutesRemaining} minutes` 
+
+            return {
+              passed: false,
+              reason: `Alert locked for ${minutesRemaining} minutes`,
             };
           }
-          
+
           return { passed: true, reason: "Alert count condition met" };
-        }
+        },
       });
     }
 
@@ -475,25 +1027,33 @@ class RealTimeAlertProcessor {
         priority: 4,
         check: async () => {
           // Only check if timeframes are actually set
-          if (!conditions.candle.timeframes || conditions.candle.timeframes.length === 0) {
-            return { passed: false, reason: "No timeframes configured for candle condition" };
+          if (
+            !conditions.candle.timeframes ||
+            conditions.candle.timeframes.length === 0
+          ) {
+            return {
+              passed: false,
+              reason: "No timeframes configured for candle condition",
+            };
           }
-          
+
           // Update candle data for required timeframes
           for (const timeframe of conditions.candle.timeframes) {
             await this.updateCandleData(alert.symbol, timeframe, liveData);
           }
-          
+
           const candleMatch = await this.evaluateCandleConditions(
             conditions.candle,
             liveData,
             alert.symbol
           );
-          return { 
-            passed: candleMatch, 
-            reason: candleMatch ? "Candle pattern met" : "Candle pattern not met" 
+          return {
+            passed: candleMatch,
+            reason: candleMatch
+              ? "Candle pattern met"
+              : "Candle pattern not met",
           };
-        }
+        },
       });
     }
 
@@ -504,20 +1064,26 @@ class RealTimeAlertProcessor {
         priority: 5,
         check: async () => {
           // Only check if timeframes are actually set
-          if (!conditions.rsiRange.timeframes || conditions.rsiRange.timeframes.length === 0) {
-            return { passed: false, reason: "No timeframes configured for RSI condition" };
+          if (
+            !conditions.rsiRange.timeframes ||
+            conditions.rsiRange.timeframes.length === 0
+          ) {
+            return {
+              passed: false,
+              reason: "No timeframes configured for RSI condition",
+            };
           }
-          
+
           const rsiMatch = await this.evaluateRSIConditions(
             conditions.rsiRange,
             liveData,
             alert.symbol
           );
-          return { 
-            passed: rsiMatch, 
-            reason: rsiMatch ? "RSI condition met" : "RSI condition not met" 
+          return {
+            passed: rsiMatch,
+            reason: rsiMatch ? "RSI condition met" : "RSI condition not met",
           };
-        }
+        },
       });
     }
 
@@ -528,21 +1094,29 @@ class RealTimeAlertProcessor {
         priority: 6,
         check: async () => {
           // Only check if timeframes are actually set
-          if (!conditions.volume.timeframes || conditions.volume.timeframes.length === 0) {
-            return { passed: false, reason: "No timeframes configured for volume condition" };
+          if (
+            !conditions.volume.timeframes ||
+            conditions.volume.timeframes.length === 0
+          ) {
+            return {
+              passed: false,
+              reason: "No timeframes configured for volume condition",
+            };
           }
-          
+
           const volumeMatch = await this.evaluateVolumeConditions(
             conditions.volume,
             liveData,
             alert.symbol,
             alert
           );
-          return { 
-            passed: volumeMatch, 
-            reason: volumeMatch ? "Volume condition met" : "Volume condition not met" 
+          return {
+            passed: volumeMatch,
+            reason: volumeMatch
+              ? "Volume condition met"
+              : "Volume condition not met",
           };
-        }
+        },
       });
     }
 
@@ -553,20 +1127,28 @@ class RealTimeAlertProcessor {
         priority: 7,
         check: async () => {
           // Only check if timeframes are actually set
-          if (!conditions.openInterest.timeframes || conditions.openInterest.timeframes.length === 0) {
-            return { passed: false, reason: "No timeframes configured for open interest condition" };
+          if (
+            !conditions.openInterest.timeframes ||
+            conditions.openInterest.timeframes.length === 0
+          ) {
+            return {
+              passed: false,
+              reason: "No timeframes configured for open interest condition",
+            };
           }
-          
+
           const openInterestMatch = await this.evaluateOpenInterestConditions(
             conditions.openInterest,
             alert,
             liveData
           );
-          return { 
-            passed: openInterestMatch, 
-            reason: openInterestMatch ? "Open Interest condition met" : "Open Interest condition not met" 
+          return {
+            passed: openInterestMatch,
+            reason: openInterestMatch
+              ? "Open Interest condition met"
+              : "Open Interest condition not met",
           };
-        }
+        },
       });
     }
 
@@ -577,33 +1159,32 @@ class RealTimeAlertProcessor {
   // OPTIMIZATION HELPER: Check if a condition is actually set/configured
   isConditionSet(condition) {
     if (!condition) return false;
-    
+
     // For arrays (timeframes)
     if (Array.isArray(condition)) {
       return condition.length > 0;
     }
-    
+
     // For strings/numbers
-    if (typeof condition === 'string') {
-      return condition.trim() !== '';
+    if (typeof condition === "string") {
+      return condition.trim() !== "";
     }
-    
-    if (typeof condition === 'number') {
+
+    if (typeof condition === "number") {
       return !isNaN(condition) && condition > 0;
     }
-    
+
     // For objects
-    if (typeof condition === 'object') {
+    if (typeof condition === "object") {
       return Object.keys(condition).length > 0;
     }
-    
+
     return Boolean(condition);
   }
 
   // Trigger alert with live data and update baseline
   async triggerAlertWithLiveData(alert, liveData) {
     try {
-
       // Safely get baseline values with proper defaults
       const baselinePrice = parseFloat(alert.baselinePrice) || 0;
       const baselineVolume = parseFloat(alert.baselineVolume) || 0;
@@ -674,17 +1255,20 @@ class RealTimeAlertProcessor {
         conditions: this.getAlertConditionsText(alert.conditions),
       };
 
-      // Save to AlertHistory
-
+      // CRITICAL: Save AlertHistory FIRST (blocking) - needed for notifications
+      // This is fast (10-50ms) and required for Email/Telegram to work
       const savedAlertHistory = await AlertHistoryService.createAlertHistory(
         alertHistory
       );
 
       // CRITICAL: Use saved alert history with _id for notification
       if (!savedAlertHistory || !savedAlertHistory._id) {
+        console.error(
+          `❌ Failed to save alert history for ${alert.symbol}, notification may fail`
+        );
         return {
           passed: false,
-          reason: "Failed to save alert history"
+          reason: "Failed to save alert history",
         };
       }
 
@@ -716,16 +1300,86 @@ class RealTimeAlertProcessor {
         );
       }
 
-      await Alert.findByIdAndUpdate(alert._id, updateData);
+      // OPTIMIZATION: Queue database update to Redis Stream (non-blocking)
+      // This allows notification to be sent immediately without waiting for DB
+      this.enqueueDbOperation({
+        type: "update_alert",
+        alertId: alert._id.toString(),
+        data: updateData,
+        priority: "high", // High priority for alert updates
+      }).catch((error) => {
+        console.error(
+          `❌ Error enqueueing alert update to DB queue:`,
+          error.message
+        );
+        // Fallback: Try direct DB update if queue fails
+        Alert.findByIdAndUpdate(alert._id, updateData).catch((dbError) => {
+          console.error(
+            `❌ Error updating alert in DB (fallback):`,
+            dbError.message
+          );
+        });
+      });
 
       console.log(
         `✅ Alert ${alert._id} updated with new baseline price: ${liveData.price}`
       );
 
+      // OPTIMIZATION: Update in-memory cache immediately (no DB query needed)
+      const alertsForSymbol = this.activeAlerts.get(alert.symbol);
+      if (alertsForSymbol) {
+        const alertIndex = alertsForSymbol.findIndex(
+          (a) => a._id.toString() === alert._id.toString()
+        );
+        if (alertIndex !== -1) {
+          // Update in memory immediately
+          alertsForSymbol[alertIndex] = {
+            ...alertsForSymbol[alertIndex],
+            ...updateData,
+            baselinePrice: liveData.price,
+            baselineVolume: liveData.volume || liveData.volume24h,
+            baselineTimestamp: new Date(),
+          };
+        }
+      }
+
+      // Update Redis cache in background (non-blocking, no DB query)
+      this.updateAlertInCache({
+        ...alert,
+        ...updateData,
+        baselinePrice: liveData.price,
+        baselineVolume: liveData.volume || liveData.volume24h,
+        baselineTimestamp: new Date(),
+      }).catch(() => {}); // Silent fail - non-critical
+
+      // Update live price in cache for this symbol
+      if (this.redisClient) {
+        const priceCacheKey = `crypto:${alert.symbol}`;
+        const priceData = {
+          price: liveData.price,
+          volume: liveData.volume || liveData.volume24h,
+          volume24h: liveData.volume24h || liveData.volume,
+          priceChange: liveData.priceChange || 0,
+          priceChangePercent: liveData.priceChangePercent || 0,
+          high: liveData.high || liveData.price,
+          low: liveData.low || liveData.price,
+          open: liveData.open || liveData.price,
+          close: liveData.close || liveData.price,
+          timestamp: Date.now(),
+        };
+        this.redisClient
+          .setEx(priceCacheKey, 60, JSON.stringify(priceData))
+          .catch((error) => {
+            console.error(
+              `❌ Error updating price cache (non-blocking):`,
+              error.message
+            );
+          });
+      }
+
       // Log savedAlertHistory before sending notification
       console.log(
-        `📤 About to send notification for ${alert.symbol}, savedAlertHistory:`,
-       
+        `📤 About to send notification for ${alert.symbol}, savedAlertHistory:`
       );
 
       // Send real-time notification using saved alert history (with _id)
@@ -919,38 +1573,75 @@ class RealTimeAlertProcessor {
 
         // Check if timeframe interval has passed
         if (timeSinceBaseline >= timeframeMs) {
-         
+          console.log(
+            `🔄 Timeframe interval passed for ${alert.symbol}, updating baseline from ${alert.baselinePrice} to ${priceData.price}`
+          );
 
           // Update baseline to current live price
           alert.baselinePrice = priceData.price;
           alert.baselineVolume = priceData.volume || priceData.volume24h;
           alert.baselineTimestamp = new Date();
 
-          // Update in database (non-blocking)
-          Alert.findByIdAndUpdate(alert._id, {
-            baselinePrice: priceData.price,
-            baselineVolume: priceData.volume || priceData.volume24h,
-            baselineTimestamp: new Date(),
+          // OPTIMIZATION: Queue baseline update to Redis Stream (non-blocking)
+          this.enqueueDbOperation({
+            type: "update_baseline",
+            alertId: alert._id.toString(),
+            data: {
+              baselinePrice: priceData.price,
+              baselineVolume: priceData.volume || priceData.volume24h,
+              baselineTimestamp: new Date(),
+            },
+            priority: "normal",
           }).catch((error) => {
             console.error(
-              `❌ Error updating baseline for ${alert.symbol}:`,
+              `❌ Error enqueueing baseline update to DB queue:`,
               error.message
             );
+            // Fallback: Try direct DB update if queue fails
+            Alert.findByIdAndUpdate(alert._id, {
+              baselinePrice: priceData.price,
+              baselineVolume: priceData.volume || priceData.volume24h,
+              baselineTimestamp: new Date(),
+            }).catch((dbError) => {
+              console.error(
+                `❌ Error updating baseline for ${alert.symbol} (fallback):`,
+                dbError.message
+              );
+            });
           });
 
-          // Update in activeAlerts map
+          // OPTIMIZATION: Update in-memory cache immediately
           const alertsForSymbol = this.activeAlerts.get(alert.symbol);
           if (alertsForSymbol) {
             const alertIndex = alertsForSymbol.findIndex(
               (a) => a._id.toString() === alert._id.toString()
             );
             if (alertIndex !== -1) {
-              alertsForSymbol[alertIndex] = alert;
+              // Update with new baseline values
+              alertsForSymbol[alertIndex] = {
+                ...alertsForSymbol[alertIndex],
+                baselinePrice: priceData.price,
+                baselineVolume: priceData.volume || priceData.volume24h,
+                baselineTimestamp: new Date(),
+              };
             }
           }
 
+          // OPTIMIZATION: Update Redis cache (non-blocking)
+          this.updateAlertInCache({
+            ...alert,
+            baselinePrice: priceData.price,
+            baselineVolume: priceData.volume || priceData.volume24h,
+            baselineTimestamp: new Date(),
+          }).catch((error) => {
+            console.error(
+              `❌ Error updating alert in Redis cache for ${alert.symbol}:`,
+              error.message
+            );
+          });
+
           console.log(
-            `✅ Baseline updated for ${alert.symbol}: New baseline = ${priceData.price}`
+            `✅ Baseline updated in memory and Redis cache for ${alert.symbol}`
           );
         } else {
           const remainingMs = timeframeMs - timeSinceBaseline;
@@ -958,7 +1649,6 @@ class RealTimeAlertProcessor {
           console.log(
             `⏰ Timeframe interval (${timeframe}) not yet reached for ${alert.symbol}`
           );
-        
         }
       }
 
@@ -1629,32 +2319,113 @@ class RealTimeAlertProcessor {
     }
   }
 
-  // Get RSI value for a symbol and timeframe (with caching)
+  // Get RSI value for a symbol and timeframe (OPTIMIZED with Redis + In-Memory cache)
   async getRSI(symbol, timeframe, period = 14) {
     const key = `${symbol}_${timeframe}_${period}`;
     const now = Date.now();
-    const existing = this.rsiData.get(key);
 
     // TTL: half of timeframe or minimum 10s
     const ttl = Math.max(this.getTimeframeMs(timeframe) / 2, 10_000);
 
-    if (existing && now - existing.timestamp < ttl) {
-      return existing;
+    // OPTIMIZATION 1: Check in-memory cache first (fastest - 0.1ms)
+    const inMemoryCache = this.rsiData.get(key);
+    if (inMemoryCache && now - inMemoryCache.timestamp < ttl) {
+      return inMemoryCache;
     }
 
+    // OPTIMIZATION 2: Check Redis cache (fast - 5-10ms)
+    try {
+      const redis = await this.initRedisClient();
+      if (redis) {
+        const redisKey = `rsi:${key}`;
+        const cachedRSI = await redis.get(redisKey);
+
+        if (cachedRSI) {
+          const parsed = JSON.parse(cachedRSI);
+          const cacheAge = now - parsed.timestamp;
+
+          // If cache is still valid, use it
+          if (cacheAge < ttl) {
+            // Update in-memory cache for next time
+            this.rsiData.set(key, parsed);
+            return parsed;
+          }
+        }
+      }
+    } catch (error) {
+      // Redis error - fallback to calculation
+      console.warn(`⚠️ Redis RSI cache error for ${key}:`, error.message);
+    }
+
+    // OPTIMIZATION 3: If cache expired, return stale data immediately and update in background
+    if (inMemoryCache) {
+      // Return stale data immediately (non-blocking)
+      const staleData = inMemoryCache;
+
+      // Update cache in background (non-blocking)
+      this.calculateRSI(symbol, timeframe, period)
+        .then((rsiValue) => {
+          if (rsiValue !== null) {
+            const updated = {
+              current: rsiValue,
+              previous: staleData.current,
+              timestamp: Date.now(),
+            };
+
+            // Update both caches
+            this.rsiData.set(key, updated);
+
+            // Update Redis cache in background
+            this.initRedisClient().then((redis) => {
+              if (redis) {
+                const redisKey = `rsi:${key}`;
+                redis
+                  .setEx(
+                    redisKey,
+                    Math.floor(ttl / 1000),
+                    JSON.stringify(updated)
+                  )
+                  .catch(() => {}); // Silent fail
+              }
+            });
+          }
+        })
+        .catch(() => {}); // Silent fail - non-critical
+
+      // Return stale data immediately (no delay)
+      return staleData;
+    }
+
+    // OPTIMIZATION 4: Only calculate if no cache exists (first time)
     const rsiValue = await this.calculateRSI(symbol, timeframe, period);
 
     if (rsiValue !== null) {
-      const previous = existing?.current ?? rsiValue;
-      this.rsiData.set(key, {
+      const previous = inMemoryCache?.current ?? rsiValue;
+      const updated = {
         current: rsiValue,
         previous,
         timestamp: now,
-      });
-      return this.rsiData.get(key);
+      };
+
+      // Update in-memory cache
+      this.rsiData.set(key, updated);
+
+      // Update Redis cache in background (non-blocking)
+      this.initRedisClient()
+        .then((redis) => {
+          if (redis) {
+            const redisKey = `rsi:${key}`;
+            redis
+              .setEx(redisKey, Math.floor(ttl / 1000), JSON.stringify(updated))
+              .catch(() => {}); // Silent fail
+          }
+        })
+        .catch(() => {});
+
+      return updated;
     }
 
-    return existing || null;
+    return inMemoryCache || null;
   }
 
   // Technical analysis helper methods
@@ -2920,34 +3691,58 @@ class RealTimeAlertProcessor {
         );
       }
 
-      // Try to fetch the actual candle from Binance for accurate open price
-      // This ensures we get the real open price when a new candle period starts
-      const binanceCandle = await this.fetchCandleFromBinance(
-        symbol,
-        timeframe
-      );
-
-      if (binanceCandle && binanceCandle.startTime === candleStartTime) {
-        // Use Binance candle data for accuracy
-        candle.open = binanceCandle.open;
-        candle.high = binanceCandle.high;
-        candle.low = binanceCandle.low;
-        candle.close = binanceCandle.close;
-        candle.volume = binanceCandle.volume;
-        candle.startTime = binanceCandle.startTime;
-        candle.endTime = binanceCandle.endTime;
-        candle.isComplete = binanceCandle.isComplete;
+      // OPTIMIZATION: Use WebSocket data first (instant, no API delay)
+      // WebSocket ticker data has OHLC values from Binance
+      if (
+        priceData.open &&
+        priceData.high &&
+        priceData.low &&
+        priceData.close
+      ) {
+        // Use WebSocket OHLC data (fastest - no API call)
+        candle.open = parseFloat(priceData.open);
+        candle.high = parseFloat(priceData.high);
+        candle.low = parseFloat(priceData.low);
+        candle.close = parseFloat(priceData.close);
+        candle.volume = parseFloat(priceData.volume) || 0;
+        candle.startTime = candleStartTime;
+        candle.endTime = candleStartTime + timeframeMs;
+        candle.isComplete = false; // Current candle is still forming
         console.log(
-          `🕯️ New candle started for ${symbol} (${timeframe}) from Binance: Open=${candle.open}, Close=${candle.close}`
+          `🕯️ New candle started for ${symbol} (${timeframe}) from WebSocket: Open=${candle.open}, Close=${candle.close}`
         );
       } else {
-        // Fallback: use current price data if Binance fetch fails
+        // Fallback: use current price data if WebSocket OHLC not available
         candle.open = parseFloat(priceData.price);
         candle.high = parseFloat(priceData.price);
         candle.low = parseFloat(priceData.price);
         candle.close = parseFloat(priceData.price);
         candle.volume = parseFloat(priceData.volume) || 0;
         candle.startTime = candleStartTime;
+
+        // OPTIMIZATION: Fetch from Binance API in background (non-blocking)
+        // Only if we need more accurate data
+        this.fetchCandleFromBinance(symbol, timeframe)
+          .then((binanceCandle) => {
+            if (binanceCandle && binanceCandle.startTime === candleStartTime) {
+              // Update with more accurate Binance data
+              const currentCandle = this.getCandleData(symbol, timeframe);
+              if (currentCandle.startTime === candleStartTime) {
+                currentCandle.open = binanceCandle.open;
+                currentCandle.high = Math.max(
+                  currentCandle.high,
+                  binanceCandle.high
+                );
+                currentCandle.low = Math.min(
+                  currentCandle.low,
+                  binanceCandle.low
+                );
+                currentCandle.close = binanceCandle.close;
+                currentCandle.volume = binanceCandle.volume;
+              }
+            }
+          })
+          .catch(() => {}); // Silent fail - non-critical
         candle.endTime = candleStartTime + timeframeMs;
         candle.isComplete = false;
         console.log(
@@ -2955,11 +3750,25 @@ class RealTimeAlertProcessor {
         );
       }
     } else {
-      // Update existing candle
-      const price = parseFloat(priceData.price);
-      candle.high = Math.max(candle.high || price, price);
-      candle.low = Math.min(candle.low || price, price);
-      candle.close = price;
+      // OPTIMIZATION: Update existing candle with WebSocket OHLC data (if available)
+      // This ensures we have accurate high/low values from Binance
+      if (priceData.high && priceData.low) {
+        candle.high = Math.max(
+          candle.high || priceData.high,
+          parseFloat(priceData.high)
+        );
+        candle.low = Math.min(
+          candle.low || priceData.low,
+          parseFloat(priceData.low)
+        );
+      } else {
+        // Fallback to price-based calculation
+        const price = parseFloat(priceData.price);
+        candle.high = Math.max(candle.high || price, price);
+        candle.low = Math.min(candle.low || price, price);
+      }
+
+      candle.close = parseFloat(priceData.close || priceData.price);
       candle.volume += parseFloat(priceData.volume) || 0;
 
       // Check if current candle meets change requirement (immediate check)
@@ -3024,6 +3833,12 @@ class RealTimeAlertProcessor {
   }
 
   // Subscribe to Redis alert management events
+  // Reload alerts cache when alerts are created/removed
+  async reloadAlertsCache() {
+    console.log("🔄 Reloading alerts cache from database...");
+    await this.loadAlertsToRedisCache();
+  }
+
   async subscribeToAlertManagement() {
     if (this.redisSubscribed) {
       console.log("⚠️ Already subscribed to alert management events");
@@ -3044,29 +3859,37 @@ class RealTimeAlertProcessor {
   // Handle Redis alert management events
   async handleAlertManagementEvent(data) {
     try {
-      console.log(`📢 Received alert management event:`, data);
-
       switch (data.type) {
         case "alert_created":
           await this.addAlert(data.alertId);
+          // Reload cache to include new alert
+          await this.reloadAlertsCache();
           break;
 
         case "alert_removed":
           await this.removeAlert(data.alertId);
+          // Reload cache to remove deleted alert
+          await this.reloadAlertsCache();
           break;
 
         case "bulk_alerts_created":
           for (const alertId of data.alertIds) {
             await this.addAlert(alertId);
           }
+          // Reload cache to include all new alerts
+          await this.reloadAlertsCache();
           break;
 
         case "alerts_cleared":
           await this.removeAlertsForUser(data.userId);
+          // Reload cache to remove all user alerts
+          await this.reloadAlertsCache();
           break;
 
         case "alerts_removed_for_symbol":
           await this.removeAlertsForSymbol(data.symbol);
+          // Reload cache to remove alerts for this symbol
+          await this.reloadAlertsCache();
           break;
 
         default:

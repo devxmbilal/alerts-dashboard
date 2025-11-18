@@ -17,65 +17,23 @@ class RealTimeAlertWorker {
       await connectToMongoDB();
       console.log("✅ Connected to MongoDB");
 
-      // Load all active alerts into memory
-      await RealTimeAlertProcessor.loadAllActiveAlerts();
-      console.log("✅ Loaded active alerts into memory");
+      // NEW: Use WebSocket-based real-time processing (much faster than round-based)
+      await RealTimeAlertProcessor.startWebSocketProcessing();
+      console.log("✅ Started WebSocket-based real-time processing");
 
-      // Connect to Redis for SSE data (same as MarketPanel)
-      this.redis = new Redis({
-        host: "localhost",
-        port: 6379,
-        retryDelayOnFailover: 100,
-        enableReadyCheck: false,
-        maxRetriesPerRequest: null,
-        lazyConnect: true,
-        retryDelayOnClusterDown: 300,
-        maxRetriesPerRequest: 3,
-        keepAlive: 30000,
-        connectTimeout: 10000,
-        commandTimeout: 5000,
-      });
+      // OLD: Keep round-based processing as backup (optional - can be disabled)
+      // await RealTimeAlertProcessor.startRoundBasedProcessing();
+      // console.log("✅ Started round-based alert processing");
 
-      await this.redis.ping();
-      console.log("✅ Connected to Redis");
-
-      // Handle Redis connection errors
-      this.redis.on("error", (err) => {
-        console.error("❌ Redis connection error:", err);
-      });
-
-      // Subscribe to market updates channel (same as SSE)
-      await this.redis.subscribe("market:updates");
-      console.log("✅ Subscribed to market:updates channel");
-
-      this.redis.on("message", (channel, message) => {
-        if (channel === "market:updates") {
-          try {
-            const data = JSON.parse(message);
-            if (data.type === "market_update") {
-              console.log(
-                `📡 Redis market update: ${data.symbol} = $${data.data.price}`
-              );
-              this.handlePriceUpdate(data.data);
-            }
-          } catch (error) {
-            console.error("❌ Error parsing Redis message:", error);
-          }
-        }
-      });
-
-      // Also connect to WebSocket for backup data
-      await WebSocketService.connect();
-      console.log("✅ Connected to Binance WebSocket");
-
-      // Subscribe to all price updates from WebSocket
-      WebSocketService.subscribeToAll((priceData) => {
-        this.handlePriceUpdate(priceData);
-      });
+      // Subscribe to alert management events (for alert creation/removal)
+      await RealTimeAlertProcessor.subscribeToAlertManagement();
+      console.log("✅ Subscribed to alert management events");
 
       this.isRunning = true;
       console.log("✅ Real-Time Alert Worker started successfully");
-      console.log("🔥 Monitoring live market data for instant alerts...");
+      console.log(
+        "🔥 Monitoring live market data via WebSocket for instant alerts..."
+      );
     } catch (error) {
       console.error("❌ Alert Worker startup failed:", error);
       throw error;
@@ -98,6 +56,10 @@ class RealTimeAlertWorker {
     console.log("🛑 Stopping Real-Time Alert Worker...");
 
     try {
+      // Stop WebSocket connection
+      RealTimeAlertProcessor.stopWebSocketPriceFeed();
+      console.log("✅ WebSocket connection closed");
+
       if (this.redis) {
         await this.redis.unsubscribe("market:updates");
         await this.redis.quit();
