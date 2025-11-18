@@ -21,7 +21,7 @@ class RealTimeAlertProcessor {
     this.isRoundProcessing = false; // Prevent overlapping rounds
     this.roundInterval = null; // Round processing interval
     // Concurrency limit for parallel alert processing (20-50 alerts at once)
-    this.processLimit = pLimit(35);
+    this.processLimit = pLimit(50);
     this.rsiData = new Map(); // Track RSI values for each symbol+timeframe: key = "symbol_timeframe_period", value = { current: number, previous: number }
     this.openInterestData = new Map(); // Track Open Interest for each symbol+timeframe: key = "symbol_timeframe", value = { current: number, baseline: number, timestamp: number }
     this.redisPublisher = null; // Cached Redis publisher connection
@@ -194,10 +194,6 @@ class RealTimeAlertProcessor {
     this.currentRound++;
 
     try {
-      console.log(
-        `🔄 Starting Round ${this.currentRound} - Fetching fresh alerts from database...`
-      );
-
       // Step 1: Fetch ALL active alerts from database with latest data
       const freshAlerts = await this.loadAllActiveAlerts();
       console.log(
@@ -212,11 +208,6 @@ class RealTimeAlertProcessor {
 
       // Step 2: Get current live prices for all symbols
       const livePrices = await this.getCurrentLivePrices();
-      console.log(
-        `📡 Round ${this.currentRound}: Fetched live prices for ${
-          Object.keys(livePrices).length
-        } symbols`
-      );
 
       // Step 3: Process each alert with live data in parallel (with concurrency limit)
       // Process alerts in parallel with concurrency limit (up to 50 at once)
@@ -251,9 +242,6 @@ class RealTimeAlertProcessor {
         (r) => r && r.triggered === true
       ).length;
 
-      console.log(
-        `✅ Round ${this.currentRound} completed: Processed ${processedCount} alerts, ${triggeredCount} triggered`
-      );
     } catch (error) {
       console.error(`❌ Error in Round ${this.currentRound}:`, error);
     } finally {
@@ -264,7 +252,6 @@ class RealTimeAlertProcessor {
   // Task 2: Process alert with live data - check baseline price comparison
   async processAlertWithLiveData(alert, liveData) {
     try {
-      console.log(`🔍 Processing alert ${alert._id} for ${alert.symbol}`);
       console.log(
         `📊 Baseline: ${alert.baselinePrice}, Live: ${liveData.price}`
       );
@@ -282,12 +269,6 @@ class RealTimeAlertProcessor {
 
         // Check if timeframe interval has passed
         if (timeSinceBaseline >= timeframeMs) {
-          console.log(
-            `⏰ Timeframe interval (${timeframe}) has passed for ${alert.symbol}`
-          );
-          console.log(
-            `📊 Updating baseline: ${alert.baselinePrice} → ${liveData.price}`
-          );
 
           // Update baseline to current live price
           alert.baselinePrice = liveData.price;
@@ -317,20 +298,6 @@ class RealTimeAlertProcessor {
             }
           }
 
-          console.log(
-            `✅ Baseline updated for ${alert.symbol}: New baseline = ${liveData.price}`
-          );
-        } else {
-          const remainingMs = timeframeMs - timeSinceBaseline;
-          const remainingMinutes = Math.ceil(remainingMs / (1000 * 60));
-          console.log(
-            `⏰ Timeframe interval (${timeframe}) not yet reached for ${alert.symbol}`
-          );
-          console.log(
-            `   Remaining time: ${remainingMinutes} minutes (${Math.ceil(
-              remainingMs / 1000
-            )} seconds)`
-          );
         }
       }
 
@@ -346,11 +313,6 @@ class RealTimeAlertProcessor {
             alert.symbol
           } is LOCKED until ${lockUntil.toISOString()}`
         );
-        console.log(
-          `⏰ Lock time remaining: ${minutesRemaining} minutes (${Math.ceil(
-            timeRemaining / 1000
-          )} seconds)`
-        );
         return { triggered: false, reason: "alert_locked" };
       }
 
@@ -360,31 +322,17 @@ class RealTimeAlertProcessor {
       const priceChanged = liveData.price !== alert.baselinePrice;
 
       if (direction === "increase" && liveData.price <= alert.baselinePrice) {
-        console.log(
-          `❌ Direction: INCREASE - Live price ${liveData.price} <= baseline ${alert.baselinePrice}, skipping alert`
-        );
         return { triggered: false, reason: "price_not_increased" };
       }
 
       if (direction === "decrease" && liveData.price >= alert.baselinePrice) {
-        console.log(
-          `❌ Direction: DECREASE - Live price ${liveData.price} >= baseline ${alert.baselinePrice}, skipping alert`
-        );
         return { triggered: false, reason: "price_not_decreased" };
       }
 
       if (!priceChanged) {
-        console.log(
-          `❌ Price hasn't changed from baseline ${alert.baselinePrice}, skipping alert`
-        );
         return { triggered: false, reason: "price_unchanged" };
       }
 
-      console.log(
-        `✅ Price condition met - Direction: ${direction.toUpperCase()}, Baseline: ${
-          alert.baselinePrice
-        }, Live: ${liveData.price}`
-      );
 
       // Check alert conditions
       const conditionsMet = await this.checkAlertConditionsWithLiveData(
@@ -393,16 +341,12 @@ class RealTimeAlertProcessor {
       );
 
       if (conditionsMet) {
-        console.log(
-          `🚨 Alert ${alert._id} conditions met! Triggering alert...`
-        );
 
         // Trigger the alert (this will apply the lock)
         await this.triggerAlertWithLiveData(alert, liveData);
 
         return { triggered: true, reason: "conditions_met" };
       } else {
-        console.log(`❌ Alert ${alert._id} conditions not met`);
         return { triggered: false, reason: "conditions_not_met" };
       }
     } catch (error) {
@@ -411,244 +355,254 @@ class RealTimeAlertProcessor {
     }
   }
 
-  // Check conditions with live data
+  // OPTIMIZED: Check conditions with live data - hierarchical and only check set conditions
   async checkAlertConditionsWithLiveData(alert, liveData) {
     try {
       const conditions = alert.conditions;
-      let conditionsMet = true;
+      
+      console.log(`📋 Checking conditions for ${alert.symbol}:`);
 
-      console.log(
-        `📋 Checking conditions for ${alert.symbol}:`,
-        JSON.stringify(conditions, null, 2)
-      );
-
-      // Check Min Daily volume condition (required)
-      if (conditions.minDaily && (liveData.volume || liveData.volume24h)) {
-        const minVolume = parseFloat(conditions.minDaily);
-        const actualVolume = parseFloat(liveData.volume || liveData.volume24h);
-
-        console.log(
-          `📈 Min Daily Check: Required=${minVolume}, Actual=${actualVolume}`
-        );
-
-        if (actualVolume < minVolume) {
-          console.log(
-            `❌ Min Daily condition FAILED: ${actualVolume} < ${minVolume}`
-          );
-          conditionsMet = false;
-        } else {
-          console.log(
-            `✅ Min Daily condition PASSED: ${actualVolume} >= ${minVolume}`
-          );
-        }
-      } else {
-        console.log(`⚠️ Min Daily condition not set or volume data missing`);
+      // OPTIMIZATION 1: Create array of only SET conditions for hierarchical checking
+      const activeConditions = this.getActiveConditions(conditions, liveData, alert);
+      
+      if (activeConditions.length === 0) {
+        console.log(`⚠️ No active conditions found for ${alert.symbol}`);
+        return false;
       }
 
-      // Check Change % condition (required) - based on baseline price and direction
-      if (
-        conditionsMet &&
-        conditions.changePercent &&
-        conditions.changePercent.percentage
-      ) {
-        const requiredChange = parseFloat(conditions.changePercent.percentage);
-        const timeframe = conditions.changePercent.timeframe || "5m";
-        const direction = conditions.changePercent.direction || "increase";
-
-        console.log(
-          `📊 Checking change condition: ${requiredChange}% ${direction.toUpperCase()} in ${timeframe}`
-        );
-
-        // Calculate change from baseline price
-        const changeFromBaseline =
-          ((liveData.price - alert.baselinePrice) / alert.baselinePrice) * 100;
-        const absoluteChange = Math.abs(changeFromBaseline);
-
-        console.log(
-          `📊 Change Check: Baseline=${alert.baselinePrice}, Live=${liveData.price}`
-        );
-        console.log(
-          `📊 Change from baseline: ${changeFromBaseline.toFixed(
-            3
-          )}%, Required: ${requiredChange}%`
-        );
-
-        // Check based on direction
-        let directionMet = true;
-
-        if (direction === "increase" && changeFromBaseline < 0) {
-          console.log(
-            `❌ Direction condition FAILED: Price decreased but increase required`
-          );
-          directionMet = false;
-        } else if (direction === "decrease" && changeFromBaseline > 0) {
-          console.log(
-            `❌ Direction condition FAILED: Price increased but decrease required`
-          );
-          directionMet = false;
+      // OPTIMIZATION 2: Hierarchical checking - check conditions in priority order
+      // If any condition fails, immediately return false (early exit)
+      for (const conditionCheck of activeConditions) {
+        const result = await conditionCheck.check();
+        
+        if (!result.passed) {
+          console.log(`❌ ${conditionCheck.name} FAILED: ${result.reason}`);
+          return false; // Early exit - no need to check remaining conditions
         }
-
-        if (!directionMet || absoluteChange < requiredChange) {
-          console.log(
-            `❌ Change % condition FAILED: ${absoluteChange.toFixed(
-              3
-            )}% < ${requiredChange}% or wrong direction`
-          );
-          conditionsMet = false;
-        } else {
-          console.log(
-            `✅ Change % condition PASSED: ${absoluteChange.toFixed(
-              3
-            )}% >= ${requiredChange}% with correct direction (${direction})`
-          );
-        }
-      } else {
-        console.log(`⚠️ Change % condition not set or data missing`);
+        
+        console.log(`✅ ${conditionCheck.name} PASSED: ${result.reason}`);
       }
 
-      // Check Candle conditions (optional)
-      if (
-        conditionsMet &&
-        conditions.candle &&
-        conditions.candle.timeframes &&
-        conditions.candle.timeframes.length > 0
-      ) {
-        const candleCondition =
-          conditions.candle.condition || "CANDLE_ABOVE_OPEN";
-        console.log(
-          `🕯️ Checking Candle condition: ${candleCondition} on timeframes: ${conditions.candle.timeframes.join(
-            ", "
-          )}`
-        );
+      console.log(`🎉 All ${activeConditions.length} conditions PASSED for ${alert.symbol}`);
+      return true;
 
-        // CRITICAL: Initialize/update candle data for all required timeframes before evaluation
-        for (const timeframe of conditions.candle.timeframes) {
-          await this.updateCandleData(alert.symbol, timeframe, liveData);
-        }
-
-        // Use the evaluateCandleConditions method for consistent logic
-        const candleMatch = await this.evaluateCandleConditions(
-          conditions.candle,
-          liveData,
-          alert.symbol
-        );
-        if (!candleMatch) {
-          console.log(
-            `❌ Candle condition FAILED: ${candleCondition} not met for ${conditions.candle.timeframes.join(
-              ", "
-            )}`
-          );
-          conditionsMet = false;
-        } else {
-          console.log(
-            `✅ Candle condition PASSED: ${candleCondition} met for ${conditions.candle.timeframes.join(
-              ", "
-            )}`
-          );
-        }
-      }
-
-      // Check RSI Range conditions (optional)
-      if (
-        conditionsMet &&
-        conditions.rsiRange &&
-        conditions.rsiRange.timeframes &&
-        conditions.rsiRange.timeframes.length > 0
-      ) {
-        console.log(
-          `📊 Checking RSI condition: ${conditions.rsiRange.condition} ${
-            conditions.rsiRange.level
-          } on timeframes: ${conditions.rsiRange.timeframes.join(", ")}`
-        );
-
-        // Use the evaluateRSIConditions method for consistent logic
-        const rsiMatch = await this.evaluateRSIConditions(
-          conditions.rsiRange,
-          liveData,
-          alert.symbol
-        );
-
-        if (!rsiMatch) {
-          console.log(
-            `❌ RSI condition FAILED: ${conditions.rsiRange.condition} ${
-              conditions.rsiRange.level
-            } not met for ${conditions.rsiRange.timeframes.join(", ")}`
-          );
-          conditionsMet = false;
-        } else {
-          console.log(
-            `✅ RSI condition PASSED: ${conditions.rsiRange.condition} ${conditions.rsiRange.level} met for all timeframes`
-          );
-        }
-      }
-
-      // Check Volume conditions (optional)
-      if (
-        conditionsMet &&
-        conditions.volume &&
-        conditions.volume.timeframes &&
-        conditions.volume.timeframes.length > 0
-      ) {
-        console.log(
-          `📈 Checking Volume condition: ${conditions.volume.condition}${
-            conditions.volume.percentage
-              ? ` by ${conditions.volume.percentage}%`
-              : ""
-          } on timeframes: ${conditions.volume.timeframes.join(", ")}`
-        );
-
-        // Use the evaluateVolumeConditions method for consistent logic
-        const volumeMatch = await this.evaluateVolumeConditions(
-          conditions.volume,
-          liveData,
-          alert.symbol,
-          alert
-        );
-
-        if (!volumeMatch) {
-          console.log(
-            `❌ Volume condition FAILED: ${
-              conditions.volume.condition
-            } not met for ${conditions.volume.timeframes.join(", ")}`
-          );
-          conditionsMet = false;
-        } else {
-          console.log(
-            `✅ Volume condition PASSED: ${conditions.volume.condition} met for all timeframes`
-          );
-        }
-      }
-
-      // Check OPEN INTEREST conditions (optional)
-      if (
-        conditionsMet &&
-        conditions.openInterest &&
-        conditions.openInterest.timeframes &&
-        conditions.openInterest.timeframes.length > 0
-      ) {
-        const openInterestMatch = await this.evaluateOpenInterestConditions(
-          conditions.openInterest,
-          alert,
-          liveData
-        );
-        if (!openInterestMatch) {
-          conditionsMet = false;
-        }
-      }
-
-      return conditionsMet;
     } catch (error) {
       console.error(`❌ Error checking conditions for ${alert.symbol}:`, error);
       return false;
     }
   }
 
+  // OPTIMIZATION HELPER: Get only active/set conditions in priority order
+  getActiveConditions(conditions, liveData, alert) {
+    const activeConditions = [];
+
+    // Priority 1: Min Daily (fastest check, most likely to fail)
+    if (this.isConditionSet(conditions.minDaily) && (liveData.volume || liveData.volume24h)) {
+      activeConditions.push({
+        name: "Min Daily Volume",
+        priority: 1,
+        check: async () => {
+          const minVolume = parseFloat(conditions.minDaily);
+          const actualVolume = parseFloat(liveData.volume || liveData.volume24h);
+          
+          if (actualVolume < minVolume) {
+            return { passed: false, reason: `${actualVolume} < ${minVolume}` };
+          }
+          return { passed: true, reason: `${actualVolume} >= ${minVolume}` };
+        }
+      });
+    }
+
+    // Priority 2: Change Percent (core condition, medium cost)
+    if (this.isConditionSet(conditions.changePercent?.percentage)) {
+      activeConditions.push({
+        name: "Change Percent",
+        priority: 2,
+        check: async () => {
+          const requiredChange = parseFloat(conditions.changePercent.percentage);
+          const direction = conditions.changePercent.direction || "increase";
+          
+          // Calculate change from baseline price
+          const changeFromBaseline = ((liveData.price - alert.baselinePrice) / alert.baselinePrice) * 100;
+          const absoluteChange = Math.abs(changeFromBaseline);
+
+          // Check direction first (fastest)
+          if (direction === "increase" && changeFromBaseline < 0) {
+            return { passed: false, reason: `Price decreased but increase required` };
+          }
+          if (direction === "decrease" && changeFromBaseline > 0) {
+            return { passed: false, reason: `Price increased but decrease required` };
+          }
+
+          // Check percentage
+          if (absoluteChange < requiredChange) {
+            return { passed: false, reason: `${absoluteChange.toFixed(3)}% < ${requiredChange}%` };
+          }
+          
+          return { passed: true, reason: `${absoluteChange.toFixed(3)}% >= ${requiredChange}% (${direction})` };
+        }
+      });
+    }
+
+    // Priority 3: Alert Count (check if alert is locked/in cooldown)
+    if (this.isConditionSet(conditions.alertCount?.timeframe)) {
+      activeConditions.push({
+        name: "Alert Count",
+        priority: 3,
+        check: async () => {
+          // Check if alert is locked (prevent duplicate triggers)
+          if (isAlertLocked(alert)) {
+            const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
+            const now = new Date();
+            const timeRemaining = Math.max(0, lockUntil.getTime() - now.getTime());
+            const minutesRemaining = Math.ceil(timeRemaining / (1000 * 60));
+            
+            return { 
+              passed: false, 
+              reason: `Alert locked for ${minutesRemaining} minutes` 
+            };
+          }
+          
+          return { passed: true, reason: "Alert count condition met" };
+        }
+      });
+    }
+
+    // Priority 4: Candle (higher cost due to data updates)
+    if (this.isConditionSet(conditions.candle?.timeframes)) {
+      activeConditions.push({
+        name: "Candle Pattern",
+        priority: 4,
+        check: async () => {
+          // Only check if timeframes are actually set
+          if (!conditions.candle.timeframes || conditions.candle.timeframes.length === 0) {
+            return { passed: false, reason: "No timeframes configured for candle condition" };
+          }
+          
+          // Update candle data for required timeframes
+          for (const timeframe of conditions.candle.timeframes) {
+            await this.updateCandleData(alert.symbol, timeframe, liveData);
+          }
+          
+          const candleMatch = await this.evaluateCandleConditions(
+            conditions.candle,
+            liveData,
+            alert.symbol
+          );
+          return { 
+            passed: candleMatch, 
+            reason: candleMatch ? "Candle pattern met" : "Candle pattern not met" 
+          };
+        }
+      });
+    }
+
+    // Priority 5: RSI Range (highest cost due to calculations)
+    if (this.isConditionSet(conditions.rsiRange?.timeframes)) {
+      activeConditions.push({
+        name: "RSI Range",
+        priority: 5,
+        check: async () => {
+          // Only check if timeframes are actually set
+          if (!conditions.rsiRange.timeframes || conditions.rsiRange.timeframes.length === 0) {
+            return { passed: false, reason: "No timeframes configured for RSI condition" };
+          }
+          
+          const rsiMatch = await this.evaluateRSIConditions(
+            conditions.rsiRange,
+            liveData,
+            alert.symbol
+          );
+          return { 
+            passed: rsiMatch, 
+            reason: rsiMatch ? "RSI condition met" : "RSI condition not met" 
+          };
+        }
+      });
+    }
+
+    // Priority 6: Volume (medium-high cost)
+    if (this.isConditionSet(conditions.volume?.timeframes)) {
+      activeConditions.push({
+        name: "Volume",
+        priority: 6,
+        check: async () => {
+          // Only check if timeframes are actually set
+          if (!conditions.volume.timeframes || conditions.volume.timeframes.length === 0) {
+            return { passed: false, reason: "No timeframes configured for volume condition" };
+          }
+          
+          const volumeMatch = await this.evaluateVolumeConditions(
+            conditions.volume,
+            liveData,
+            alert.symbol,
+            alert
+          );
+          return { 
+            passed: volumeMatch, 
+            reason: volumeMatch ? "Volume condition met" : "Volume condition not met" 
+          };
+        }
+      });
+    }
+
+    // Priority 7: Open Interest (highest cost)
+    if (this.isConditionSet(conditions.openInterest?.timeframes)) {
+      activeConditions.push({
+        name: "Open Interest",
+        priority: 7,
+        check: async () => {
+          // Only check if timeframes are actually set
+          if (!conditions.openInterest.timeframes || conditions.openInterest.timeframes.length === 0) {
+            return { passed: false, reason: "No timeframes configured for open interest condition" };
+          }
+          
+          const openInterestMatch = await this.evaluateOpenInterestConditions(
+            conditions.openInterest,
+            alert,
+            liveData
+          );
+          return { 
+            passed: openInterestMatch, 
+            reason: openInterestMatch ? "Open Interest condition met" : "Open Interest condition not met" 
+          };
+        }
+      });
+    }
+
+    // Sort by priority (lowest number = highest priority)
+    return activeConditions.sort((a, b) => a.priority - b.priority);
+  }
+
+  // OPTIMIZATION HELPER: Check if a condition is actually set/configured
+  isConditionSet(condition) {
+    if (!condition) return false;
+    
+    // For arrays (timeframes)
+    if (Array.isArray(condition)) {
+      return condition.length > 0;
+    }
+    
+    // For strings/numbers
+    if (typeof condition === 'string') {
+      return condition.trim() !== '';
+    }
+    
+    if (typeof condition === 'number') {
+      return !isNaN(condition) && condition > 0;
+    }
+    
+    // For objects
+    if (typeof condition === 'object') {
+      return Object.keys(condition).length > 0;
+    }
+    
+    return Boolean(condition);
+  }
+
   // Trigger alert with live data and update baseline
   async triggerAlertWithLiveData(alert, liveData) {
     try {
-      console.log(
-        `🚀 Triggering alert ${alert._id} for ${alert.symbol} with live data`
-      );
 
       // Safely get baseline values with proper defaults
       const baselinePrice = parseFloat(alert.baselinePrice) || 0;
@@ -721,17 +675,17 @@ class RealTimeAlertProcessor {
       };
 
       // Save to AlertHistory
-      console.log(`📝 Saving alert history for ${alert.symbol}...`);
+
       const savedAlertHistory = await AlertHistoryService.createAlertHistory(
         alertHistory
       );
 
       // CRITICAL: Use saved alert history with _id for notification
       if (!savedAlertHistory || !savedAlertHistory._id) {
-        console.error(
-          `❌ Failed to save alert history for ${alert.symbol}, cannot send notifications`
-        );
-        return false;
+        return {
+          passed: false,
+          reason: "Failed to save alert history"
+        };
       }
 
       console.log(
@@ -760,9 +714,6 @@ class RealTimeAlertProcessor {
         console.log(
           `🔒 Alert ${alert._id} LOCKED for ${alert.conditions.alertCount.timeframe} until ${updatedConditions.alertCount.lockUntil}`
         );
-        console.log(
-          `⏰ Next trigger allowed after: ${updatedConditions.alertCount.lockUntil}`
-        );
       }
 
       await Alert.findByIdAndUpdate(alert._id, updateData);
@@ -774,13 +725,7 @@ class RealTimeAlertProcessor {
       // Log savedAlertHistory before sending notification
       console.log(
         `📤 About to send notification for ${alert.symbol}, savedAlertHistory:`,
-        {
-          _id: savedAlertHistory._id,
-          symbol: savedAlertHistory.symbol,
-          notificationSent: savedAlertHistory.notificationSent,
-          notificationSentTelegram:
-            savedAlertHistory.notificationSent?.telegram,
-        }
+       
       );
 
       // Send real-time notification using saved alert history (with _id)
@@ -977,9 +922,6 @@ class RealTimeAlertProcessor {
           console.log(
             `⏰ Timeframe interval (${timeframe}) has passed for ${alert.symbol}`
           );
-          console.log(
-            `📊 Updating baseline: ${alert.baselinePrice} → ${priceData.price}`
-          );
 
           // Update baseline to current live price
           alert.baselinePrice = priceData.price;
@@ -1018,11 +960,7 @@ class RealTimeAlertProcessor {
           console.log(
             `⏰ Timeframe interval (${timeframe}) not yet reached for ${alert.symbol}`
           );
-          console.log(
-            `   Remaining time: ${remainingMinutes} minutes (${Math.ceil(
-              remainingMs / 1000
-            )} seconds)`
-          );
+        
         }
       }
 
@@ -1037,11 +975,6 @@ class RealTimeAlertProcessor {
           `🔒 Alert ${alert._id} for ${
             alert.symbol
           } is LOCKED until ${lockUntil.toISOString()}`
-        );
-        console.log(
-          `⏰ Time remaining: ${minutesRemaining} minutes (${Math.ceil(
-            timeRemaining / 1000
-          )} seconds)`
         );
         return false;
       }
@@ -1092,10 +1025,6 @@ class RealTimeAlertProcessor {
         const minVolume = parseFloat(conditions.minDaily);
         const actualVolume = parseFloat(
           priceData.volume || priceData.volume24h
-        );
-
-        console.log(
-          `📈 Min Daily Check: Required=${minVolume}, Actual=${actualVolume}`
         );
 
         if (actualVolume < minVolume) {
