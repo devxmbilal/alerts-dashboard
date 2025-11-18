@@ -919,9 +919,7 @@ class RealTimeAlertProcessor {
 
         // Check if timeframe interval has passed
         if (timeSinceBaseline >= timeframeMs) {
-          console.log(
-            `⏰ Timeframe interval (${timeframe}) has passed for ${alert.symbol}`
-          );
+         
 
           // Update baseline to current live price
           alert.baselinePrice = priceData.price;
