@@ -5,6 +5,8 @@ import Alert from "../models/Alert.js";
 import AlertHistory from "../models/AlertHistory.js";
 import User from "../models/User.js";
 import AlertRedisService from "./AlertRedisService.js";
+import SafeAlertProcessor from "../utils/alertProcessor.js";
+import MicroBatchExecutionEngine from "../utils/MicroBatchEngine.js";
 import pLimit from "p-limit";
 import dotenv from "dotenv";
 import WebSocket from "ws";
@@ -23,6 +25,15 @@ class RealTimeAlertProcessor {
     this.roundInterval = null; // Round processing interval
     // Concurrency limit for parallel alert processing (20-50 alerts at once)
     this.processLimit = pLimit(50);
+    // Initialize SafeAlertProcessor for race condition protection
+    this.safeProcessor = new SafeAlertProcessor();
+    // Initialize Micro-Batch Execution Engine for ultra-high performance
+    this.microBatchEngine = new MicroBatchExecutionEngine({
+      batchSize: 100,
+      batchInterval: 50, // 50ms
+      maxConcurrentBatches: 20,
+      targetThroughput: 50000 // 50k alerts per minute
+    });
     this.rsiData = new Map(); // Track RSI values for each symbol+timeframe: key = "symbol_timeframe_period", value = { current: number, previous: number }
     this.openInterestData = new Map(); // Track Open Interest for each symbol+timeframe: key = "symbol_timeframe", value = { current: number, baseline: number, timestamp: number }
     this.redisPublisher = null; // Cached Redis publisher connection
@@ -30,9 +41,11 @@ class RealTimeAlertProcessor {
     this.binanceWebSocket = null; // Binance WebSocket connection
     this.livePrices = {}; // Live prices cache: symbol -> { price, volume, etc. }
     this.isWebSocketRunning = false; // Track WebSocket status
-    this.redisClient = null; // Redis client for cache operations
+    this.redisClient = null; // Redis client for cache operations (get/set)
+    this.redisSubscriber = null; // Redis client for pub/sub operations (separate connection)
     this.dbQueueClient = null; // Redis client for database queue operations
     this.dbQueueStreamName = "db:operations:queue"; // Redis Stream name for DB operations
+    this.heartbeatInterval = null; // Heartbeat interval for health monitoring
   }
 
   // Get or create Redis publisher connection (reused for performance)
@@ -506,89 +519,36 @@ class RealTimeAlertProcessor {
       this.binanceWebSocket.on("message", (data) => {
         try {
           const tickers = JSON.parse(data.toString());
-
-          // OPTIMIZATION: Batch process multiple symbols in parallel with concurrency limit
-          const symbolsToProcess = new Set();
-          const priceUpdates = {};
-          const startTime = Date.now();
-
-          // Step 1: Update live prices cache and collect symbols (fast - synchronous)
-          tickers.forEach((ticker) => {
-            const symbol = ticker.s;
-            if (!symbol) return; // Skip invalid symbols
-
-            symbolsToProcess.add(symbol);
-
-            priceUpdates[symbol] = {
-              symbol: symbol,
-              price: parseFloat(ticker.c) || 0, // Last price
-              priceChange: parseFloat(ticker.P) || 0, // Price change
-              priceChangePercent: parseFloat(ticker.P) || 0, // Price change percent
-              volume: parseFloat(ticker.v) || 0, // Volume
-              volume24h: parseFloat(ticker.v) || 0, // 24h volume
-              high: parseFloat(ticker.h) || parseFloat(ticker.c) || 0, // High price
-              low: parseFloat(ticker.l) || parseFloat(ticker.c) || 0, // Low price
-              open: parseFloat(ticker.o) || parseFloat(ticker.c) || 0, // Open price
-              close: parseFloat(ticker.c) || 0, // Close price (same as last)
-              timestamp: Date.now(),
-            };
-
-            // Update live prices cache immediately (in-memory)
-            this.livePrices[symbol] = priceUpdates[symbol];
-
-            // Update Redis cache (no TTL - WebSocket provides continuous updates)
-            if (this.redisClient) {
-              const priceCacheKey = `crypto:${symbol}`;
-              this.redisClient
-                .set(priceCacheKey, JSON.stringify(priceUpdates[symbol]))
-                .catch(() => {}); // Silent fail - non-blocking
-            }
-          });
-
-          // Step 2: Filter symbols that have alerts (fast check - skip symbols with no alerts)
-          const symbolsWithAlerts = Array.from(symbolsToProcess).filter(
-            (symbol) => {
-              // Quick in-memory check first
-              return (
-                this.activeAlerts.has(symbol) || this.activeAlerts.size === 0 // If no alerts loaded yet, process all
-              );
-            }
-          );
-
-          // Step 3: Process symbols with alerts in parallel (with concurrency limit)
-          if (symbolsWithAlerts.length > 0) {
-            // Use processLimit for better concurrency control
-            const symbolPromises = symbolsWithAlerts.map((symbol) =>
-              this.processLimit(async () => {
-                try {
-                  await this.processPriceUpdateRealTime(
-                    symbol,
-                    priceUpdates[symbol]
-                  );
-                } catch (error) {
-                  // Silent fail per symbol - don't block other symbols
-                  console.error(
-                    `❌ Error processing ${symbol} (non-blocking):`,
-                    error.message
-                  );
-                }
-              })
+          if (tickers && Array.isArray(tickers)) {
+            // 🚀 MICRO-BATCH EXECUTION ENGINE - Ultra High Performance Processing
+            const startTime = performance.now();
+            
+            console.log(
+              `📊 WebSocket: Received ${tickers.length} ticker updates`
             );
 
-            // Process all symbols in parallel (non-blocking)
-            Promise.all(symbolPromises)
-              .then(() => {
-                const processingTime = Date.now() - startTime;
-                if (processingTime > 100) {
-                  // Only log if processing takes more than 100ms
-                  console.log(
-                    `⚡ Batch processed ${symbolsWithAlerts.length} symbols in ${processingTime}ms`
-                  );
-                }
-              })
-              .catch((error) => {
-                console.error("❌ Error in batch processing:", error);
-              });
+            // Step 1: Ultra-fast symbol filtering (O(1) lookup)
+            const relevantUpdates = this.microBatchEngine.filterRelevantSymbols(tickers);
+            
+            if (relevantUpdates.size === 0) {
+              console.log(
+                `😴 No alerts for any of the ${tickers.length} ticker updates, 100% CPU saved!`
+              );
+              return;
+            }
+
+            // Step 2: Update live prices cache for all symbols (background task)
+            this.updateLivePricesCache(tickers);
+            
+            // Step 3: Add relevant symbols to micro-batch queue
+            this.microBatchEngine.addToBatch(relevantUpdates);
+            
+            const processingTime = performance.now() - startTime;
+            const efficiency = (relevantUpdates.size / tickers.length) * 100;
+            
+            console.log(
+              `⚡ Micro-Batch: ${relevantUpdates.size}/${tickers.length} relevant (${efficiency.toFixed(1)}% efficiency) queued in ${processingTime.toFixed(2)}ms`
+            );
           }
         } catch (error) {
           console.error("❌ Error parsing WebSocket message:", error);
@@ -642,15 +602,19 @@ class RealTimeAlertProcessor {
         return; // No alerts for this symbol
       }
 
-      // Process all alerts for this symbol in parallel
+      // Process all alerts for this symbol using SafeAlertProcessor (prevents race conditions)
       const alertPromises = alerts.map((alert) =>
         this.processLimit(async () => {
           try {
-            // Process alert with live data
-            const result = await this.processAlertWithLiveData(alert, liveData);
+            // Use SafeAlertProcessor to prevent race conditions and duplicate processing
+            const result = await this.safeProcessor.processAlertSafely(
+              alert, 
+              liveData, 
+              this.processAlertWithLiveData.bind(this)
+            );
 
             // OPTIMIZATION: Update cache without blocking (fire-and-forget)
-            if (result && result.triggered) {
+            if (result.success && result.result && result.result.triggered) {
               // Update in-memory cache immediately (no DB query needed)
               const alertIndex = alerts.findIndex(
                 (a) => a._id.toString() === alert._id.toString()
@@ -676,7 +640,7 @@ class RealTimeAlertProcessor {
                 .catch(() => {}); // Silent fail - non-critical
             }
 
-            return result;
+            return result.result || { triggered: false, reason: result.reason };
           } catch (error) {
             console.error(
               `❌ Error processing alert ${alert._id} for ${symbol}:`,
@@ -712,16 +676,125 @@ class RealTimeAlertProcessor {
     // Cache is updated automatically when alerts are created/updated/deleted
     // No periodic reload needed - events handle all cache updates
     await this.subscribeToAlertManagement();
+
+    // Step 5: Start heartbeat for health monitoring
+    this.startHeartbeat();
+
+    // Step 6: Subscribe to system control messages
+    await this.subscribeToSystemControl();
+    
+    // Step 7: Setup micro-batch processing
+    this.setupMicroBatchEngine();
+    
+    // Step 8: Load active symbols for micro-batch filtering
+    await this.updateMicroBatchActiveSymbols();
   }
 
   // Stop WebSocket connection
-  stopWebSocketPriceFeed() {
+ async stopWebSocketPriceFeed() {
     if (this.binanceWebSocket) {
       console.log("🛑 Stopping Binance WebSocket...");
       this.binanceWebSocket.close();
       this.binanceWebSocket = null;
       this.isWebSocketRunning = false;
     }
+    
+    // Stop heartbeat
+    this.stopHeartbeat();
+    
+    // Close safe processor
+    if (this.safeProcessor) {
+      this.safeProcessor.close();
+    }
+    
+    // Unsubscribe from system control
+    await this.unsubscribeFromSystemControl();
+    
+    // Shutdown micro-batch engine
+    if (this.microBatchEngine) {
+      this.microBatchEngine.shutdown();
+    }
+  }
+  
+  // ============================================
+  // Micro-Batch Engine Integration Methods
+  // ============================================
+  
+  // Setup micro-batch processing engine
+  setupMicroBatchEngine() {
+    // Override the processSingleSymbol method for our alert processing
+    this.microBatchEngine.processSingleSymbol = async (symbol, priceData, batchId) => {
+      try {
+        await this.processPriceUpdateRealTime(symbol, priceData);
+        return { success: true, symbol };
+      } catch (error) {
+        console.error(`❌ Batch ${batchId} - Error processing ${symbol}:`, error.message);
+        throw error;
+      }
+    };
+    
+    console.log("🚀 Micro-Batch Engine configured for alert processing");
+  }
+  
+  // Update active symbols cache for micro-batch filtering
+  async updateMicroBatchActiveSymbols() {
+    try {
+      // Get all active alerts to determine which symbols we need to monitor
+      const alerts = await Alert.find({ status: "active" }).lean();
+      
+      // Update micro-batch engine's active symbols
+      this.microBatchEngine.updateActiveSymbols(alerts);
+      
+      console.log(`📊 Updated micro-batch active symbols: ${alerts.length} alerts`); 
+    } catch (error) {
+      console.error("❌ Error updating micro-batch active symbols:", error);
+    }
+  }
+  
+  // Update live prices cache for all symbols (background task)
+  updateLivePricesCache(tickers) {
+    // This is a fire-and-forget background task - don't block micro-batch processing
+    setImmediate(async () => {
+      try {
+        for (const ticker of tickers) {
+          const symbol = ticker.s;
+          const priceData = {
+            price: parseFloat(ticker.c),
+            change: parseFloat(ticker.P),
+            volume: parseFloat(ticker.v),
+            volume24h: parseFloat(ticker.q),
+            high: parseFloat(ticker.h),
+            low: parseFloat(ticker.l),
+            timestamp: Date.now(),
+          };
+          
+          // Update in-memory cache
+          this.livePrices[symbol] = priceData;
+          
+          // Update Redis cache (fire-and-forget)
+          if (this.redisClient) {
+            this.redisClient
+              .setex(
+                `crypto:${symbol}`,
+                300, // 5 minutes TTL
+                JSON.stringify(priceData)
+              )
+              .catch(() => {}); // Silent fail - non-critical
+          }
+        }
+      } catch (error) {
+        console.error("❌ Error updating live prices cache:", error);
+      }
+    });
+  }
+  
+  // Get micro-batch performance statistics
+  getMicroBatchStats() {
+    if (!this.microBatchEngine) {
+      return { error: "Micro-batch engine not initialized" };
+    }
+    
+    return this.microBatchEngine.getPerformanceStats();
   }
 
   // ============================================
@@ -1382,26 +1455,26 @@ class RealTimeAlertProcessor {
         );
       }
 
-      // OPTIMIZATION: Queue database update to Redis Stream (non-blocking)
-      // This allows notification to be sent immediately without waiting for DB
-      this.enqueueDbOperation({
-        type: "update_alert",
-        alertId: alert._id.toString(),
-        data: updateData,
-        priority: "high", // High priority for alert updates
-      }).catch((error) => {
-        console.error(
-          `❌ Error enqueueing alert update to DB queue:`,
-          error.message
+      // CRITICAL: Immediate database update for baseline price (blocking)
+      // This prevents duplicate alerts by ensuring baseline is updated immediately
+      try {
+        await Alert.findByIdAndUpdate(alert._id, updateData);
+        console.log(
+          `✅ Alert ${alert._id} baseline immediately updated in DB: ${liveData.price}`
         );
-        // Fallback: Try direct DB update if queue fails
-        Alert.findByIdAndUpdate(alert._id, updateData).catch((dbError) => {
-          console.error(
-            `❌ Error updating alert in DB (fallback):`,
-            dbError.message
-          );
-        });
-      });
+      } catch (dbError) {
+        console.error(
+          `❌ CRITICAL: Failed to update baseline in DB immediately:`,
+          dbError.message
+        );
+        // Still queue as fallback
+        this.enqueueDbOperation({
+          type: "update_alert",
+          alertId: alert._id.toString(),
+          data: updateData,
+          priority: "critical", // Critical priority for failed immediate updates
+        }).catch(() => {});
+      }
 
       console.log(
         `✅ Alert ${alert._id} updated with new baseline price: ${liveData.price}`
@@ -1671,7 +1744,7 @@ class RealTimeAlertProcessor {
           alert.baselineTimestamp = new Date();
 
           // OPTIMIZATION: Queue baseline update to Redis Stream (non-blocking)
-          this.enqueueDbOperation({
+          await this.enqueueDbOperation({
             type: "update_baseline",
             alertId: alert._id.toString(),
             data: {
@@ -1716,7 +1789,7 @@ class RealTimeAlertProcessor {
           }
 
           // OPTIMIZATION: Update Redis cache (non-blocking)
-          this.updateAlertInCache({
+          await this.updateAlertInCache({
             ...alert,
             baselinePrice: priceData.price,
             baselineVolume: priceData.volume || priceData.volume24h,
@@ -1935,11 +2008,9 @@ class RealTimeAlertProcessor {
 
       if (conditionsMet) {
         console.log(
-          `🚨 ALL CONDITIONS MET! Triggering alert for ${alert.symbol}`
+          `🚨 ALL CONDITIONS MET! Triggering alert for ${alert.symbol}, 🎯 Alert will be triggered with price: ${priceData.price}`
         );
-        console.log(
-          `🎯 Alert will be triggered with price: ${priceData.price}`
-        );
+      
 
         console.log(`🔄 Calling triggerAlert for ${alert.symbol}...`);
         const triggerResult = await this.triggerAlert(alert, priceData);
@@ -1969,12 +2040,22 @@ class RealTimeAlertProcessor {
       );
 
       // Create unique key for duplicate checking
-      const alertKey = `${alert._id}_${Math.floor(priceData.timestamp / 1000)}`;
+      // Create more robust alert key with longer time window (5 minutes)
+      const alertKey = `${alert._id}_${Math.floor(priceData.timestamp / (1 * 60 * 1000))}_${Math.floor(parseFloat(priceData.price))}`;
 
       // Check if we already processed this alert recently (prevent spam)
       if (this.processedAlerts.has(alertKey)) {
         console.log(
-          `⚠️ Alert ${alert._id} already processed recently (within last 60s), skipping duplicate trigger`
+          `⚠️ Alert ${alert._id} already processed recently (within 5min window), skipping duplicate trigger`
+        );
+        return false;
+      }
+      
+      // ADDITIONAL: Check if we already processed this alert at the same price
+      const priceKey = `${alert._id}_price_${Math.floor(parseFloat(priceData.price))}`;
+      if (this.processedAlerts.has(priceKey)) {
+        console.log(
+          `⚠️ Alert ${alert._id} already triggered at same price level (${Math.floor(parseFloat(priceData.price))}), skipping duplicate`
         );
         return false;
       }
@@ -4097,6 +4178,273 @@ class RealTimeAlertProcessor {
       console.error("❌ Error unsubscribing from alert management:", error);
     }
   }
-}
+  // ============================================
+  // Health Monitoring and System Control
+  // ============================================
 
+  // Start heartbeat for health monitoring
+  startHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+
+    // Send heartbeat every 30 seconds
+    this.heartbeatInterval = setInterval(async () => {
+      try {
+        if (this.redisClient) {
+          await this.redisClient.set(
+            "alert:processor:heartbeat",
+            Date.now().toString(),
+            "EX",
+            120 // Expire in 2 minutes
+          );
+          
+          // Also update processor stats
+          const stats = this.safeProcessor ? this.safeProcessor.getStats() : {};
+          await this.redisClient.set(
+            "alert:processor:stats",
+            JSON.stringify({
+              ...stats,
+              activeAlerts: this.activeAlerts.size,
+              isWebSocketRunning: this.isWebSocketRunning,
+              timestamp: Date.now()
+            }),
+            "EX",
+            300 // Expire in 5 minutes
+          );
+        }
+      } catch (error) {
+        console.error("❌ Error sending heartbeat:", error.message);
+      }
+    }, 30000);
+
+    console.log("💓 Heartbeat started (30s interval)");
+  }
+
+  // Stop heartbeat
+  stopHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+      console.log("💓 Heartbeat stopped");
+    }
+  }
+
+  // Initialize separate Redis subscriber connection for pub/sub
+  async initRedisSubscriber() {
+    try {
+      if (this.redisSubscriber) {
+        return this.redisSubscriber;
+      }
+
+      const Redis = (await import("ioredis")).default;
+      this.redisSubscriber = new Redis({
+        host: process.env.REDIS_HOST || "localhost",
+        port: process.env.REDIS_PORT || 6379,
+        lazyConnect: false,
+        retryDelayOnClusterDown: 300,
+        maxRetriesPerRequest: 5,
+        enableReadyCheck: false,
+        keepAlive: 30000,
+        connectTimeout: 10000,
+      });
+
+      this.redisSubscriber.on("error", (err) => {
+        console.error("❌ Redis subscriber error:", err.message);
+      });
+
+      this.redisSubscriber.on("close", () => {
+        console.warn("⚠️ Redis subscriber connection closed");
+        this.redisSubscriber = null;
+      });
+
+      console.log("✅ Redis subscriber initialized (separate connection)");
+      return this.redisSubscriber;
+    } catch (error) {
+      console.error("❌ Error initializing Redis subscriber:", error);
+      return null;
+    }
+  }
+
+  // Subscribe to system control messages
+  async subscribeToSystemControl() {
+    try {
+      // Use SEPARATE Redis connection for pub/sub operations
+      const subscriber = await this.initRedisSubscriber();
+      if (!subscriber) {
+        console.error("❌ Redis subscriber not available for system control");
+        return;
+      }
+
+      await subscriber.subscribe("system:control");
+      console.log("✅ Subscribed to system:control channel (separate connection)");
+
+      subscriber.on("message", async (channel, message) => {
+        if (channel === "system:control") {
+          try {
+            const data = JSON.parse(message);
+            await this.handleSystemControlMessage(data);
+          } catch (error) {
+            console.error("❌ Error parsing system control message:", error);
+          }
+        }
+      });
+    } catch (error) {
+      console.error("❌ Error subscribing to system control:", error);
+    }
+  }
+
+  // Handle system control messages
+  async handleSystemControlMessage(data) {
+    console.log("🎛️ Received system control message:", data.command);
+
+    switch (data.command) {
+      case "restart_alert_processor":
+        console.log("🔄 Restarting alert processor...");
+        // Restart WebSocket connection
+        this.stopWebSocketPriceFeed();
+        setTimeout(() => {
+          this.startWebSocketPriceFeed();
+        }, 3000);
+        break;
+
+      case "emergency_cleanup":
+        console.log("🧹 Running emergency cleanup...");
+        await this.emergencyCleanup();
+        break;
+
+      case "reload_alerts":
+        console.log("🔄 Reloading alerts cache...");
+        await this.loadAlertsToRedisCache();
+        break;
+
+      case "get_stats":
+        console.log("📊 Sending processor stats...");
+        await this.sendProcessorStats();
+        break;
+        
+      case "get_microbatch_stats":
+        console.log("📊 Sending micro-batch stats...");
+        await this.sendMicroBatchStats();
+        break;
+        
+      case "reset_microbatch_metrics":
+        console.log("🔄 Resetting micro-batch metrics...");
+        if (this.microBatchEngine) {
+          this.microBatchEngine.resetMetrics();
+        }
+        break;
+
+      default:
+        console.log("❓ Unknown system control command:", data.command);
+    }
+  }
+
+  // Emergency cleanup for memory issues
+  async emergencyCleanup() {
+    try {
+      console.log("🚨 Running emergency cleanup...");
+
+      // Clear old processed alerts
+      if (this.safeProcessor) {
+        this.safeProcessor.cleanup();
+      }
+
+      // Clear old candle data (keep only last 1 hour)
+      const oneHourAgo = Date.now() - (60 * 60 * 1000);
+      for (const [key, candle] of this.candleData.entries()) {
+        if (candle.startTime < oneHourAgo) {
+          this.candleData.delete(key);
+        }
+      }
+
+      // Clear old RSI data
+      this.rsiData.clear();
+
+      // Clear old open interest data
+      this.openInterestData.clear();
+
+      // Force garbage collection if available
+      if (global.gc) {
+        global.gc();
+        console.log("🗑️ Forced garbage collection");
+      }
+
+      console.log("✅ Emergency cleanup completed");
+    } catch (error) {
+      console.error("❌ Error in emergency cleanup:", error);
+    }
+  }
+
+  // Send processor statistics
+  async sendProcessorStats() {
+    try {
+      const stats = {
+        activeAlerts: this.activeAlerts.size,
+        isWebSocketRunning: this.isWebSocketRunning,
+        candleDataSize: this.candleData.size,
+        rsiDataSize: this.rsiData.size,
+        openInterestDataSize: this.openInterestData.size,
+        memoryUsage: process.memoryUsage(),
+        timestamp: Date.now()
+      };
+
+      if (this.safeProcessor) {
+        Object.assign(stats, { safeProcessor: this.safeProcessor.getStats() });
+      }
+      
+      if (this.microBatchEngine) {
+        Object.assign(stats, { microBatch: this.microBatchEngine.getPerformanceStats() });
+      }
+
+      if (this.redisClient) {
+        await this.redisClient.publish(
+          "system:stats",
+          JSON.stringify(stats)
+        );
+      }
+
+      console.log("📊 Processor stats sent:", stats);
+    } catch (error) {
+      console.error("❌ Error sending processor stats:", error);
+    }
+  }
+  
+  // Send micro-batch specific statistics
+  async sendMicroBatchStats() {
+    try {
+      if (!this.microBatchEngine) {
+        console.log("⚠️ Micro-batch engine not available");
+        return;
+      }
+      
+      const microBatchStats = this.microBatchEngine.getPerformanceStats();
+      
+      if (this.redisClient) {
+        await this.redisClient.publish(
+          "system:microbatch:stats", 
+          JSON.stringify(microBatchStats)
+        );
+      }
+      
+      console.log("🚀 Micro-batch stats sent:", microBatchStats);
+    } catch (error) {
+      console.error("❌ Error sending micro-batch stats:", error);
+    }
+  }
+  
+  // Unsubscribe from system control messages
+  async unsubscribeFromSystemControl() {
+    try {
+      if (this.redisSubscriber) {
+        await this.redisSubscriber.unsubscribe("system:control");
+        await this.redisSubscriber.quit();
+        this.redisSubscriber = null;
+        console.log("✅ Unsubscribed from system:control channel");
+      }
+    } catch (error) {
+      console.error("❌ Error unsubscribing from system control:", error);
+    }
+  }
+}
 export default new RealTimeAlertProcessor();

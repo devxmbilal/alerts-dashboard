@@ -21,7 +21,15 @@
     "test-telegram": "node scripts/test-telegram-demo.js",
     "test-telegram-format": "node scripts/test-telegram-format.js",
     "test-chart-screenshot": "node scripts/test-chart-screenshot.js",
-    "test-full-alert": "node scripts/test-full-telegram-alert.js"
+    "test-full-alert": "node scripts/test-full-telegram-alert.js",
+    "redis-monitor": "node scripts/redis-memory-monitor.js",
+    "health-check": "node scripts/alert-health-check.js",
+    "setup-cron": "node scripts/setup-cron-jobs.js install",
+    "list-cron": "node scripts/setup-cron-jobs.js list",
+    "remove-cron": "node scripts/setup-cron-jobs.js remove",
+    "microbatch-stats": "node scripts/microbatch-monitor.js stats",
+    "microbatch-monitor": "node scripts/microbatch-monitor.js monitor",
+    "microbatch-reset": "node scripts/microbatch-monitor.js reset"
   },
   "dependencies": {
     "@emotion/react": "^11.11.0",
