@@ -24,27 +24,51 @@ const redis = new Redis({
   maxRetriesPerRequest: null,
 });
 
-const STREAM_NAME = "db:operations:queue";
-const CONSUMER_GROUP = "db-queue-processors";
-const CONSUMER_NAME = `processor-${process.pid}`;
+const QUEUE_NAME = "db:operations:queue";
 const BATCH_SIZE = 10; // Process 10 operations at once
 const CONCURRENCY_LIMIT = 5; // Process 5 operations in parallel
 const processLimit = pLimit(CONCURRENCY_LIMIT);
 
-// Initialize consumer group
-async function initConsumerGroup() {
+// Global flag to track if we're using Streams or Lists
+let useStreams = false;
+
+// Check Redis version and capabilities
+async function checkRedisCapabilities() {
   try {
-    // Try to create consumer group (will fail if it already exists, which is OK)
-    await redis.xgroup("CREATE", STREAM_NAME, CONSUMER_GROUP, "0", "MKSTREAM");
-    console.log(`✅ Created consumer group: ${CONSUMER_GROUP}`);
-  } catch (error) {
-    if (error.message.includes("BUSYGROUP")) {
-      console.log(`✅ Consumer group ${CONSUMER_GROUP} already exists`);
-    } else {
-      console.error("❌ Error creating consumer group:", error.message);
-      throw error;
+    // Try to check Redis version
+    const info = await redis.info("server");
+    const versionMatch = info.match(/redis_version:(\d+\.\d+)/);
+    if (versionMatch) {
+      const version = parseFloat(versionMatch[1]);
+      if (version >= 5.0) {
+        // Try to use Streams
+        try {
+          await redis.xgroup(
+            "CREATE",
+            QUEUE_NAME,
+            "db-queue-processors",
+            "0",
+            "MKSTREAM"
+          );
+          useStreams = true;
+          console.log("✅ Using Redis Streams (Redis 5.0+)");
+          return;
+        } catch (err) {
+          if (err.message.includes("BUSYGROUP")) {
+            useStreams = true;
+            console.log("✅ Using Redis Streams (consumer group exists)");
+            return;
+          }
+        }
+      }
     }
+  } catch (error) {
+    // If we can't check or Streams don't work, fall back to Lists
   }
+
+  // Fallback to Redis Lists (works on all Redis versions)
+  useStreams = false;
+  console.log("✅ Using Redis Lists (compatible with all Redis versions)");
 }
 
 // Process a single database operation
@@ -55,14 +79,10 @@ async function processDbOperation(operationData) {
     switch (type) {
       case "update_alert":
         await Alert.findByIdAndUpdate(alertId, data, { new: false });
-        console.log(`✅ Updated alert ${alertId} (priority: ${priority})`);
         break;
 
       case "update_baseline":
         await Alert.findByIdAndUpdate(alertId, data, { new: false });
-        console.log(
-          `✅ Updated baseline for alert ${alertId} (priority: ${priority})`
-        );
         break;
 
       default:
@@ -79,97 +99,116 @@ async function processDbOperation(operationData) {
   }
 }
 
-// Process batch of operations from Redis Stream
+// Process batch of operations from Redis Queue
 async function processBatch() {
   try {
-    // Read from stream with consumer group
-    const messages = await redis.xreadgroup(
-      "GROUP",
-      CONSUMER_GROUP,
-      CONSUMER_NAME,
-      "COUNT",
-      BATCH_SIZE,
-      "BLOCK",
-      1000, // Block for 1 second if no messages
-      "STREAMS",
-      STREAM_NAME,
-      ">" // Read new messages
-    );
+    if (useStreams) {
+      // Use Redis Streams (Redis 5.0+)
+      const CONSUMER_GROUP = "db-queue-processors";
+      const CONSUMER_NAME = `processor-${process.pid}`;
 
-    if (!messages || messages.length === 0) {
-      return; // No messages
-    }
+      const messages = await redis.xreadgroup(
+        "GROUP",
+        CONSUMER_GROUP,
+        CONSUMER_NAME,
+        "COUNT",
+        BATCH_SIZE,
+        "BLOCK",
+        1000,
+        "STREAMS",
+        QUEUE_NAME,
+        ">"
+      );
 
-    const streamMessages = messages[0][1]; // [streamName, [messages]]
-    if (!streamMessages || streamMessages.length === 0) {
-      return; // No messages in stream
-    }
+      if (!messages || messages.length === 0) {
+        return;
+      }
 
-    console.log(
-      `📦 Processing batch of ${streamMessages.length} DB operations`
-    );
+      const streamMessages = messages[0][1];
+      if (!streamMessages || streamMessages.length === 0) {
+        return;
+      }
 
-    // Process operations in parallel with concurrency limit
-    const operationPromises = streamMessages.map(([messageId, fields]) =>
-      processLimit(async () => {
-        try {
-          // Parse operation data
-          const operationField = fields.find(
-            ([field]) => field === "operation"
-          );
-          if (!operationField) {
-            console.warn(`⚠️ No operation field in message ${messageId}`);
-            // Acknowledge message even if invalid
-            await redis.xack(STREAM_NAME, CONSUMER_GROUP, messageId);
-            return;
-          }
-
-          const operationData = JSON.parse(operationField[1]);
-          const result = await processDbOperation(operationData);
-
-          // Acknowledge message after successful processing
-          if (result.success) {
-            await redis.xack(STREAM_NAME, CONSUMER_GROUP, messageId);
-            console.log(
-              `✅ Acknowledged message ${messageId} for operation ${operationData.type}`
+      const operationPromises = streamMessages.map(([messageId, fields]) =>
+        processLimit(async () => {
+          try {
+            const operationField = fields.find(
+              ([field]) => field === "operation"
             );
-          } else {
-            // Don't acknowledge on failure - will be retried
-            console.warn(
-              `⚠️ Failed to process message ${messageId}, will retry`
-            );
+            if (!operationField) {
+              await redis.xack(QUEUE_NAME, CONSUMER_GROUP, messageId);
+              return;
+            }
+
+            const operationData = JSON.parse(operationField[1]);
+            const result = await processDbOperation(operationData);
+
+            if (result.success) {
+              await redis.xack(QUEUE_NAME, CONSUMER_GROUP, messageId);
+            }
+          } catch (error) {
+            console.error(`❌ Error processing message:`, error.message);
           }
-        } catch (error) {
-          console.error(
-            `❌ Error processing message ${messageId}:`,
-            error.message
-          );
-          // Don't acknowledge on error - will be retried
-        }
-      })
-    );
+        })
+      );
 
-    // Wait for all operations to complete
-    await Promise.all(operationPromises);
-
-    console.log(`✅ Batch processing complete`);
-  } catch (error) {
-    if (error.message.includes("NOGROUP")) {
-      // Consumer group doesn't exist, initialize it
-      console.log("⚠️ Consumer group not found, initializing...");
-      await initConsumerGroup();
+      await Promise.all(operationPromises);
     } else {
-      console.error("❌ Error processing batch:", error.message);
+      // Use Redis Lists (compatible with all Redis versions)
+      const operations = [];
+
+      // Pop multiple operations from list (non-blocking)
+      for (let i = 0; i < BATCH_SIZE; i++) {
+        const operationJson = await redis.rpop(QUEUE_NAME);
+        if (!operationJson) break;
+
+        try {
+          const operationData = JSON.parse(operationJson);
+          operations.push(operationData);
+        } catch (error) {
+          console.error(`❌ Error parsing operation:`, error.message);
+        }
+      }
+
+      if (operations.length === 0) {
+        return; // No operations to process
+      }
+
+      // Process operations in parallel with concurrency limit
+      const operationPromises = operations.map((operationData) =>
+        processLimit(async () => {
+          try {
+            await processDbOperation(operationData);
+          } catch (error) {
+            console.error(
+              `❌ Error processing operation ${operationData.type}:`,
+              error.message
+            );
+            // Re-queue failed operations for retry
+            await redis.lpush(QUEUE_NAME, JSON.stringify(operationData));
+          }
+        })
+      );
+
+      await Promise.all(operationPromises);
     }
+  } catch (error) {
+    console.error("❌ Error processing batch:", error.message);
   }
 }
 
-// Handle pending messages (messages that were read but not acknowledged)
+// Handle pending messages (only for Streams)
 async function processPendingMessages() {
+  if (!useStreams) {
+    return; // Not needed for Lists
+  }
+
   try {
-    // Get pending messages for this consumer
+    const CONSUMER_GROUP = "db-queue-processors";
+    const CONSUMER_NAME = `processor-${process.pid}`;
+
     const pending = await redis.xpending(
-      STREAM_NAME,
+      QUEUE_NAME,
       CONSUMER_GROUP,
       "-",
       "+",
@@ -178,22 +217,17 @@ async function processPendingMessages() {
     );
 
     if (!pending || pending.length === 0) {
-      return; // No pending messages
+      return;
     }
 
-    console.log(`🔄 Processing ${pending.length} pending messages`);
-
-    // Process each pending message
     for (const [messageId, consumer, idleTime, deliveryCount] of pending) {
-      // If message has been idle for more than 60 seconds, claim and process it
       if (idleTime > 60000) {
         try {
-          // Claim the message
           const claimed = await redis.xclaim(
-            STREAM_NAME,
+            QUEUE_NAME,
             CONSUMER_GROUP,
             CONSUMER_NAME,
-            60000, // Min idle time: 60 seconds
+            60000,
             messageId
           );
 
@@ -207,18 +241,12 @@ async function processPendingMessages() {
               const result = await processDbOperation(operationData);
 
               if (result.success) {
-                await redis.xack(STREAM_NAME, CONSUMER_GROUP, msgId);
-                console.log(
-                  `✅ Processed and acknowledged pending message ${msgId}`
-                );
+                await redis.xack(QUEUE_NAME, CONSUMER_GROUP, msgId);
               }
             }
           }
         } catch (error) {
-          console.error(
-            `❌ Error claiming pending message ${messageId}:`,
-            error.message
-          );
+          console.error(`❌ Error claiming pending message:`, error.message);
         }
       }
     }
@@ -230,22 +258,22 @@ async function processPendingMessages() {
 // Start processing
 async function start() {
   console.log("🚀 Starting DB Queue Worker...");
-  console.log(`📊 Consumer: ${CONSUMER_NAME}`);
-  console.log(`📊 Stream: ${STREAM_NAME}`);
-  console.log(`📊 Group: ${CONSUMER_GROUP}`);
+  console.log(`📊 Queue: ${QUEUE_NAME}`);
 
-  // Initialize consumer group
-  await initConsumerGroup();
+  // Check Redis capabilities and choose method
+  await checkRedisCapabilities();
 
   // Process batches continuously
   setInterval(async () => {
     await processBatch();
   }, 100); // Check every 100ms
 
-  // Process pending messages periodically (every 30 seconds)
-  setInterval(async () => {
-    await processPendingMessages();
-  }, 30000);
+  // Process pending messages periodically (only for Streams, every 30 seconds)
+  if (useStreams) {
+    setInterval(async () => {
+      await processPendingMessages();
+    }, 30000);
+  }
 
   console.log("✅ DB Queue Worker started");
 }

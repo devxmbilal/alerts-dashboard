@@ -202,7 +202,65 @@ class RealTimeAlertProcessor {
     }
   }
 
-  // Enqueue database operation to Redis Stream
+  // Acquire Redis lock for alert processing (prevents duplicate processing)
+  async acquireAlertLock(alertId, ttl = 2000) {
+    try {
+      const redis = await this.initRedisClient();
+      if (!redis) {
+        return null; // If Redis unavailable, allow processing (fallback)
+      }
+
+      const lockKey = `lock:alert:${alertId}`;
+      const token = String(Math.random() + Date.now());
+
+      // Try to acquire lock (NX = only set if not exists, PX = expire in milliseconds)
+      const ok = await redis.set(lockKey, token, "NX", "PX", ttl);
+
+      if (ok === "OK" || ok === true) {
+        return token;
+      }
+
+      return null; // Lock already exists, another worker is processing
+    } catch (error) {
+      console.error(
+        `❌ Error acquiring lock for alert ${alertId}:`,
+        error.message
+      );
+      return null; // On error, allow processing (fail open)
+    }
+  }
+
+  // Release Redis lock for alert processing
+  async releaseAlertLock(alertId, token) {
+    try {
+      const redis = await this.initRedisClient();
+      if (!redis) {
+        return false;
+      }
+
+      const lockKey = `lock:alert:${alertId}`;
+
+      // Use Lua script for atomic check-and-delete (prevents deleting wrong lock)
+      const luaScript = `
+        if redis.call("get", KEYS[1]) == ARGV[1] then
+          return redis.call("del", KEYS[1])
+        else
+          return 0
+        end
+      `;
+
+      await redis.eval(luaScript, 1, lockKey, token);
+      return true;
+    } catch (error) {
+      console.error(
+        `❌ Error releasing lock for alert ${alertId}:`,
+        error.message
+      );
+      return false;
+    }
+  }
+
+  // Enqueue database operation to Redis Queue (Streams or Lists)
   async enqueueDbOperation(operation) {
     try {
       const redis = await this.initDbQueueClient();
@@ -219,15 +277,29 @@ class RealTimeAlertProcessor {
         priority: operation.priority || "normal", // 'high', 'normal', 'low'
       };
 
-      // Add to Redis Stream
-      await redis.xadd(
-        this.dbQueueStreamName,
-        "*", // Auto-generate ID
-        "operation",
-        JSON.stringify(operationData)
-      );
-
-      return true;
+      try {
+        // Try Redis Streams first (Redis 5.0+)
+        await redis.xadd(
+          this.dbQueueStreamName,
+          "*", // Auto-generate ID
+          "operation",
+          JSON.stringify(operationData)
+        );
+        return true;
+      } catch (streamError) {
+        // Fallback to Redis Lists (works on all Redis versions)
+        if (
+          streamError.message.includes("unknown command") ||
+          streamError.message.includes("xadd")
+        ) {
+          await redis.lpush(
+            this.dbQueueStreamName,
+            JSON.stringify(operationData)
+          );
+          return true;
+        }
+        throw streamError;
+      }
     } catch (error) {
       console.error("❌ Error enqueueing DB operation:", error.message);
       return false;
@@ -269,17 +341,14 @@ class RealTimeAlertProcessor {
       }
 
       // Cache alerts by symbol (for fast lookup when price updates)
+      // No TTL - cache is updated automatically on alert create/update/delete events
       for (const [symbol, symbolAlerts] of Object.entries(alertsBySymbol)) {
         const cacheKey = `alerts:cache:${symbol}`;
-        await redis.setEx(
-          cacheKey,
-          3600, // 1 hour TTL
-          JSON.stringify(symbolAlerts)
-        );
+        await redis.set(cacheKey, JSON.stringify(symbolAlerts));
       }
 
       // Also cache all alerts for full reload
-      await redis.setEx("alerts:cache:all", 3600, JSON.stringify(alerts));
+      await redis.set("alerts:cache:all", JSON.stringify(alerts));
 
       // Update in-memory activeAlerts map
       this.activeAlerts.clear();
@@ -345,8 +414,8 @@ class RealTimeAlertProcessor {
         existingAlerts.push(alert);
       }
 
-      // Update cache
-      await redis.setEx(cacheKey, 3600, JSON.stringify(existingAlerts));
+      // Update cache (no TTL - cache is updated automatically on alert events)
+      await redis.set(cacheKey, JSON.stringify(existingAlerts));
 
       // Also update in-memory map
       if (this.activeAlerts.has(symbol)) {
@@ -464,8 +533,16 @@ class RealTimeAlertProcessor {
               timestamp: Date.now(),
             };
 
-            // Update live prices cache immediately
+            // Update live prices cache immediately (in-memory)
             this.livePrices[symbol] = priceUpdates[symbol];
+
+            // Update Redis cache (no TTL - WebSocket provides continuous updates)
+            if (this.redisClient) {
+              const priceCacheKey = `crypto:${symbol}`;
+              this.redisClient
+                .set(priceCacheKey, JSON.stringify(priceUpdates[symbol]))
+                .catch(() => {}); // Silent fail - non-blocking
+            }
           });
 
           // Step 2: Filter symbols that have alerts (fast check - skip symbols with no alerts)
@@ -621,27 +698,20 @@ class RealTimeAlertProcessor {
 
   // Start WebSocket-based real-time processing
   async startWebSocketProcessing() {
-    console.log("🚀 Starting WebSocket-based real-time alert processing...");
-
     // Step 1: Initialize Redis clients
     await this.initRedisClient();
     await this.initDbQueueClient(); // Initialize DB queue client
 
-    // Step 2: Load all alerts from DB and cache in Redis
+    // Step 2: Load all alerts from DB and cache in Redis (initial load only)
     await this.loadAlertsToRedisCache();
-    console.log("✅ Alerts loaded and cached in Redis");
 
     // Step 3: Start WebSocket connection
     this.startWebSocketPriceFeed();
 
-    // Step 4: Periodically reload alerts from DB to Redis (every 5 minutes)
-    // This ensures cache stays fresh if alerts are added/removed
-    setInterval(async () => {
-      console.log("🔄 Reloading alerts from DB to Redis cache...");
-      await this.loadAlertsToRedisCache();
-    }, 5 * 60 * 1000); // 5 minutes
-
-    console.log("✅ WebSocket-based real-time processing started");
+    // Step 4: Subscribe to alert management events
+    // Cache is updated automatically when alerts are created/updated/deleted
+    // No periodic reload needed - events handle all cache updates
+    await this.subscribeToAlertManagement();
   }
 
   // Stop WebSocket connection
@@ -1184,6 +1254,18 @@ class RealTimeAlertProcessor {
 
   // Trigger alert with live data and update baseline
   async triggerAlertWithLiveData(alert, liveData) {
+    // CRITICAL: Acquire Redis lock to prevent duplicate processing
+    // Especially important when alertCount condition is set
+    const hasAlertCount = alert.conditions?.alertCount?.timeframe;
+    const lockToken = hasAlertCount
+      ? await this.acquireAlertLock(alert._id.toString(), 3000) // Longer lock for alertCount (3s)
+      : await this.acquireAlertLock(alert._id.toString(), 2000); // Standard lock (2s)
+
+    if (!lockToken) {
+      // Another worker is already processing this alert
+      return false;
+    }
+
     try {
       // Safely get baseline values with proper defaults
       const baselinePrice = parseFloat(alert.baselinePrice) || 0;
@@ -1353,6 +1435,7 @@ class RealTimeAlertProcessor {
       }).catch(() => {}); // Silent fail - non-critical
 
       // Update live price in cache for this symbol
+      // No TTL - WebSocket provides real-time updates continuously
       if (this.redisClient) {
         const priceCacheKey = `crypto:${alert.symbol}`;
         const priceData = {
@@ -1368,7 +1451,7 @@ class RealTimeAlertProcessor {
           timestamp: Date.now(),
         };
         this.redisClient
-          .setEx(priceCacheKey, 60, JSON.stringify(priceData))
+          .set(priceCacheKey, JSON.stringify(priceData))
           .catch((error) => {
             console.error(
               `❌ Error updating price cache (non-blocking):`,
@@ -1398,6 +1481,11 @@ class RealTimeAlertProcessor {
     } catch (error) {
       console.error(`❌ Error triggering alert ${alert._id}:`, error);
       return false;
+    } finally {
+      // CRITICAL: Always release lock, even if error occurs
+      if (lockToken) {
+        await this.releaseAlertLock(alert._id.toString(), lockToken);
+      }
     }
   }
 
@@ -3333,14 +3421,19 @@ class RealTimeAlertProcessor {
       // Remove from active alerts map
       this.activeAlerts.delete(symbol);
 
+      // CRITICAL: Remove from Redis cache immediately
+      const redis = await this.initRedisClient();
+      if (redis) {
+        const cacheKey = `alerts:cache:${symbol}`;
+        await redis.del(cacheKey);
+      }
+
       // Clean up candle data for this symbol
       for (const [key, candle] of this.candleData.entries()) {
         if (key.startsWith(`${symbol}_`)) {
           this.candleData.delete(key);
         }
       }
-
-      console.log(`🗑️ Removed alerts for ${symbol} from active processing`);
     } catch (error) {
       console.error(`❌ Error removing alerts for ${symbol}:`, error);
     }
@@ -3349,6 +3442,8 @@ class RealTimeAlertProcessor {
   // Remove alerts for a specific user when they clear all favorites
   async removeAlertsForUser(userId) {
     try {
+      const symbolsToUpdate = new Set();
+
       // Remove all alerts for this user from active processing
       for (const [symbol, alerts] of this.activeAlerts.entries()) {
         const userAlerts = alerts.filter((alert) => alert.userId === userId);
@@ -3358,12 +3453,28 @@ class RealTimeAlertProcessor {
           );
           if (remainingAlerts.length > 0) {
             this.activeAlerts.set(symbol, remainingAlerts);
+            symbolsToUpdate.add(symbol);
           } else {
             this.activeAlerts.delete(symbol);
+            symbolsToUpdate.add(symbol);
           }
         }
       }
-      console.log(`🗑️ Removed all alerts from active processing`);
+
+      // CRITICAL: Update Redis cache for all affected symbols
+      const redis = await this.initRedisClient();
+      if (redis && symbolsToUpdate.size > 0) {
+        for (const symbol of symbolsToUpdate) {
+          const cacheKey = `alerts:cache:${symbol}`;
+          const alerts = this.activeAlerts.get(symbol);
+
+          if (!alerts || alerts.length === 0) {
+            await redis.del(cacheKey);
+          } else {
+            await redis.set(cacheKey, JSON.stringify(alerts));
+          }
+        }
+      }
     } catch (error) {
       console.error(`❌ Error removing alerts for user ${userId}:`, error);
     }
@@ -3403,8 +3514,8 @@ class RealTimeAlertProcessor {
       }
 
       // Check if alert already exists
-      const existingAlerts = this.activeAlerts.get(symbol);
-      const alertExists = existingAlerts.some(
+      const inMemoryAlerts = this.activeAlerts.get(symbol);
+      const alertExists = inMemoryAlerts.some(
         (a) => a._id.toString() === alertId
       );
 
@@ -3412,12 +3523,27 @@ class RealTimeAlertProcessor {
         this.activeAlerts.get(symbol).push(alert);
         this.alertIds.add(alertId);
 
+        // CRITICAL: Update Redis cache immediately to include new alert
+        const redis = await this.initRedisClient();
+        if (redis) {
+          const cacheKey = `alerts:cache:${symbol}`;
+          const redisAlerts = await this.getAlertsFromCache(symbol);
+
+          // Check if alert already exists in Redis cache
+          const existsInRedis = redisAlerts.some(
+            (a) => a._id.toString() === alertId
+          );
+
+          if (!existsInRedis) {
+            // Add new alert to Redis cache
+            redisAlerts.push(alert);
+            await redis.set(cacheKey, JSON.stringify(redisAlerts));
+          }
+        }
+
         // Reset baseline for this alert (new conditions = new baseline)
         const alertKey = `${alertId}_${symbol}`;
         this.alertBaselines.delete(alertKey);
-        console.log(
-          `🔄 Reset baseline for alert ${alertId} (new conditions detected)`
-        );
 
         console.log(
           `✅ Alert ${alertId} for ${alert.symbol} added to active monitoring`
@@ -3438,29 +3564,52 @@ class RealTimeAlertProcessor {
   // Remove an alert from active monitoring
   async removeAlert(alertId) {
     try {
-      console.log(`➖ Removing alert ${alertId} from active monitoring...`);
-
       // Find and remove from activeAlerts
       let removed = false;
+      let removedSymbol = null;
+
       for (const [symbol, alerts] of this.activeAlerts.entries()) {
         const alertIndex = alerts.findIndex(
           (a) => a._id.toString() === alertId
         );
         if (alertIndex !== -1) {
-          alerts.splice(alertIndex, 1);
           removed = true;
-          console.log(
-            `✅ Alert ${alertId} for ${symbol} removed from active monitoring`
-          );
-
-          // If no more alerts for this symbol, remove the symbol entry
-          if (alerts.length === 0) {
-            this.activeAlerts.delete(symbol);
-            console.log(
-              `🗑️ No more alerts for ${symbol}, removed from monitoring`
-            );
-          }
+          removedSymbol = symbol;
           break;
+        }
+      }
+
+      if (!removed || !removedSymbol) {
+        // Alert not found in in-memory cache, but still try to remove from Redis
+        const redis = await this.initRedisClient();
+        if (redis) {
+          // Try to find alert in Redis cache by checking all symbols
+          // This is a fallback in case alert is only in Redis
+          const allSymbols = Array.from(this.activeAlerts.keys());
+          for (const symbol of allSymbols) {
+            const cacheKey = `alerts:cache:${symbol}`;
+            const existingAlerts = await this.getAlertsFromCache(symbol);
+            const alertExists = existingAlerts.some(
+              (a) => a._id.toString() === alertId
+            );
+
+            if (alertExists) {
+              const updatedAlerts = existingAlerts.filter(
+                (a) => a._id.toString() !== alertId
+              );
+
+              if (updatedAlerts.length === 0) {
+                await redis.del(cacheKey);
+                this.activeAlerts.delete(symbol);
+              } else {
+                await redis.set(cacheKey, JSON.stringify(updatedAlerts));
+                this.activeAlerts.set(symbol, updatedAlerts);
+              }
+              removed = true;
+              removedSymbol = symbol;
+              break;
+            }
+          }
         }
       }
 
@@ -3471,21 +3620,56 @@ class RealTimeAlertProcessor {
       for (const [key, baseline] of this.alertBaselines.entries()) {
         if (key.startsWith(`${alertId}_`)) {
           this.alertBaselines.delete(key);
-          console.log(`🗑️ Cleaned up baseline data for alert ${alertId}`);
           break;
         }
       }
 
       // Clean up candle data for this alert's symbol
-      for (const [key, candle] of this.candleData.entries()) {
-        if (key.startsWith(`${symbol}_`)) {
-          this.candleData.delete(key);
-          console.log(`🗑️ Cleaned up candle data for ${symbol}`);
+      if (removedSymbol) {
+        for (const [key, candle] of this.candleData.entries()) {
+          if (key.startsWith(`${removedSymbol}_`)) {
+            this.candleData.delete(key);
+          }
         }
-      }
 
-      if (!removed) {
-        console.log(`⚠️ Alert ${alertId} was not found in active monitoring`);
+        // CRITICAL: Update Redis cache immediately to remove the alert
+        const redis = await this.initRedisClient();
+        if (redis && removedSymbol) {
+          const cacheKey = `alerts:cache:${removedSymbol}`;
+          const existingAlerts = await this.getAlertsFromCache(removedSymbol);
+
+          // Filter out the removed alert
+          const updatedAlerts = existingAlerts.filter(
+            (a) => a._id.toString() !== alertId
+          );
+
+          // Update Redis cache
+          if (updatedAlerts.length === 0) {
+            // If no alerts left, delete the cache key
+            await redis.del(cacheKey);
+            // CRITICAL: Also remove from in-memory cache
+            this.activeAlerts.delete(removedSymbol);
+          } else {
+            // Update with remaining alerts
+            await redis.set(cacheKey, JSON.stringify(updatedAlerts));
+            // CRITICAL: Update in-memory cache with new array (not modify in place)
+            this.activeAlerts.set(removedSymbol, [...updatedAlerts]);
+          }
+        } else if (removedSymbol) {
+          // If Redis is not available, still update in-memory cache
+          const alerts = this.activeAlerts.get(removedSymbol);
+          if (alerts) {
+            const updatedAlerts = alerts.filter(
+              (a) => a._id.toString() !== alertId
+            );
+            if (updatedAlerts.length === 0) {
+              this.activeAlerts.delete(removedSymbol);
+            } else {
+              // Create new array to ensure reference is updated
+              this.activeAlerts.set(removedSymbol, [...updatedAlerts]);
+            }
+          }
+        }
       }
 
       return removed;
@@ -3832,16 +4016,14 @@ class RealTimeAlertProcessor {
     return meetsRequirement;
   }
 
-  // Subscribe to Redis alert management events
-  // Reload alerts cache when alerts are created/removed
+  // Reload alerts cache from database
+  // Called automatically on alert create/update/delete events
   async reloadAlertsCache() {
-    console.log("🔄 Reloading alerts cache from database...");
     await this.loadAlertsToRedisCache();
   }
 
   async subscribeToAlertManagement() {
     if (this.redisSubscribed) {
-      console.log("⚠️ Already subscribed to alert management events");
       return;
     }
 

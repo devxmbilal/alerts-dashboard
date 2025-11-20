@@ -327,9 +327,19 @@ const MarketPanel = forwardRef(
 
     // Format price change - exact same as client
     const formatPriceChange = (change) => {
-      const isPositive = change >= 0;
+      // Handle undefined, null, or NaN values
+      if (change === undefined || change === null || isNaN(change)) {
+        return {
+          value: "0.00%",
+          color: "#888",
+          icon: null,
+        };
+      }
+      
+      const numChange = parseFloat(change) || 0;
+      const isPositive = numChange >= 0;
       return {
-        value: `${isPositive ? "+" : ""}${change.toFixed(2)}%`,
+        value: `${isPositive ? "+" : ""}${numChange.toFixed(2)}%`,
         color: isPositive ? "#4caf50" : "#f44336",
         icon: isPositive ? <TrendingUpIcon /> : <TrendingDownIcon />,
       };
