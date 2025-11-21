@@ -2442,7 +2442,7 @@ class RealTimeAlertProcessor {
               if (redis) {
                 const redisKey = `rsi:${key}`;
                 redis
-                  .setEx(
+                  .setex(
                     redisKey,
                     Math.floor(ttl / 1000),
                     JSON.stringify(updated)
@@ -2478,7 +2478,7 @@ class RealTimeAlertProcessor {
           if (redis) {
             const redisKey = `rsi:${key}`;
             redis
-              .setEx(redisKey, Math.floor(ttl / 1000), JSON.stringify(updated))
+              .setex(redisKey, Math.floor(ttl / 1000), JSON.stringify(updated))
               .catch(() => {}); // Silent fail
           }
         })
