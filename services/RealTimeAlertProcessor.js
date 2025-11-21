@@ -1792,7 +1792,11 @@ class RealTimeAlertProcessor {
           );
           conditionsMet = false;
         } else {
-          const candleChangeMet = this.checkCandleChangeCondition(
+          // CRITICAL: Update candle data BEFORE checking condition
+          // This ensures we have the latest candle data (open, close, etc.)
+          await this.updateCandleData(alert.symbol, timeframe, priceData);
+
+          const candleChangeMet = await this.checkCandleChangeCondition(
             alert.symbol,
             timeframe,
             requiredChange,
@@ -4104,8 +4108,13 @@ class RealTimeAlertProcessor {
   }
 
   // Check if a candle meets the change percentage requirement
-  checkCandleChangeCondition(symbol, timeframe, requiredChange, baselinePrice) {
-    const candle = this.getCandleData(symbol, timeframe);
+  async checkCandleChangeCondition(
+    symbol,
+    timeframe,
+    requiredChange,
+    baselinePrice
+  ) {
+    let candle = this.getCandleData(symbol, timeframe);
 
     console.log(`🔍 Checking candle for ${symbol} (${timeframe}):`);
     console.log(`   Candle complete: ${candle.isComplete}`);
@@ -4115,8 +4124,52 @@ class RealTimeAlertProcessor {
       `   Start time: ${candle.startTime}, End time: ${candle.endTime}`
     );
 
-    // Check if we have valid candle data
-    if (!candle.open || !candle.close) {
+    // CRITICAL: If candle data is missing, fetch from Binance immediately
+    if (
+      !candle.open ||
+      !candle.close ||
+      candle.open === null ||
+      candle.close === null
+    ) {
+      console.log(
+        `⚠️ Candle data missing (Open=${candle.open}, Close=${candle.close}), fetching from Binance...`
+      );
+
+      const binanceCandle = await this.fetchCandleFromBinance(
+        symbol,
+        timeframe
+      );
+      if (binanceCandle) {
+        // Update candle data with Binance data
+        candle.open = binanceCandle.open;
+        candle.close = binanceCandle.close;
+        candle.high = binanceCandle.high;
+        candle.low = binanceCandle.low;
+        candle.volume = binanceCandle.volume;
+        candle.startTime = binanceCandle.startTime;
+        candle.endTime = binanceCandle.endTime;
+        candle.isComplete = binanceCandle.isComplete;
+
+        console.log(
+          `✅ Fetched candle data from Binance: Open=${candle.open}, Close=${candle.close}`
+        );
+      } else {
+        // If Binance fetch fails, use current price as fallback
+        console.log(
+          `⚠️ Binance fetch failed, using baseline price as fallback`
+        );
+        candle.open = baselinePrice;
+        candle.close = baselinePrice;
+      }
+    }
+
+    // Check if we have valid candle data after fetch
+    if (
+      !candle.open ||
+      !candle.close ||
+      candle.open === null ||
+      candle.close === null
+    ) {
       console.log(
         `❌ Candle not ready: Open=${candle.open}, Close=${candle.close}`
       );

@@ -426,24 +426,24 @@ if (isMainModule) {
   });
 
   // Keep the process alive and show performance stats
-  setInterval(async () => {
-    if (worker.isRunning) {
-      console.log("🔄 Micro-Batch Worker is running...");
-      // Show performance stats every 5 minutes
-      const now = Date.now();
-      if (!worker.lastStatsTime || now - worker.lastStatsTime > 300000) {
-        worker.lastStatsTime = now;
-        await worker.showPerformance();
-      }
-    } else {
-      console.log(
-        "⚠️ Micro-Batch Worker is not running, attempting to restart..."
-      );
-      worker.start().catch((error) => {
-        console.error("❌ Failed to restart worker:", error);
-      });
-    }
-  }, 30000); // Log every 30 seconds
+  // setInterval(async () => {
+  //   if (worker.isRunning) {
+  //     console.log("🔄 Micro-Batch Worker is running...");
+  //     // Show performance stats every 5 minutes
+  //     const now = Date.now();
+  //     if (!worker.lastStatsTime || now - worker.lastStatsTime > 300000) {
+  //       worker.lastStatsTime = now;
+  //       await worker.showPerformance();
+  //     }
+  //   } else {
+  //     console.log(
+  //       "⚠️ Micro-Batch Worker is not running, attempting to restart..."
+  //     );
+  //     worker.start().catch((error) => {
+  //       console.error("❌ Failed to restart worker:", error);
+  //     });
+  //   }
+  // }, 30000); // Log every 30 seconds
 
   // Prevent process from exiting
   process.stdin.resume();
