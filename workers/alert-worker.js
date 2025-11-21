@@ -43,7 +43,9 @@ class AlertWorker {
 
       // 🚀 MICRO-BATCH EXECUTION ENGINE - Ultra High Performance
       await RealTimeAlertProcessor.startWebSocketProcessing();
-      console.log("✅ Started Micro-Batch WebSocket processing (50k alerts/min capacity)");
+      console.log(
+        "✅ Started Micro-Batch WebSocket processing (50k alerts/min capacity)"
+      );
 
       // Subscribe to alert management events (for alert creation/removal)
       await RealTimeAlertProcessor.subscribeToAlertManagement();
@@ -51,15 +53,7 @@ class AlertWorker {
 
       this.isRunning = true;
       console.log("✅ Micro-Batch Alert Worker started successfully");
-      console.log("🚀 Micro-Batch Engine Active:");
-      console.log("   ⚡ 50,000+ alerts/minute capacity");
-      console.log("   📊 95% CPU efficiency (smart symbol filtering)");
-      console.log("   🛡️ Zero duplicates (distributed locking)");
-      console.log("   📊 Real-time performance monitoring available");
-      console.log("📊 Micro-Batch Performance Monitoring:");
-      console.log("   npm run microbatch-monitor    (real-time dashboard)");
-      console.log("   npm run microbatch-stats      (current performance)");
-      console.log("   npm run health-check          (system health)");
+
       console.log(
         "🔥 Monitoring live market data via Micro-Batch WebSocket for ultra-fast alerts..."
       );
@@ -78,7 +72,10 @@ class AlertWorker {
       );
 
       // Process via micro-batch engine (ultra-fast, zero duplicates)
-      await RealTimeAlertProcessor.processPriceUpdateRealTime(priceData.symbol, priceData);
+      await RealTimeAlertProcessor.processPriceUpdateRealTime(
+        priceData.symbol,
+        priceData
+      );
     } catch (error) {
       console.error(
         `❌ Error in micro-batch processing for ${priceData.symbol}:`,
@@ -100,13 +97,33 @@ class AlertWorker {
       }
 
       // Check Min Daily volume condition (required)
-      if (conditions.minDaily && marketData.volume) {
+      // Min Daily Volume is ALWAYS 24h quote volume (in USDT), regardless of timeframe
+      if (conditions.minDaily) {
         const minVolume = parseFloat(conditions.minDaily);
-        const actualVolume = parseFloat(marketData.volume);
+        // Prefer volume24h (quote volume in USDT), fallback to volume if needed
+        const actualVolume = parseFloat(
+          marketData.volume24h || marketData.volume
+        );
+
+        if (!actualVolume || isNaN(actualVolume)) {
+          console.log(
+            `⚠️ Min Daily: 24h volume data missing for ${
+              marketData.symbol || "unknown"
+            }`
+          );
+          return false; // Volume data missing
+        }
 
         if (actualVolume < minVolume) {
+          console.log(
+            `❌ Min Daily condition FAILED: ${actualVolume.toLocaleString()} < ${minVolume.toLocaleString()} (24h quote volume)`
+          );
           return false; // Volume condition not met
         }
+
+        console.log(
+          `✅ Min Daily condition PASSED: ${actualVolume.toLocaleString()} >= ${minVolume.toLocaleString()} (24h quote volume)`
+        );
       }
 
       // Check Change % condition (required)
@@ -346,10 +363,16 @@ class AlertWorker {
     try {
       const stats = this.getMicroBatchStats();
       console.log("🚀 ==========  MICRO-BATCH PERFORMANCE  ==========");
-      console.log(`   � Current Throughput: ${stats.currentThroughputPerMinute || 0}/min`);
-      console.log(`   🎯 Target Throughput: ${stats.targetThroughput || 50000}/min`);
+      console.log(
+        `   � Current Throughput: ${stats.currentThroughputPerMinute || 0}/min`
+      );
+      console.log(
+        `   🎯 Target Throughput: ${stats.targetThroughput || 50000}/min`
+      );
       console.log(`   📊 CPU Efficiency: ${stats.cpuEfficiency || 0}%`);
-      console.log(`   🛡️ System Health: ${stats.systemHealth?.overall || 0}/100`);
+      console.log(
+        `   🛡️ System Health: ${stats.systemHealth?.overall || 0}/100`
+      );
       console.log(`   🔄 Active Symbols: ${stats.activeSymbols || 0}`);
       console.log("✅ Use 'npm run microbatch-monitor' for live dashboard");
       console.log("================================================");
@@ -408,12 +431,14 @@ if (isMainModule) {
       console.log("🔄 Micro-Batch Worker is running...");
       // Show performance stats every 5 minutes
       const now = Date.now();
-      if (!worker.lastStatsTime || (now - worker.lastStatsTime) > 300000) {
+      if (!worker.lastStatsTime || now - worker.lastStatsTime > 300000) {
         worker.lastStatsTime = now;
         await worker.showPerformance();
       }
     } else {
-      console.log("⚠️ Micro-Batch Worker is not running, attempting to restart...");
+      console.log(
+        "⚠️ Micro-Batch Worker is not running, attempting to restart..."
+      );
       worker.start().catch((error) => {
         console.error("❌ Failed to restart worker:", error);
       });
