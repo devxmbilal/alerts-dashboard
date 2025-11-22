@@ -450,6 +450,7 @@ export default function Dashboard() {
                 selectedSymbol={selectedCoin}
                 onCreateAlert={handleCreateAlert}
                 onAlertsCreated={handleAlertsCreated}
+                onClose={() => setFilterSidebarOpen(false)}
               />
             </Box>
           );
@@ -508,6 +509,7 @@ export default function Dashboard() {
                 selectedSymbol={selectedCoin}
                 onCreateAlert={handleCreateAlert}
                 onAlertsCreated={handleAlertsCreated}
+                onClose={() => setFilterSidebarOpen(false)}
               />
             </Paper>
           </Grid>
