@@ -25,6 +25,8 @@ import ListIcon from "@mui/icons-material/List";
 import LogoutIcon from "@mui/icons-material/Logout";
 import AccountCircleIcon from "@mui/icons-material/AccountCircle";
 import SettingsIcon from "@mui/icons-material/Settings";
+import Brightness4Icon from "@mui/icons-material/Brightness4";
+import Brightness7Icon from "@mui/icons-material/Brightness7";
 import TradingViewChart from "../../components/TradingViewChart";
 import MarketPanel from "../../components/MarketPanel";
 import FilterSidebar from "../../components/FilterSidebar";
@@ -33,11 +35,13 @@ import UserSettingsModal from "../../components/UserSettingsModal";
 import { SocketProvider } from "../../contexts/SocketContext";
 import { AlertProvider } from "../../contexts/AlertContext";
 import { FavoritesProvider } from "../../contexts/FavoritesContext";
+import { useThemeMode } from "../ThemeProvider";
 import { useRouter } from "next/navigation";
 
 export default function Dashboard() {
   const router = useRouter();
   const theme = useTheme();
+  const { mode, toggleTheme } = useThemeMode();
   const [isMobile, setIsMobile] = useState(false);
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -359,8 +363,8 @@ export default function Dashboard() {
       sx={{
         "& .MuiDrawer-paper": {
           width: 280,
-          backgroundColor: "#1a1a1a",
-          color: "white",
+          backgroundColor: "background.paper",
+          color: "text.primary",
         },
       }}
     >
@@ -495,8 +499,9 @@ export default function Dashboard() {
               sx={{
                 height: "100dvh",
                 maxHeight: "100dvh",
-                backgroundColor: "#1a1a1a",
-                border: "1px solid #333",
+                backgroundColor: "background.paper",
+                border: 1,
+                borderColor: "divider",
                 borderRadius: 2,
                 overflow: "hidden",
                 display: "flex",
@@ -527,8 +532,9 @@ export default function Dashboard() {
             <Paper
               sx={{
                 flex: 1,
-                backgroundColor: "#1a1a1a",
-                border: "1px solid #333",
+                backgroundColor: "background.paper",
+                border: 1,
+                borderColor: "divider",
                 borderRadius: 2,
                 overflow: "hidden",
                 minHeight: "200px",
@@ -549,10 +555,11 @@ export default function Dashboard() {
         <Grid item xs={12} md={3}>
           <Paper
             sx={{
-              height: "100dvh", // Fixed full height
-              maxHeight: "100dvh", // Maximum height
-              backgroundColor: "#1a1a1a",
-              border: "1px solid #333",
+              height: "100dvh",
+              maxHeight: "100dvh",
+              backgroundColor: "background.paper",
+              border: 1,
+              borderColor: "divider",
               borderRadius: 2,
               overflow: "hidden",
               display: "flex",
@@ -604,7 +611,7 @@ export default function Dashboard() {
           <Box
             sx={{
               minHeight: "100vh",
-              backgroundColor: "#0a0a0a",
+              backgroundColor: "background.default",
               // Slightly increase font sizes only on dashboard
               "& .MuiTypography-root": {
                 fontSize: {
@@ -625,8 +632,9 @@ export default function Dashboard() {
             {/* Header */}
             <Box
               sx={{
-                backgroundColor: "#1a1a1a",
-                borderBottom: "1px solid #333",
+                backgroundColor: "background.paper",
+                borderBottom: 1,
+                borderColor: "divider",
                 p: 0.5,
                 display: "flex",
                 alignItems: "center",
@@ -657,14 +665,31 @@ export default function Dashboard() {
                     <FilterListIcon />
                   </IconButton>
                 )}
-                <Typography variant="h5" component="h1" sx={{ color: "white" }}>
+                <Typography variant="h5" component="h1" sx={{ color: "text.primary" }}>
                   Crypto Alerts Dashboard
                 </Typography>
               </Box>
               <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
-                <Typography variant="body2" sx={{ color: "#888" }}>
+                <Typography variant="body2" sx={{ color: "text.secondary" }}>
                   {selectedCoin} - {selectedTimeframe}
                 </Typography>
+                
+                {/* Theme Toggle Button */}
+                <IconButton
+                  onClick={toggleTheme}
+                  color="inherit"
+                  sx={{ 
+                    color: "text.secondary",
+                    transition: "all 0.3s ease",
+                    "&:hover": {
+                      color: "primary.main",
+                      transform: "rotate(180deg)",
+                    },
+                  }}
+                  title={mode === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+                >
+                  {mode === "dark" ? <Brightness7Icon /> : <Brightness4Icon />}
+                </IconButton>
                 {chartSwitchNotification && (
                   <Box
                     sx={{
@@ -685,7 +710,7 @@ export default function Dashboard() {
                     {chartSwitchNotification.symbol}
                   </Box>
                 )}
-                <Typography variant="body2" sx={{ color: "#888" }}>
+                <Typography variant="body2" sx={{ color: "text.secondary" }}>
                   Welcome, {user.name}
                 </Typography>
                 <RealTimeNotifications
@@ -697,7 +722,7 @@ export default function Dashboard() {
                 <IconButton
                   color="inherit"
                   onClick={(e) => setUserMenuAnchor(e.currentTarget)}
-                  sx={{ color: "#888" }}
+                  sx={{ color: "text.secondary" }}
                   title="User Menu"
                 >
                   <AccountCircleIcon />
@@ -714,9 +739,10 @@ export default function Dashboard() {
                   marginThreshold={8}
                   PaperProps={{
                     sx: {
-                      backgroundColor: "#1a1a1a",
-                      color: "white",
-                      border: "1px solid #333",
+                      backgroundColor: "background.paper",
+                      color: "text.primary",
+                      border: 1,
+                      borderColor: "divider",
                       mt: 1,
                       minWidth: 180,
                     },
@@ -769,8 +795,9 @@ export default function Dashboard() {
                   bottom: 0,
                   left: 0,
                   right: 0,
-                  backgroundColor: "#1a1a1a",
-                  borderTop: "1px solid #333",
+                  backgroundColor: "background.paper",
+                  borderTop: 1,
+                  borderColor: "divider",
                   "& .MuiBottomNavigationAction-root": {
                     color: "#888",
                     "&.Mui-selected": {

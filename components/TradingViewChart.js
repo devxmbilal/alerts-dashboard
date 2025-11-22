@@ -1,13 +1,16 @@
 "use client";
 
 import React, { useEffect } from "react";
-import { Box, Typography, ButtonGroup, Button } from "@mui/material";
+import { Box, Typography, ButtonGroup, Button, useTheme } from "@mui/material";
+import { useThemeMode } from "../app/ThemeProvider";
 
 const TradingViewChart = ({
   symbol = "BTCUSDT",
   timeframe = "5m",
   onTimeframeChange,
 }) => {
+  const theme = useTheme();
+  const { mode } = useThemeMode();
   useEffect(() => {
     // Clear existing chart container
     const container = document.getElementById("tradingview_chart");
@@ -54,10 +57,10 @@ const TradingViewChart = ({
         symbol: symbol,
         interval: intervalMap[timeframe] || timeframe,
         timezone: "Etc/UTC",
-        theme: "dark",
+        theme: mode === "dark" ? "dark" : "light",
         style: "1",
         locale: "en",
-        toolbar_bg: "#1a1a1a",
+        toolbar_bg: mode === "dark" ? "#1a1a1a" : "#ffffff",
         enable_publishing: false,
         hide_top_toolbar: false,
         save_image: false,
@@ -76,7 +79,7 @@ const TradingViewChart = ({
     return () => {
       window.removeEventListener("resize", onResize);
     };
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, mode]);
 
   return (
     <Box
@@ -84,7 +87,7 @@ const TradingViewChart = ({
         width: "100%",
         height: "85%",
         minHeight: "400px",
-        backgroundColor: "#1a1a1a",
+        backgroundColor: "background.paper",
         position: "relative",
         display: "flex",
         flexDirection: "column",
@@ -94,8 +97,9 @@ const TradingViewChart = ({
       <Box
         sx={{
           p: 1,
-          borderBottom: "1px solid #333",
-          backgroundColor: "#1a1a1a",
+          borderBottom: 1,
+          borderColor: "divider",
+          backgroundColor: "background.paper",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
@@ -104,7 +108,7 @@ const TradingViewChart = ({
         <Typography
           variant="h6"
           sx={{
-            color: "white",
+            color: "text.primary",
             fontWeight: 600,
             fontSize: "1.1rem",
           }}
@@ -119,8 +123,8 @@ const TradingViewChart = ({
             size="small"
             sx={{
               "& .MuiButton-root": {
-                color: "white",
-                borderColor: "#444",
+                color: "text.primary",
+                borderColor: "divider",
                 fontSize: "0.7rem",
                 py: 0.5,
                 px: 1,

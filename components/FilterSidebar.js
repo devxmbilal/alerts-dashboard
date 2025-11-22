@@ -61,7 +61,7 @@ const CustomCheckbox = styled((props) => (
           width: 18,
           height: 18,
           borderRadius: 3,
-          backgroundColor: "white",
+          backgroundcolor: "text.primary",
           border: "1px solid rgba(255,255,255,0.3)",
           display: "inline-block",
         }}
@@ -79,7 +79,7 @@ const CustomCheckbox = styled((props) => (
           justifyContent: "center",
         }}
       >
-        <CheckIcon style={{ fontSize: 16, color: "white" }} />
+        <CheckIcon style={{ fontSize: 16, color: "text.primary" }} />
       </span>
     }
   />
@@ -87,7 +87,7 @@ const CustomCheckbox = styled((props) => (
 
 const DarkAccordion = styled(Accordion)({
   backgroundColor: "transparent",
-  color: "white",
+  color: "text.primary",
   boxShadow: "none",
   marginBottom: "2px",
   "&:before": {
@@ -115,7 +115,7 @@ const DarkAccordion = styled(Accordion)({
 const CustomTextField = styled(TextField)(({ theme }) => ({
   "& .MuiOutlinedInput-root": {
     backgroundColor: "#2a2a2a",
-    color: "white",
+    color: "text.primary",
     "& fieldset": {
       borderColor: "#444",
     },
@@ -127,7 +127,7 @@ const CustomTextField = styled(TextField)(({ theme }) => ({
     },
   },
   "& .MuiInputLabel-root": {
-    color: "#888",
+    color: "text.secondary",
   },
 }));
 
@@ -546,13 +546,13 @@ const FilterSidebar = forwardRef(
         <Box
           sx={{
             p: 1,
-            borderBottom: "1px solid #333",
+            borderBottom: 1, borderColor: "divider",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
           }}
         >
-          <Typography variant="h6" sx={{ color: "white", fontWeight: 600 }}>
+          <Typography variant="h6" sx={{ color: "text.primary", fontWeight: 600 }}>
             Alert Filters
           </Typography>
           <IconButton
@@ -562,7 +562,7 @@ const FilterSidebar = forwardRef(
                 window.parent.setFilterSidebarOpen(false);
               }
             }}
-            sx={{ color: "white" }}
+            sx={{ color: "text.primary" }}
             size="small"
           >
             <CloseIcon />
@@ -584,11 +584,11 @@ const FilterSidebar = forwardRef(
           {/* Min Daily Volume Filter */}
           <DarkAccordion>
             <AccordionSummary
-              expandIcon={<ExpandMoreIcon sx={{ color: "white" }} />}
+              expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
             >
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <SpeedIcon sx={{ color: "#9c27b0" }} />
-                <Typography sx={{ color: "white" }}>Min. Daily</Typography>
+                <Typography sx={{ color: "text.primary" }}>Min. Daily</Typography>
               </Box>
             </AccordionSummary>
             <AccordionDetails>
@@ -606,7 +606,7 @@ const FilterSidebar = forwardRef(
                       }
                       label={option.label}
                       sx={{
-                        color: "white",
+                        color: "text.primary",
                         "& .MuiFormControlLabel-label": {
                           fontSize: "14px",
                         },
@@ -621,11 +621,11 @@ const FilterSidebar = forwardRef(
           {/* Change % Filter */}
           <DarkAccordion>
             <AccordionSummary
-              expandIcon={<ExpandMoreIcon sx={{ color: "white" }} />}
+              expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
             >
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <TrendingUpIcon sx={{ color: "#f44336" }} />
-                <Typography sx={{ color: "white" }}>Change %</Typography>
+                <Typography sx={{ color: "text.primary" }}>Change %</Typography>
               </Box>
             </AccordionSummary>
             <AccordionDetails>
@@ -643,7 +643,7 @@ const FilterSidebar = forwardRef(
                       }
                       label={option.label}
                       sx={{
-                        color: "white",
+                        color: "text.primary",
                         "& .MuiFormControlLabel-label": {
                           fontSize: "14px",
                         },
@@ -731,11 +731,11 @@ const FilterSidebar = forwardRef(
           {/* Alert Count Filter */}
           <DarkAccordion>
             <AccordionSummary
-              expandIcon={<ExpandMoreIcon sx={{ color: "white" }} />}
+              expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
             >
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <NotificationsActiveIcon sx={{ color: "#e91e63" }} />
-                <Typography sx={{ color: "white" }}>Alert Count</Typography>
+                <Typography sx={{ color: "text.primary" }}>Alert Count</Typography>
               </Box>
             </AccordionSummary>
             <AccordionDetails>
@@ -753,7 +753,7 @@ const FilterSidebar = forwardRef(
                       }
                       label={option.label}
                       sx={{
-                        color: "white",
+                        color: "text.primary",
                         "& .MuiFormControlLabel-label": {
                           fontSize: "14px",
                         },
@@ -768,11 +768,11 @@ const FilterSidebar = forwardRef(
           {/* Candle Filter */}
           <DarkAccordion>
             <AccordionSummary
-              expandIcon={<ExpandMoreIcon sx={{ color: "white" }} />}
+              expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
             >
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <TimelineIcon sx={{ color: "#795548" }} />
-                <Typography sx={{ color: "white" }}>Candle</Typography>
+                <Typography sx={{ color: "text.primary" }}>Candle</Typography>
               </Box>
             </AccordionSummary>
             <AccordionDetails>
@@ -791,7 +791,7 @@ const FilterSidebar = forwardRef(
                       }
                       label={option.label}
                       sx={{
-                        color: "white",
+                        color: "text.primary",
                         "& .MuiFormControlLabel-label": {
                           fontSize: "14px",
                         },
@@ -802,7 +802,7 @@ const FilterSidebar = forwardRef(
               </Grid>
 
               {/* Condition dropdown */}
-              <Typography variant="body2" sx={{ color: "#888", mb: 1 }}>
+              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
                 Condition:
               </Typography>
               <CustomTextField
@@ -827,11 +827,11 @@ const FilterSidebar = forwardRef(
           {/* RSI Range Filter */}
           <DarkAccordion>
             <AccordionSummary
-              expandIcon={<ExpandMoreIcon sx={{ color: "white" }} />}
+              expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
             >
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <TimelineIcon sx={{ color: "#ff5722" }} />
-                <Typography sx={{ color: "white" }}>
+                <Typography sx={{ color: "text.primary" }}>
                   RSI Range (Multiple)
                 </Typography>
               </Box>
@@ -852,7 +852,7 @@ const FilterSidebar = forwardRef(
                       }
                       label={option.label}
                       sx={{
-                        color: "white",
+                        color: "text.primary",
                         "& .MuiFormControlLabel-label": {
                           fontSize: "14px",
                         },
@@ -907,7 +907,7 @@ const FilterSidebar = forwardRef(
                         fontSize: "12px",
                         textTransform: "none",
                         borderColor: "#444",
-                        color: "white",
+                        color: "text.primary",
                         "&:hover": {
                           borderColor: "#666",
                         },
@@ -924,11 +924,11 @@ const FilterSidebar = forwardRef(
           {/* Volume Filter */}
           <DarkAccordion>
             <AccordionSummary
-              expandIcon={<ExpandMoreIcon sx={{ color: "white" }} />}
+              expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
             >
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <SpeedIcon sx={{ color: "#607d8b" }} />
-                <Typography sx={{ color: "white" }}>Volume</Typography>
+                <Typography sx={{ color: "text.primary" }}>Volume</Typography>
               </Box>
             </AccordionSummary>
             <AccordionDetails>
@@ -947,7 +947,7 @@ const FilterSidebar = forwardRef(
                       }
                       label={option.label}
                       sx={{
-                        color: "white",
+                        color: "text.primary",
                         "& .MuiFormControlLabel-label": {
                           fontSize: "14px",
                         },
@@ -976,7 +976,7 @@ const FilterSidebar = forwardRef(
                         fontSize: "12px",
                         textTransform: "none",
                         borderColor: "#444",
-                        color: "white",
+                        color: "text.primary",
                         "&:hover": {
                           borderColor: "#666",
                         },
@@ -989,7 +989,7 @@ const FilterSidebar = forwardRef(
               </Grid>
 
               {/* Percentage input */}
-              <Typography variant="body2" sx={{ color: "#888", mb: 1 }}>
+              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
                 Percentage %:
               </Typography>
               <CustomTextField
@@ -1012,11 +1012,11 @@ const FilterSidebar = forwardRef(
           {/* OPEN INTEREST Filter */}
           <DarkAccordion>
             <AccordionSummary
-              expandIcon={<ExpandMoreIcon sx={{ color: "white" }} />}
+              expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
             >
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <ShowChartIcon sx={{ color: "#3f51b5" }} />
-                <Typography sx={{ color: "white" }}>
+                <Typography sx={{ color: "text.primary" }}>
                   OPEN INTEREST (Multiple)
                 </Typography>
               </Box>
@@ -1037,7 +1037,7 @@ const FilterSidebar = forwardRef(
                       }
                       label={option.label}
                       sx={{
-                        color: "white",
+                        color: "text.primary",
                         "& .MuiFormControlLabel-label": {
                           fontSize: "14px",
                         },
@@ -1068,9 +1068,9 @@ const FilterSidebar = forwardRef(
                         PaperProps: {
                           sx: {
                             backgroundColor: "#1e1e1e",
-                            color: "white",
+                            color: "text.primary",
                             "& .MuiMenuItem-root": {
-                              color: "white",
+                              color: "text.primary",
                               "&:hover": {
                                 backgroundColor: "#333",
                               },
@@ -1121,7 +1121,7 @@ const FilterSidebar = forwardRef(
         </Box>
 
         {/* Actions */}
-        <Box sx={{ p: 1, borderTop: "1px solid #333" }}>
+        <Box sx={{ p: 1, borderTop: 1, borderColor: "divider" }}>
           <Button
             fullWidth
             variant="contained"

@@ -364,16 +364,16 @@ const MarketPanel = forwardRef(
     return (
       <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
         {/* Header - exact same as client */}
-        <Box sx={{ p: 1, borderBottom: "1px solid #333" }}>
+        <Box sx={{ p: 1, borderBottom: 1, borderColor: "divider" }}>
           <Typography
             variant="h6"
-            sx={{ color: "white", mb: 1, fontWeight: 600 }}
+            sx={{ color: "text.primary", mb: 1, fontWeight: 600 }}
           >
             Market Panel
           </Typography>
           <Typography
             variant="body2"
-            sx={{ color: "#888", mb: 2, fontSize: "0.8rem" }}
+            sx={{ color: "text.secondary", mb: 2, fontSize: "0.8rem" }}
           >
             USDT Pairs• {filteredData.length} pairs • Favorites•{" "}
             {userFavorites.size} coins
@@ -388,8 +388,8 @@ const MarketPanel = forwardRef(
             sx={{
               mb: 2,
               "& .MuiToggleButton-root": {
-                color: "white",
-                borderColor: "#444",
+                color: "text.primary",
+                borderColor: "divider",
                 fontSize: "0.75rem",
                 px: 2,
                 py: 0.5,
@@ -397,8 +397,8 @@ const MarketPanel = forwardRef(
                   backgroundColor: "rgba(255, 255, 255, 0.1)",
                 },
                 "&.Mui-selected": {
-                  backgroundColor: "#1976d2",
-                  color: "white",
+                  backgroundColor: "primary.main",
+                  color: "primary.contrastText",
                   "&:hover": {
                     backgroundColor: "#1565c0",
                   },
@@ -418,21 +418,21 @@ const MarketPanel = forwardRef(
               onChange={handleSearchChange}
               sx={{
                 width: "100%",
-                backgroundColor: "#2a2a2a",
+                backgroundColor: theme.palette.mode === "dark" ? "#2a2a2a" : "#f0f0f0",
                 borderRadius: 1,
                 px: 2,
                 py: 1,
-                color: "white",
+                color: "text.primary",
                 fontSize: "0.875rem",
                 "& input": {
-                  color: "white",
+                  color: "text.primary",
                   "&::placeholder": {
-                    color: "#888",
+                    color: "text.secondary",
                   },
                 },
               }}
               startAdornment={
-                <SearchIcon sx={{ color: "#888", mr: 1, fontSize: 20 }} />
+                <SearchIcon sx={{ color: "text.secondary", mr: 1, fontSize: 20 }} />
               }
             />
           </Box>
@@ -604,7 +604,8 @@ const MarketPanel = forwardRef(
                     onClick={() => handleCoinClick(coin)}
                     sx={{
                       cursor: "pointer",
-                      borderBottom: "1px solid #333",
+                      borderBottom: 1,
+                      borderColor: "divider",
                       backgroundColor: isSelected
                         ? alpha("#1976d2", 0.1)
                         : "transparent",
@@ -646,7 +647,7 @@ const MarketPanel = forwardRef(
                           <Typography
                             variant="body2"
                             sx={{
-                              color: "white",
+                              color: "text.primary",
                               fontWeight: 600,
                               fontSize: "0.875rem",
                             }}
@@ -669,7 +670,7 @@ const MarketPanel = forwardRef(
                         </Box>
                         <Typography
                           variant="caption"
-                          sx={{ color: "#888", fontSize: "0.75rem" }}
+                          sx={{ color: "text.secondary", fontSize: "0.75rem" }}
                         >
                           Vol: {formatVolume(coin.volume24h)}
                         </Typography>
@@ -680,7 +681,7 @@ const MarketPanel = forwardRef(
                         <Typography
                           variant="body2"
                           sx={{
-                            color: "white",
+                            color: "text.primary",
                             fontWeight: 600,
                             fontSize: "0.875rem",
                           }}
@@ -720,8 +721,9 @@ const MarketPanel = forwardRef(
         <Box
           sx={{
             p: 1,
-            borderTop: "1px solid #333",
-            backgroundColor: "#1a1a1a",
+            borderTop: 1,
+            borderColor: "divider",
+            backgroundColor: "background.paper",
             flexShrink: 0, // Prevent shrinking
           }}
         >
@@ -732,13 +734,13 @@ const MarketPanel = forwardRef(
               alignItems: "center",
             }}
           >
-            <Typography variant="caption" sx={{ color: "#888" }}>
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
               {filteredData.length} coins • {getFavoriteSymbols().length}{" "}
               favorites
             </Typography>
             <Typography
               variant="caption"
-              sx={{ color: "#666", fontSize: "0.7rem" }}
+              sx={{ color: "text.disabled", fontSize: "0.7rem" }}
             >
               Scroll to see more
             </Typography>

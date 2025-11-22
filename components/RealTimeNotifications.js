@@ -460,7 +460,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
           setIsExpanded(!isExpanded);
           requestNotificationPermission();
         }}
-        sx={{ color: "white" }}
+        sx={{ color: "text.primary" }}
       >
         <Badge
           badgeContent={newAlertCount > 0 ? newAlertCount : null}
@@ -468,7 +468,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
           sx={{
             "& .MuiBadge-badge": {
               backgroundColor: "#f44336",
-              color: "white",
+              color: "text.primary",
               fontWeight: "bold",
               fontSize: "0.75rem",
             },
@@ -493,9 +493,10 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             overflow: "hidden",
             display: "flex",
             flexDirection: "column",
-            backgroundColor: "#000000",
+            backgroundColor: "background.paper",
             boxShadow: "0 4px 20px rgba(0, 0, 0, 0.5)",
-            border: "1px solid #333333",
+            border: 1,
+            borderColor: "divider",
           }}
         >
           {/* Header */}
@@ -507,19 +508,19 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
-              backgroundColor: "#000000",
+              backgroundColor: "background.paper",
             }}
           >
-            <Typography variant="h6" sx={{ color: "white", fontWeight: 600 }}>
+            <Typography variant="h6" sx={{ color: "text.primary", fontWeight: 600 }}>
               Alert Notifications ({alertHistory.length})
             </Typography>
-            <Box sx={{ color: "white" }}>
+            <Box sx={{ color: "text.primary" }}>
               <Button
                 size="small"
                 onClick={() => setShowClearDialog(true)}
                 disabled={alertHistory.length === 0}
                 sx={{
-                  color: "white",
+                  color: "text.primary",
                   textTransform: "none",
                   fontSize: "0.8rem",
                   "&:hover": {
@@ -536,7 +537,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                 size="small"
                 onClick={() => setIsExpanded(false)}
                 sx={{
-                  color: "white",
+                  color: "text.primary",
                   "&:hover": {
                     backgroundColor: "rgba(255, 255, 255, 0.1)",
                   },
@@ -551,7 +552,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
           <Box sx={{ flex: 1, overflow: "auto" }}>
             {alertHistory.length === 0 ? (
               <Box sx={{ p: 3, textAlign: "center" }}>
-                <Typography sx={{ color: "white", fontSize: "0.9rem" }}>
+                <Typography sx={{ color: "text.primary", fontSize: "0.9rem" }}>
                   No alerts triggered yet
                 </Typography>
               </Box>
@@ -562,14 +563,15 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                     key={alert.id || index}
                     sx={{
                       borderBottom: 1,
-                      borderColor: "#333333",
-                      backgroundColor: alert.read ? "#000000" : "#1a1a1a",
+                      borderColor: "divider",
+                      backgroundColor: alert.read ? "background.default" : "background.paper",
                       "&:hover": {
-                        backgroundColor: "#2a2a2a",
+                        backgroundColor: "action.hover",
                       },
                       mb: 1,
                       borderRadius: 1,
-                      border: "1px solid #333333",
+                      border: 1,
+                      borderColor: "divider",
                     }}
                     onClick={() => markAsRead(alert.id)}
                   >
@@ -593,7 +595,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                           <Typography
                             variant="subtitle1"
                             sx={{
-                              color: "white",
+                              color: "text.primary",
                               fontWeight: 700,
                               fontSize: "1rem",
                             }}
@@ -618,7 +620,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                           <Typography
                             variant="body2"
                             sx={{
-                              color: "#cccccc",
+                              color: "text.secondary",
                               display: "block",
                               mb: 0.5,
                               fontSize: "0.8rem",
@@ -649,7 +651,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                           <Typography
                             variant="body2"
                             sx={{
-                              color: "white",
+                              color: "text.primary",
                               display: "block",
                               mb: 0.5,
                               fontSize: "0.85rem",
@@ -663,7 +665,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                           <Typography
                             variant="body2"
                             sx={{
-                              color: "#cccccc",
+                              color: "text.secondary",
                               display: "block",
                               mb: 0.5,
                               fontSize: "0.8rem",
@@ -677,7 +679,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                           <Typography
                             variant="body2"
                             sx={{
-                              color: "#cccccc",
+                              color: "text.secondary",
                               display: "block",
                               mb: 0.5,
                               fontSize: "0.8rem",
@@ -703,7 +705,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                           <Typography
                             variant="body2"
                             sx={{
-                              color: "#cccccc",
+                              color: "text.secondary",
                               display: "block",
                               mb: 0.5,
                               fontSize: "0.8rem",
@@ -721,7 +723,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                           <Typography
                             variant="body2"
                             sx={{
-                              color: "#aaaaaa",
+                              color: "text.disabled",
                               display: "block",
                               fontSize: "0.8rem",
                               mt: 0.5,
@@ -733,7 +735,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                           <Typography
                             variant="body2"
                             sx={{
-                              color: "#aaaaaa",
+                              color: "text.disabled",
                               display: "block",
                               fontSize: "0.8rem",
                             }}
@@ -758,21 +760,21 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
         onClose={() => setShowClearDialog(false)}
         PaperProps={{
           sx: {
-            backgroundColor: "#1a1a1a",
-            color: "white",
+            backgroundColor: "background.default",
+            color: "text.primary",
             border: "1px solid #333",
           },
         }}
       >
-        <DialogTitle sx={{ color: "white", fontWeight: 600 }}>
+        <DialogTitle sx={{ color: "text.primary", fontWeight: 600 }}>
           Clear All Alert Notifications
         </DialogTitle>
         <DialogContent>
-          <Typography sx={{ color: "#ccc", mb: 2 }}>
+          <Typography sx={{ color: "text.secondary", mb: 2 }}>
             Are you sure you want to delete all alert notifications? This action
             cannot be undone.
           </Typography>
-          <Typography sx={{ color: "#888", fontSize: "0.9rem" }}>
+          <Typography sx={{ color: "text.disabled", fontSize: "0.9rem" }}>
             This will permanently remove {alertHistory.length} alert(s) from the
             database.
           </Typography>
@@ -780,7 +782,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
         <DialogActions>
           <Button
             onClick={() => setShowClearDialog(false)}
-            sx={{ color: "#888" }}
+            sx={{ color: "text.disabled" }}
             disabled={isClearing}
           >
             Cancel

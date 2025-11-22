@@ -99,6 +99,7 @@ class TelegramService {
       changeFromBaselinePercent,
       volume,
       triggeredAt,
+      isUpdate,
     } = alertData;
 
     const changeEmoji =
@@ -140,19 +141,18 @@ class TelegramService {
     return `
 🚨 *ALERT TRIGGERED!* 🚨
 
-💠 *${symbol || "Unknown"}*
-━━━━━━━━━━━━━━━━━━━
+*${symbol || "Unknown"}*
+━━━━━━━━━━━━━━━
 
-📄 Actual 24h change: \`${safeNumber(actualValue)}%\`
+📊 Actual 24h change: \`${safeNumber(actualValue)}%\`
 💵 Current Price: \`$${safePrice(triggeredPrice)}\`
 📍 Last Price: \`$${safePrice(baselinePrice)}\`
-${changeEmoji} Change %: \`${safeNumber(changeFromBaselinePercent)}%\`
+${changeEmoji} Change: \`${safeNumber(changeFromBaselinePercent)}%\`
 📊 24h Volume: \`${safeVolume}\`
 ⏰ Time: \`${timeStr}\`
 📅 Date: \`${dateStr}\`
-━━━━━━━━━━━━━━━━━━━
 
-_Automated alert from Crypto Alerts Dashboard_
+━━━━━━━━━━━━━━━
     `.trim();
   }
 
