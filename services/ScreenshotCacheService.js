@@ -1,61 +1,139 @@
 import ChartScreenshotService from "../utils/chartScreenshot.js";
+import Alert from "../models/Alert.js";
 
 class ScreenshotCacheService {
   constructor() {
     this.cache = new Map(); // symbol_timeframe -> { screenshot, timestamp }
-    this.cacheTTL = 30000; // 30 seconds cache
+    this.backupCache = new Map(); // Backup cache for fallback (30s old)
+    this.cacheTTL = 5000; // 5 seconds fresh cache (ultra-fast)
+    this.backupTTL = 30000; // 30 seconds backup cache
     this.isWarming = false;
-    this.popularSymbols = []; // Will be updated dynamically
+    this.activeSymbols = []; // Symbols with active alerts
+    this.lastActiveSymbolsUpdate = 0;
+    this.activeSymbolsUpdateInterval = 60000; // Update every 60s
   }
 
   /**
    * Get screenshot from cache or generate new one
+   * Priority: Fresh cache (5s) > Backup cache (30s) > Generate new
    */
   async getScreenshot(symbol, timeframe = "5m") {
     const key = `${symbol}_${timeframe}`;
+    const now = Date.now();
     const cached = this.cache.get(key);
 
-    // Return cached if fresh (< 30s old)
-    if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
-      console.log(`✅ Cache HIT for ${symbol} (${timeframe})`);
+    // Return fresh cache if available (< 5s old)
+    if (cached && now - cached.timestamp < this.cacheTTL) {
+      console.log(`✅ FRESH Cache HIT for ${symbol} (${Math.round((now - cached.timestamp) / 1000)}s old)`);
       return cached.screenshot;
     }
 
-    // Generate new screenshot
-    console.log(`⚡ Cache MISS for ${symbol} (${timeframe}), generating...`);
+    // Check backup cache (5-30s old)
+    const backup = this.backupCache.get(key);
+    if (backup && now - backup.timestamp < this.backupTTL) {
+      console.log(`⚡ BACKUP Cache HIT for ${symbol} (${Math.round((now - backup.timestamp) / 1000)}s old)`);
+      
+      // Async refresh in background (don't wait)
+      this.refreshScreenshotInBackground(symbol, timeframe);
+      
+      return backup.screenshot;
+    }
+
+    // Generate new screenshot (blocking)
+    console.log(`❌ Cache MISS for ${symbol}, generating new screenshot...`);
     const screenshot = await ChartScreenshotService.captureChart(
       symbol,
       timeframe
     );
 
-    // Cache it
+    // Cache it in both fresh and backup
     if (screenshot) {
-      this.cache.set(key, {
-        screenshot,
-        timestamp: Date.now(),
-      });
+      const cacheEntry = { screenshot, timestamp: now };
+      this.cache.set(key, cacheEntry);
+      this.backupCache.set(key, cacheEntry);
+      console.log(`✅ Screenshot cached for ${symbol}`);
     }
 
     return screenshot;
   }
 
   /**
-   * Pre-warm cache for popular symbols
+   * Refresh screenshot in background (non-blocking)
    */
-  async prewarmCache(symbols, timeframe = "5m") {
+  async refreshScreenshotInBackground(symbol, timeframe) {
+    const key = `${symbol}_${timeframe}`;
+    
+    try {
+      const screenshot = await ChartScreenshotService.captureChart(symbol, timeframe);
+      if (screenshot) {
+        const now = Date.now();
+        const cacheEntry = { screenshot, timestamp: now };
+        this.cache.set(key, cacheEntry);
+        this.backupCache.set(key, cacheEntry);
+        console.log(`🔄 Background refresh completed for ${symbol}`);
+      }
+    } catch (error) {
+      console.error(`❌ Background refresh failed for ${symbol}:`, error.message);
+    }
+  }
+
+  /**
+   * Get active alert symbols from database
+   */
+  async updateActiveSymbols() {
+    const now = Date.now();
+    
+    // Skip if updated recently (< 60s ago)
+    if (now - this.lastActiveSymbolsUpdate < this.activeSymbolsUpdateInterval) {
+      return this.activeSymbols;
+    }
+
+    try {
+      // Get all active alerts from database
+      const activeAlerts = await Alert.find({ status: "active" })
+        .select("symbol")
+        .lean();
+
+      // Extract unique symbols
+      const symbols = [...new Set(activeAlerts.map(alert => alert.symbol))];
+      
+      this.activeSymbols = symbols;
+      this.lastActiveSymbolsUpdate = now;
+      
+      console.log(`📊 Updated active symbols: ${symbols.length} unique symbols`);
+      return symbols;
+    } catch (error) {
+      console.error(`❌ Failed to update active symbols:`, error.message);
+      return this.activeSymbols; // Return cached list
+    }
+  }
+
+  /**
+   * Pre-warm cache for active alert symbols
+   */
+  async prewarmCache(symbols = null, timeframe = "5m") {
     if (this.isWarming) {
       console.log("⏳ Cache warming already in progress");
       return;
     }
 
     this.isWarming = true;
-    console.log(`🔥 Pre-warming cache for ${symbols.length} symbols...`);
 
     try {
-      // Generate screenshots in parallel (max 5 at once)
-      const batchSize = 5;
-      for (let i = 0; i < symbols.length; i += batchSize) {
-        const batch = symbols.slice(i, i + batchSize);
+      // If no symbols provided, get active alert symbols
+      const symbolsToWarm = symbols || await this.updateActiveSymbols();
+      
+      if (symbolsToWarm.length === 0) {
+        console.log("⚠️ No symbols to pre-warm");
+        return;
+      }
+
+      console.log(`🔥 Pre-warming cache for ${symbolsToWarm.length} symbols...`);
+
+      // Generate screenshots in parallel (max 10 at once for speed)
+      const batchSize = 10;
+      for (let i = 0; i < symbolsToWarm.length; i += batchSize) {
+        const batch = symbolsToWarm.slice(i, i + batchSize);
         await Promise.all(
           batch.map(async (symbol) => {
             try {
@@ -67,29 +145,28 @@ class ScreenshotCacheService {
         );
       }
 
-      console.log(`✅ Cache pre-warming completed`);
+      console.log(`✅ Cache pre-warming completed for ${symbolsToWarm.length} symbols`);
     } finally {
       this.isWarming = false;
     }
   }
 
   /**
-   * Update popular symbols list
+   * Auto-refresh cache for active alert symbols
+   * Runs every 4 seconds (before 5s TTL expires)
    */
-  updatePopularSymbols(symbols) {
-    this.popularSymbols = symbols;
-    console.log(`📊 Updated popular symbols: ${symbols.join(", ")}`);
-  }
-
-  /**
-   * Auto-refresh cache for popular symbols
-   */
-  startAutoRefresh(intervalMs = 25000) {
-    // Refresh every 25s (before 30s TTL)
+  startAutoRefresh(intervalMs = 4000) {
+    console.log(`🚀 Starting auto-refresh every ${intervalMs}ms`);
+    
     setInterval(async () => {
-      if (this.popularSymbols.length > 0) {
-        console.log(`🔄 Auto-refreshing cache for popular symbols...`);
-        await this.prewarmCache(this.popularSymbols);
+      // Update active symbols list every minute
+      const symbols = await this.updateActiveSymbols();
+      
+      if (symbols.length > 0) {
+        console.log(`🔄 Auto-refreshing cache for ${symbols.length} active symbols...`);
+        await this.prewarmCache(symbols);
+      } else {
+        console.log(`⚠️ No active alerts, skipping cache refresh`);
       }
     }, intervalMs);
   }
@@ -99,11 +176,22 @@ class ScreenshotCacheService {
    */
   cleanup() {
     const now = Date.now();
+    
+    // Clean fresh cache (> 5s old)
     for (const [key, value] of this.cache.entries()) {
       if (now - value.timestamp > this.cacheTTL) {
         this.cache.delete(key);
       }
     }
+    
+    // Clean backup cache (> 30s old)
+    for (const [key, value] of this.backupCache.entries()) {
+      if (now - value.timestamp > this.backupTTL) {
+        this.backupCache.delete(key);
+      }
+    }
+    
+    console.log(`🧹 Cache cleanup: ${this.cache.size} fresh, ${this.backupCache.size} backup`);
   }
 
   /**
@@ -111,10 +199,15 @@ class ScreenshotCacheService {
    */
   getStats() {
     return {
-      size: this.cache.size,
-      keys: Array.from(this.cache.keys()),
+      freshCacheSize: this.cache.size,
+      backupCacheSize: this.backupCache.size,
+      freshKeys: Array.from(this.cache.keys()),
+      backupKeys: Array.from(this.backupCache.keys()),
       isWarming: this.isWarming,
-      popularSymbols: this.popularSymbols,
+      activeSymbols: this.activeSymbols,
+      activeSymbolsCount: this.activeSymbols.length,
+      cacheTTL: `${this.cacheTTL}ms`,
+      backupTTL: `${this.backupTTL}ms`,
     };
   }
 }
