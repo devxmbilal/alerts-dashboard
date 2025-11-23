@@ -251,12 +251,12 @@ redis.on("message", async (channel, message) => {
         return null;
       });
 
-      // Wait max 2 seconds for screenshot
+      // Wait max 5 seconds for screenshot (increased for slow coins)
       const timeoutPromise = new Promise(resolve => 
-        setTimeout(() => resolve(null), 2000)
+        setTimeout(() => resolve(null), 5000)
       );
 
-      // Race: screenshot vs 2s timeout
+      // Race: screenshot vs 5s timeout
       const chartScreenshot = await Promise.race([screenshotPromise, timeoutPromise]);
 
       // Send alert (with or without screenshot)
@@ -321,4 +321,18 @@ process.on("SIGTERM", () => {
   process.exit(0);
 });
 
-console.log("🚀 Notify worker started");
+// Start screenshot cache auto-refresh
+ScreenshotCacheService.startAutoRefresh(4000); // Refresh every 4 seconds
+console.log("✅ Screenshot cache auto-refresh started (4s interval)");
+
+// Initial cache warm-up
+ScreenshotCacheService.prewarmCache()
+  .then(() => console.log("✅ Initial cache warm-up completed"))
+  .catch(err => console.error("❌ Initial cache warm-up failed:", err.message));
+
+// Cleanup old cache entries every 30 seconds
+setInterval(() => {
+  ScreenshotCacheService.cleanup();
+}, 30000);
+
+console.log("🚀 Notify worker started with ultra-fast screenshot cache");

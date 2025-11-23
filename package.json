@@ -29,7 +29,10 @@
     "remove-cron": "node scripts/setup-cron-jobs.js remove",
     "microbatch-stats": "node scripts/microbatch-monitor.js stats",
     "microbatch-monitor": "node scripts/microbatch-monitor.js monitor",
-    "microbatch-reset": "node scripts/microbatch-monitor.js reset"
+    "microbatch-reset": "node scripts/microbatch-monitor.js reset",
+    "test-cache-speed": "node scripts/test-cache-speed.js",
+    "debug-screenshot": "node scripts/debug-screenshot.js",
+    "test-wlfi": "node scripts/test-wlfi-screenshot.js"
   },
   "dependencies": {
     "@emotion/react": "^11.11.0",

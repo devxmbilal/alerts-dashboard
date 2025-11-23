@@ -51,43 +51,16 @@ import { useSocket } from "../contexts/SocketContext";
 import { useFavorites } from "../contexts/FavoritesContext";
 
 // Custom styled components - exact same as client
-const CustomCheckbox = styled((props) => (
-  <Checkbox
-    {...props}
-    disableRipple
-    icon={
-      <span
-        style={{
-          width: 18,
-          height: 18,
-          borderRadius: 3,
-          backgroundcolor: "text.primary",
-          border: "1px solid rgba(255,255,255,0.3)",
-          display: "inline-block",
-        }}
-      />
-    }
-    checkedIcon={
-      <span
-        style={{
-          width: 21,
-          height: 21,
-          borderRadius: 3,
-          backgroundColor: "#1890ff",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <CheckIcon style={{ fontSize: 16, color: "text.primary" }} />
-      </span>
-    }
-  />
-))({});
+const CustomCheckbox = styled(Checkbox)(({ theme }) => ({
+  color: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)',
+  '&.Mui-checked': {
+    color: theme.palette.primary.main,
+  },
+}));
 
-const DarkAccordion = styled(Accordion)({
+const DarkAccordion = styled(Accordion)(({ theme }) => ({
   backgroundColor: "transparent",
-  color: "text.primary",
+  color: theme.palette.text.primary,
   boxShadow: "none",
   marginBottom: "2px",
   "&:before": {
@@ -98,7 +71,9 @@ const DarkAccordion = styled(Accordion)({
     padding: "0 8px",
     borderRadius: "3px",
     "&:hover": {
-      backgroundColor: "rgba(255, 255, 255, 0.04)",
+      backgroundColor: theme.palette.mode === 'dark' 
+        ? "rgba(255, 255, 255, 0.04)" 
+        : "rgba(0, 0, 0, 0.04)",
     },
   },
   "& .MuiAccordionSummary-content": {
@@ -110,24 +85,27 @@ const DarkAccordion = styled(Accordion)({
   "& .MuiAccordionDetails-root": {
     padding: "0 8px 8px",
   },
-});
+}));
 
 const CustomTextField = styled(TextField)(({ theme }) => ({
   "& .MuiOutlinedInput-root": {
-    backgroundColor: "#2a2a2a",
-    color: "text.primary",
+    backgroundColor: theme.palette.mode === 'dark' ? "#2a2a2a" : "#f5f5f5",
+    color: theme.palette.text.primary,
     "& fieldset": {
-      borderColor: "#444",
+      borderColor: theme.palette.mode === 'dark' ? "#444" : "#ccc",
     },
     "&:hover fieldset": {
-      borderColor: "#666",
+      borderColor: theme.palette.mode === 'dark' ? "#666" : "#999",
     },
     "&.Mui-focused fieldset": {
       borderColor: theme.palette.primary.main,
     },
   },
   "& .MuiInputLabel-root": {
-    color: "text.secondary",
+    color: theme.palette.text.secondary,
+  },
+  "& .MuiSelect-icon": {
+    color: theme.palette.text.primary,
   },
 }));
 
@@ -906,10 +884,10 @@ const FilterSidebar = forwardRef(
                         mb: 1,
                         fontSize: "12px",
                         textTransform: "none",
-                        borderColor: "#444",
-                        color: "text.primary",
+                        borderColor: theme.palette.mode === 'dark' ? "#444" : "#ccc",
+                        color: theme.palette.text.primary,
                         "&:hover": {
-                          borderColor: "#666",
+                          borderColor: theme.palette.mode === 'dark' ? "#666" : "#999",
                         },
                       }}
                     >
@@ -975,10 +953,10 @@ const FilterSidebar = forwardRef(
                         mb: 1,
                         fontSize: "12px",
                         textTransform: "none",
-                        borderColor: "#444",
-                        color: "text.primary",
+                        borderColor: theme.palette.mode === 'dark' ? "#444" : "#ccc",
+                        color: theme.palette.text.primary,
                         "&:hover": {
-                          borderColor: "#666",
+                          borderColor: theme.palette.mode === 'dark' ? "#666" : "#999",
                         },
                       }}
                     >
@@ -1067,15 +1045,16 @@ const FilterSidebar = forwardRef(
                       MenuProps: {
                         PaperProps: {
                           sx: {
-                            backgroundColor: "#1e1e1e",
-                            color: "text.primary",
+                            backgroundColor: theme.palette.mode === 'dark' ? "#1e1e1e" : "#fff",
+                            color: theme.palette.text.primary,
                             "& .MuiMenuItem-root": {
-                              color: "text.primary",
+                              color: theme.palette.text.primary,
                               "&:hover": {
-                                backgroundColor: "#333",
+                                backgroundColor: theme.palette.mode === 'dark' ? "#333" : "#f5f5f5",
                               },
                               "&.Mui-selected": {
-                                backgroundColor: "#1890ff",
+                                backgroundColor: theme.palette.primary.main,
+                                color: "#fff",
                               },
                             },
                           },

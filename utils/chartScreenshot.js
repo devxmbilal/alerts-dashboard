@@ -283,7 +283,18 @@ class ChartScreenshotService {
       const binanceInterval = intervalMap[interval.toLowerCase()] || "5m";
 
       const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`;
-      const res = await axios.get(url, { timeout: 10000 });
+      
+      // Increased timeout to 30 seconds for slow/new coins
+      const res = await axios.get(url, { 
+        timeout: 30000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+
+      if (!res.data || res.data.length === 0) {
+        throw new Error(`No candle data available for ${symbol}`);
+      }
 
       return res.data.map((c) => ({
         openTime: c[0],
@@ -463,11 +474,14 @@ class ChartScreenshotService {
       try {
         res = await axios.get(url, {
           responseType: "arraybuffer",
-          timeout: this.quickChartTimeout,
+          timeout: 30000, // Increased to 30s
           validateStatus: (status) => {
             // Accept 200-299 and also check if response is valid PNG
             return status >= 200 && status < 300;
           },
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
         });
       } catch (getError) {
         // If GET fails, try POST method (for large configs)
@@ -494,9 +508,10 @@ class ChartScreenshotService {
             { config: chartConfig },
             {
               responseType: "arraybuffer",
-              timeout: this.quickChartTimeout,
+              timeout: 30000, // Increased to 30s
               headers: {
                 "Content-Type": "application/json",
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
               },
             }
           );
