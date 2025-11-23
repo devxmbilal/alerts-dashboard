@@ -818,7 +818,7 @@ const FilterSidebar = forwardRef(
               {/* Timeframe checkboxes */}
               <Grid container spacing={1} sx={{ mb: 2 }}>
                 {rsiTimeframeOptions.map((option) => (
-                  <Grid item xs={2} key={option.value}>
+                  <Grid item xs={4} key={option.value}>
                     <FormControlLabel
                       control={
                         <CustomCheckbox
@@ -841,7 +841,7 @@ const FilterSidebar = forwardRef(
               </Grid>
 
               {/* Input fields */}
-              <Grid container spacing={2} sx={{ mb: 2 }}>
+              <Grid container spacing={1} sx={{ mb: 2 }}>
                 <Grid item xs={6}>
                   <CustomTextField
                     fullWidth
@@ -866,36 +866,25 @@ const FilterSidebar = forwardRef(
                 </Grid>
               </Grid>
 
-              {/* Condition buttons */}
-              <Grid container spacing={1}>
+              {/* Condition dropdown */}
+              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+                Condition:
+              </Typography>
+              <CustomTextField
+                select
+                fullWidth
+                size="small"
+                value={filters.rsiRange.condition || "ABOVE"}
+                onChange={(e) =>
+                  handleInputChange("rsiRange", "condition", e.target.value)
+                }
+              >
                 {rsiConditionOptions.map((option) => (
-                  <Grid item xs={6} key={option.value}>
-                    <Button
-                      fullWidth
-                      variant={
-                        filters.rsiRange.condition === option.value
-                          ? "contained"
-                          : "outlined"
-                      }
-                      onClick={() =>
-                        handleInputChange("rsiRange", "condition", option.value)
-                      }
-                      sx={{
-                        mb: 1,
-                        fontSize: "12px",
-                        textTransform: "none",
-                        borderColor: theme.palette.mode === 'dark' ? "#444" : "#ccc",
-                        color: theme.palette.text.primary,
-                        "&:hover": {
-                          borderColor: theme.palette.mode === 'dark' ? "#666" : "#999",
-                        },
-                      }}
-                    >
-                      {option.label}
-                    </Button>
-                  </Grid>
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuItem>
                 ))}
-              </Grid>
+              </CustomTextField>
             </AccordionDetails>
           </DarkAccordion>
 
@@ -913,7 +902,7 @@ const FilterSidebar = forwardRef(
               {/* Timeframe checkboxes */}
               <Grid container spacing={1} sx={{ mb: 2 }}>
                 {volumeTimeframeOptions.map((option) => (
-                  <Grid item xs={2.4} key={option.value}>
+                  <Grid item xs={4} key={option.value}>
                     <FormControlLabel
                       control={
                         <CustomCheckbox
@@ -935,36 +924,26 @@ const FilterSidebar = forwardRef(
                 ))}
               </Grid>
 
-              {/* Condition buttons */}
-              <Grid container spacing={1} sx={{ mb: 2 }}>
+              {/* Condition dropdown */}
+              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+                Condition:
+              </Typography>
+              <CustomTextField
+                select
+                fullWidth
+                size="small"
+                value={filters.volume.condition || "INCREASING"}
+                onChange={(e) =>
+                  handleInputChange("volume", "condition", e.target.value)
+                }
+                sx={{ mb: 2 }}
+              >
                 {volumeConditionOptions.map((option) => (
-                  <Grid item xs={6} key={option.value}>
-                    <Button
-                      fullWidth
-                      variant={
-                        filters.volume.condition === option.value
-                          ? "contained"
-                          : "outlined"
-                      }
-                      onClick={() =>
-                        handleInputChange("volume", "condition", option.value)
-                      }
-                      sx={{
-                        mb: 1,
-                        fontSize: "12px",
-                        textTransform: "none",
-                        borderColor: theme.palette.mode === 'dark' ? "#444" : "#ccc",
-                        color: theme.palette.text.primary,
-                        "&:hover": {
-                          borderColor: theme.palette.mode === 'dark' ? "#666" : "#999",
-                        },
-                      }}
-                    >
-                      {option.label}
-                    </Button>
-                  </Grid>
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuItem>
                 ))}
-              </Grid>
+              </CustomTextField>
 
               {/* Percentage input */}
               <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
