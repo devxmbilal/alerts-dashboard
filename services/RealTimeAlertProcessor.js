@@ -761,7 +761,7 @@ class RealTimeAlertProcessor {
           const priceData = {
             price: parseFloat(ticker.c),
             change: parseFloat(ticker.P),
-            volume: parseFloat(ticker.v),
+            volume: parseFloat(ticker.q), // USDT volume (quote volume)
             volume24h: parseFloat(ticker.q),
             high: parseFloat(ticker.h),
             low: parseFloat(ticker.l),
@@ -1619,8 +1619,8 @@ class RealTimeAlertProcessor {
             if (ticker) {
               livePrices[symbol] = {
                 price: parseFloat(ticker.lastPrice),
-                volume: parseFloat(ticker.volume),
-                volume24h: parseFloat(ticker.volume),
+                volume: parseFloat(ticker.quoteVolume), // USDT volume
+                volume24h: parseFloat(ticker.quoteVolume),
                 priceChange: parseFloat(ticker.priceChange),
                 priceChangePercent: parseFloat(ticker.priceChangePercent),
                 high: parseFloat(ticker.highPrice),
@@ -2599,98 +2599,58 @@ class RealTimeAlertProcessor {
 
   // Technical analysis helper methods
   async evaluateCandleConditions(candleConditions, priceData, symbol = null) {
-    // Get current live price for timeframe confirmation
-    const currentPrice = priceData.price || priceData.close;
-    const { open, high, low, close } = priceData;
-
-    // Validate OHLC data
-    if (!open || !high || !low || !close) {
-      console.log("⚠️ Missing OHLC data for candle evaluation");
-      return true; // Skip if data missing
-    }
-
+    const currentPrice = parseFloat(priceData.price || priceData.close);
     const condition = candleConditions.condition;
     const timeframes = candleConditions.timeframes || [];
-    const range = high - low;
+    const EPSILON = 1.0001; // 0.01% epsilon to avoid float equality issues
+    const CANDLE_START_BUFFER_MS = 2000; // Wait 2s after candle starts
 
-    console.log(`🕯️ Candle Evaluation: ${condition}`);
-    console.log(`   OHLC: O=${open}, H=${high}, L=${low}, C=${close}`);
-    console.log(`   Range: ${range.toFixed(6)} (High ${high} - Low ${low})`);
+    console.log(`🕯️ Candle Evaluation: ${condition}, Live Price: ${currentPrice}`);
 
     switch (condition) {
       case "CANDLE_ABOVE_OPEN":
-        // Bullish candle: Close > Open
-        // For multiple timeframes: ALL selected timeframes must have Close > Open
-        let allTimeframesAboveOpen = true;
+        if (timeframes.length === 0 || !symbol) {
+          console.log(`⚠️ No timeframes selected for candle condition`);
+          return false;
+        }
 
-        if (timeframes.length > 0 && symbol) {
-          // Check ALL selected timeframes - ALL must pass
-          let verifiedTimeframes = 0;
-          for (const timeframe of timeframes) {
-            let candle = this.getCandleData(symbol, timeframe);
-
-            // If candle data is missing or null, fetch from Binance API
-            if (!candle || candle.open === null || candle.close === null) {
-              console.log(
-                `   ⚠️ Timeframe ${timeframe}: Local candle data missing, fetching from Binance...`
-              );
-              const binanceCandle = await this.fetchCandleFromBinance(
-                symbol,
-                timeframe
-              );
-              if (binanceCandle) {
-                // Update local candle data with Binance data
-                candle = this.getCandleData(symbol, timeframe);
-                candle.open = binanceCandle.open;
-                candle.high = binanceCandle.high;
-                candle.low = binanceCandle.low;
-                candle.close = binanceCandle.close;
-                candle.volume = binanceCandle.volume;
-                candle.startTime = binanceCandle.startTime;
-                candle.endTime = binanceCandle.endTime;
-                candle.isComplete = binanceCandle.isComplete;
-                console.log(
-                  `   ✅ Fetched candle from Binance for ${timeframe}: O=${candle.open}, C=${candle.close}`
-                );
-              }
-            }
-
-            if (candle && candle.open !== null && candle.close !== null) {
-              const tfAboveOpen = candle.close > candle.open;
-              verifiedTimeframes++;
-              console.log(
-                `   Timeframe ${timeframe}: Close ${candle.close} > Open ${candle.open}? ${tfAboveOpen}`
-              );
-              if (!tfAboveOpen) {
-                allTimeframesAboveOpen = false;
-                console.log(
-                  `   ❌ Timeframe ${timeframe} FAILED: Close ${candle.close} <= Open ${candle.open}`
-                );
-                break; // One timeframe failed, condition invalid
-              }
-            } else {
-              console.log(
-                `   ⚠️ Timeframe ${timeframe}: Missing candle data (open/close), cannot verify`
-              );
-              // If candle data is missing for a required timeframe, we can't verify
-              // This means the condition cannot be confirmed, so fail it
-              allTimeframesAboveOpen = false;
-              break;
-            }
+        console.log(`🔍 Checking ${timeframes.length} timeframes (AND condition - ALL must pass)`);
+        
+        const now = Date.now();
+        for (const timeframe of timeframes) {
+          // Fetch CURRENT candle from Binance (most reliable)
+          const binanceCandle = await this.fetchCurrentCandleFromBinance(symbol, timeframe);
+          
+          if (!binanceCandle || !binanceCandle.open) {
+            console.log(`❌ [${timeframe}] Failed to fetch current candle data`);
+            return false; // Cannot verify - fail safe
           }
 
-          console.log(
-            `   Candle Above Open check (multi-timeframe): ${allTimeframesAboveOpen} (${verifiedTimeframes}/${timeframes.length} timeframes verified, ALL must pass)`
-          );
-          return allTimeframesAboveOpen;
-        } else {
-          // Fallback: use current priceData if no timeframes specified
-          const isAboveOpen = close > open;
-          console.log(
-            `   Candle Above Open check: ${isAboveOpen} (Close ${close} > Open ${open})`
-          );
-          return isAboveOpen;
+          const candleStartTime = binanceCandle.startTime;
+          const openPrice = parseFloat(binanceCandle.open);
+          const timeSinceCandleStart = now - candleStartTime;
+
+          // Safety: Skip if we're too close to candle boundary (avoid stale data)
+          if (timeSinceCandleStart < CANDLE_START_BUFFER_MS) {
+            console.log(`⏳ [${timeframe}] Too close to candle start (${timeSinceCandleStart}ms), skipping`);
+            return false;
+          }
+
+          // Apply epsilon: currentPrice must be > openPrice * 1.0001
+          const priceAboveOpen = currentPrice > (openPrice * EPSILON);
+          
+          console.log(`📊 [${timeframe}] Start: ${new Date(candleStartTime).toISOString()}, Open: ${openPrice}, Current: ${currentPrice}, Above: ${priceAboveOpen}`);
+
+          if (!priceAboveOpen) {
+            console.log(`❌ [${timeframe}] FAILED: ${currentPrice} <= ${openPrice * EPSILON}`);
+            return false; // One timeframe failed - no alert
+          }
+          
+          console.log(`✅ [${timeframe}] PASSED: ${currentPrice} > ${openPrice * EPSILON}`);
         }
+
+        console.log(`🎉 ALL ${timeframes.length} timeframes PASSED - Alert condition met`);
+        return true;
 
       case "HAMMER":
         // Hammer: Bullish reversal pattern
@@ -3876,8 +3836,8 @@ class RealTimeAlertProcessor {
     }
   }
 
-  // Fetch latest candle from Binance API for accurate OHLC data
-  async fetchCandleFromBinance(symbol, timeframe) {
+  // Fetch CURRENT candle from Binance API (most reliable source)
+  async fetchCurrentCandleFromBinance(symbol, timeframe) {
     try {
       const binanceInterval = this.getBinanceInterval(timeframe);
       const response = await fetch(
@@ -3885,34 +3845,44 @@ class RealTimeAlertProcessor {
       );
 
       if (!response.ok) {
-        console.warn(
-          `⚠️ Failed to fetch candle from Binance for ${symbol} ${timeframe}: ${response.status}`
-        );
+        console.warn(`⚠️ Binance API error for ${symbol} ${timeframe}: ${response.status}`);
         return null;
       }
 
       const klines = await response.json();
       if (klines && klines.length > 0) {
-        const kline = klines[klines.length - 1]; // Get latest candle
+        const kline = klines[0]; // Current candle
+        const candleStartTime = parseInt(kline[0]);
+        const timeframeMs = this.getTimeframeMs(timeframe);
+        const expectedStartTime = Math.floor(Date.now() / timeframeMs) * timeframeMs;
+        
+        // Verify this is the CURRENT candle (not stale)
+        if (Math.abs(candleStartTime - expectedStartTime) > 5000) {
+          console.warn(`⚠️ Stale candle detected for ${symbol} ${timeframe}`);
+          return null;
+        }
+
         return {
           open: parseFloat(kline[1]),
           high: parseFloat(kline[2]),
           low: parseFloat(kline[3]),
           close: parseFloat(kline[4]),
           volume: parseFloat(kline[5]),
-          startTime: kline[0],
-          endTime: kline[6],
-          isComplete: true, // Binance returns completed candles
+          startTime: candleStartTime,
+          endTime: parseInt(kline[6]),
+          isComplete: false, // Current candle is forming
         };
       }
       return null;
     } catch (error) {
-      console.warn(
-        `⚠️ Error fetching candle from Binance for ${symbol} ${timeframe}:`,
-        error.message
-      );
+      console.warn(`⚠️ Error fetching candle for ${symbol} ${timeframe}:`, error.message);
       return null;
     }
+  }
+
+  // Legacy method - kept for backward compatibility
+  async fetchCandleFromBinance(symbol, timeframe) {
+    return this.fetchCurrentCandleFromBinance(symbol, timeframe);
   }
 
   // Get or create candle data for a symbol and timeframe
