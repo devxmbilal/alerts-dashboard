@@ -46,6 +46,12 @@ class RealTimeAlertProcessor {
     this.dbQueueClient = null; // Redis client for database queue operations
     this.dbQueueStreamName = "db:operations:queue"; // Redis Stream name for DB operations
     this.heartbeatInterval = null; // Heartbeat interval for health monitoring
+    
+    // 🛡️ RSI RATE LIMITER - Fix for 418 Error
+    this.rsiQueue = []; // Queue for RSI calculation requests
+    this.isProcessingRsiQueue = false; // Queue processing state
+    this.apiBanUntil = 0; // API ban timestamp
+    this.rsiHistory = new Map(); // RSI history cache for local calculation
   }
 
   // Get or create Redis publisher connection (reused for performance)
@@ -904,13 +910,31 @@ class RealTimeAlertProcessor {
 
           // Update baseline to current live price
           alert.baselinePrice = liveData.price;
-          alert.baselineVolume = liveData.volume || liveData.volume24h;
           alert.baselineTimestamp = new Date();
+          
+          // Update baseline volume based on smallest volume timeframe (if volume condition exists)
+          let updatedVolume = liveData.volume || liveData.volume24h;
+          if (alert.conditions?.volume?.timeframes?.length > 0) {
+            const volumeTimeframes = alert.conditions.volume.timeframes;
+            const smallestTimeframe = volumeTimeframes.reduce((min, tf) => {
+              const minMs = this.getTimeframeMs(min);
+              const tfMs = this.getTimeframeMs(tf);
+              return tfMs < minMs ? tf : min;
+            });
+            const smallestTimeframeMs = this.getTimeframeMs(smallestTimeframe);
+            
+            if (timeSinceBaseline >= smallestTimeframeMs) {
+              alert.baselineVolume = updatedVolume;
+              console.log(`📊 Volume baseline updated (${smallestTimeframe}): ${alert.baselineVolume}`);
+            }
+          } else {
+            alert.baselineVolume = updatedVolume;
+          }
 
           // Update in database (non-blocking)
           Alert.findByIdAndUpdate(alert._id, {
             baselinePrice: liveData.price,
-            baselineVolume: liveData.volume || liveData.volume24h,
+            baselineVolume: alert.baselineVolume,
             baselineTimestamp: new Date(),
           }).catch((error) => {
             console.error(
@@ -1740,8 +1764,26 @@ class RealTimeAlertProcessor {
 
           // Update baseline to current live price
           alert.baselinePrice = priceData.price;
-          alert.baselineVolume = priceData.volume || priceData.volume24h;
           alert.baselineTimestamp = new Date();
+          
+          // Update baseline volume based on smallest volume timeframe (if volume condition exists)
+          if (alert.conditions?.volume?.timeframes?.length > 0) {
+            const volumeTimeframes = alert.conditions.volume.timeframes;
+            const smallestTimeframe = volumeTimeframes.reduce((min, tf) => {
+              const minMs = this.getTimeframeMs(min);
+              const tfMs = this.getTimeframeMs(tf);
+              return tfMs < minMs ? tf : min;
+            });
+            const smallestTimeframeMs = this.getTimeframeMs(smallestTimeframe);
+            
+            if (timeSinceBaseline >= smallestTimeframeMs) {
+              alert.baselineVolume = priceData.volume || priceData.volume24h;
+              console.log(`📊 Volume baseline updated (${smallestTimeframe}): ${alert.baselineVolume}`);
+            }
+          } else {
+            // No volume condition - update normally
+            alert.baselineVolume = priceData.volume || priceData.volume24h;
+          }
 
           // OPTIMIZATION: Queue baseline update to Redis Stream (non-blocking)
           await this.enqueueDbOperation({
@@ -2402,93 +2444,171 @@ class RealTimeAlertProcessor {
     }
   }
 
-  // Calculate RSI from Binance klines data
+  // 🛡️ SAFE RSI CALCULATION - Queue System to Prevent 418 Ban
   async calculateRSI(symbol, timeframe, period = 14) {
-    try {
-      const binanceInterval = this.getBinanceInterval(timeframe);
-      // Fetch enough candles for RSI calculation (period + 1 for safety)
-      const limit = period + 5;
-
-      const response = await fetch(
-        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`
-      );
-
-      if (!response.ok) {
-        console.warn(
-          `⚠️ Failed to fetch klines for RSI calculation: ${response.status}`
-        );
-        return null;
-      }
-
-      const klines = await response.json();
-
-      if (klines.length < period + 1) {
-        console.warn(
-          `⚠️ Not enough data for RSI calculation: need ${period + 1}, got ${
-            klines.length
-          }`
-        );
-        return null;
-      }
-
-      // Extract close prices
-      const closes = klines.map((kline) => parseFloat(kline[4]));
-
-      // Calculate price changes
-      const changes = [];
-      for (let i = 1; i < closes.length; i++) {
-        changes.push(closes[i] - closes[i - 1]);
-      }
-
-      // Separate gains and losses
-      const gains = changes.map((change) => (change > 0 ? change : 0));
-      const losses = changes.map((change) =>
-        change < 0 ? Math.abs(change) : 0
-      );
-
-      // Calculate initial average gain and loss (first period)
-      let avgGain = 0;
-      let avgLoss = 0;
-
-      for (let i = 0; i < period; i++) {
-        avgGain += gains[i];
-        avgLoss += losses[i];
-      }
-
-      avgGain = avgGain / period;
-      avgLoss = avgLoss / period;
-
-      // Calculate RSI using Wilder's smoothing method
-      for (let i = period; i < changes.length; i++) {
-        avgGain = (avgGain * (period - 1) + gains[i]) / period;
-        avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
-      }
-
-      // Avoid division by zero
-      if (avgLoss === 0) {
-        return avgGain > 0 ? 100 : 50;
-      }
-
-      const rs = avgGain / avgLoss;
-      const rsi = 100 - 100 / (1 + rs);
-
-      console.log(
-        `📈 RSI calculated for ${symbol} (${timeframe}): ${rsi.toFixed(
-          2
-        )} (Period: ${period})`
-      );
-
-      return rsi;
-    } catch (error) {
-      console.error(
-        `❌ Error calculating RSI for ${symbol} (${timeframe}):`,
-        error.message
-      );
+    const key = `${symbol}_${timeframe}`;
+    
+    // 1. Check if we have history for local calculation
+    let closes = this.rsiHistory.get(key);
+    
+    if (!closes || closes.length < period + 1) {
+      // Data missing -> Queue background fetch
+      this.queueRsiHistoryFetch(symbol, timeframe, period);
+      // Return null immediately (alert will miss this tick, but system stays safe)
       return null;
     }
+    
+    // 2. Add current live price for real-time RSI
+    const livePrice = this.livePrices[symbol]?.price;
+    let calculationCloses = [...closes];
+    
+    if (livePrice) {
+      calculationCloses.push(livePrice);
+    }
+    
+    // 3. Calculate RSI locally (no API call)
+    return this.computeRSILocally(calculationCloses, period);
+  }
+  
+  // Queue RSI history fetch (prevents multiple simultaneous API calls)
+  queueRsiHistoryFetch(symbol, timeframe, period) {
+    const key = `${symbol}_${timeframe}`;
+    
+    // Check if already queued
+    const exists = this.rsiQueue.some(item => item.key === key);
+    if (exists) return;
+    
+    // Add to queue
+    this.rsiQueue.push({ symbol, timeframe, period, key });
+    
+    // Start processing if not already running
+    this.processRsiQueue();
+  }
+  
+  // Process RSI queue with rate limiting
+  async processRsiQueue() {
+    if (this.isProcessingRsiQueue) return;
+    this.isProcessingRsiQueue = true;
+    
+    console.log(`🔄 RSI Queue Started: ${this.rsiQueue.length} items pending...`);
+    
+    while (this.rsiQueue.length > 0) {
+      // 1. Check for API ban
+      if (Date.now() < this.apiBanUntil) {
+        const waitTime = Math.ceil((this.apiBanUntil - Date.now()) / 1000);
+        if (waitTime % 10 === 0) {
+          console.log(`⛔ API Paused due to 418 Error. Resuming in ${waitTime}s...`);
+        }
+        await this.delay(2000);
+        continue;
+      }
+      
+      // 2. Get next item
+      const task = this.rsiQueue[0];
+      
+      try {
+        await this.fetchAndStoreRsiHistory(task.symbol, task.timeframe, task.period);
+        
+        // Success: Remove from queue
+        this.rsiQueue.shift();
+        
+        // 🛑 SLOW DOWN: 500ms delay between requests (Safe Limit)
+        await this.delay(500);
+        
+      } catch (error) {
+        if (error.status === 418 || error.status === 429) {
+          console.error(`🚨 418/429 ERROR DETECTED! Pausing queue for 2 minutes.`);
+          this.apiBanUntil = Date.now() + 120 * 1000; // 2 Minutes Ban
+        } else {
+          // Other error: Remove task and log
+          console.error(`Failed to fetch RSI for ${task.symbol}: ${error.message}`);
+          this.rsiQueue.shift();
+        }
+      }
+    }
+    
+    this.isProcessingRsiQueue = false;
+    console.log("✅ RSI Queue Processed.");
+  }
+  
+  // Fetch RSI history from Binance API (actual API call)
+  async fetchAndStoreRsiHistory(symbol, timeframe, period) {
+    const binanceInterval = this.getBinanceInterval(timeframe);
+    const limit = period + 10; // Extra buffer
+    
+    const response = await fetch(
+      `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`
+    );
+    
+    if (response.status === 418 || response.status === 429) {
+      const err = new Error("Rate Limit");
+      err.status = response.status;
+      throw err;
+    }
+    
+    if (!response.ok) {
+      throw new Error(`API Error ${response.status}`);
+    }
+    
+    const klines = await response.json();
+    const closes = klines.map(k => parseFloat(k[4]));
+    
+    // Store in history cache
+    const key = `${symbol}_${timeframe}`;
+    this.rsiHistory.set(key, closes);
+    
+    console.log(`📥 RSI History loaded for ${symbol} ${timeframe}: ${closes.length} candles`);
+  }
+  
+  // Local RSI calculation (no API calls)
+  computeRSILocally(closes, period) {
+    if (closes.length < period + 1) return null;
+    
+    // Calculate price changes
+    const changes = [];
+    for (let i = 1; i < closes.length; i++) {
+      changes.push(closes[i] - closes[i - 1]);
+    }
+    
+    // Separate gains and losses
+    const gains = changes.map((change) => (change > 0 ? change : 0));
+    const losses = changes.map((change) => (change < 0 ? Math.abs(change) : 0));
+    
+    // Calculate initial average gain and loss
+    let avgGain = 0;
+    let avgLoss = 0;
+    
+    for (let i = 0; i < period; i++) {
+      avgGain += gains[i];
+      avgLoss += losses[i];
+    }
+    
+    avgGain = avgGain / period;
+    avgLoss = avgLoss / period;
+    
+    // Calculate RSI using Wilder's smoothing method
+    for (let i = period; i < changes.length; i++) {
+      avgGain = (avgGain * (period - 1) + gains[i]) / period;
+      avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+    }
+    
+    // Avoid division by zero
+    if (avgLoss === 0) {
+      return avgGain > 0 ? 100 : 50;
+    }
+    
+    const rs = avgGain / avgLoss;
+    const rsi = 100 - 100 / (1 + rs);
+    
+    return rsi;
+  }
+  
+  // Helper: Delay function
+  delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  // Get RSI value for a symbol and timeframe (OPTIMIZED with Redis + In-Memory cache)
+  // 🛡️ SAFE RSI GETTER - Uses Queue System to Prevent 418 Ban
   async getRSI(symbol, timeframe, period = 14) {
     const key = `${symbol}_${timeframe}_${period}`;
     const now = Date.now();
@@ -2531,7 +2651,7 @@ class RealTimeAlertProcessor {
       // Return stale data immediately (non-blocking)
       const staleData = inMemoryCache;
 
-      // Update cache in background (non-blocking)
+      // 🛡️ SAFE UPDATE: Use queue system instead of direct API call
       this.calculateRSI(symbol, timeframe, period)
         .then((rsiValue) => {
           if (rsiValue !== null) {
@@ -2565,7 +2685,7 @@ class RealTimeAlertProcessor {
       return staleData;
     }
 
-    // OPTIMIZATION 4: Only calculate if no cache exists (first time)
+    // OPTIMIZATION 4: 🛡️ SAFE FIRST-TIME CALCULATION - Use queue system
     const rsiValue = await this.calculateRSI(symbol, timeframe, period);
 
     if (rsiValue !== null) {
@@ -2987,163 +3107,49 @@ class RealTimeAlertProcessor {
       }`
     );
 
-    // If timeframes are specified, check ALL timeframes
-    if (timeframes && timeframes.length > 0 && symbol) {
-      let allTimeframesPassed = true;
-      let verifiedTimeframes = 0;
+    // Timeframes only for baseline update (like changePercent)
+    // Condition check: current volume vs baseline volume
+    const currentVolume = parseFloat(priceData.volume || priceData.volume24h) || 0;
+    const baselineVolume = alert ? parseFloat(alert.baselineVolume) || 0 : 0;
 
-      for (const timeframe of timeframes) {
-        console.log(`   Checking timeframe: ${timeframe}`);
+    if (currentVolume === 0 || baselineVolume === 0) {
+      console.log("⚠️ Volume data missing, skipping condition");
+      return true;
+    }
 
-        // Get candle data for this timeframe to get volume
-        let candle = this.getCandleData(symbol, timeframe);
+    console.log(`   Current: ${currentVolume.toLocaleString()}, Baseline: ${baselineVolume.toLocaleString()}`);
 
-        // If candle data is missing, fetch from Binance
-        if (!candle || candle.volume === null || candle.volume === 0) {
-          console.log(
-            `   ⚠️ Timeframe ${timeframe}: Candle volume data missing, fetching from Binance...`
-          );
-          const binanceCandle = await this.fetchCandleFromBinance(
-            symbol,
-            timeframe
-          );
-          if (binanceCandle) {
-            candle = this.getCandleData(symbol, timeframe);
-            candle.volume = binanceCandle.volume;
-            candle.open = binanceCandle.open;
-            candle.close = binanceCandle.close;
-            console.log(
-              `   ✅ Fetched candle volume from Binance for ${timeframe}: ${binanceCandle.volume.toLocaleString()}`
-            );
-          }
-        }
+    switch (condition) {
+      case "INCREASING":
+        const volumeChangeInc = ((currentVolume - baselineVolume) / baselineVolume) * 100;
+        const passedInc = volumeChangeInc >= requiredPercentage;
+        console.log(`   INCREASING: ${volumeChangeInc.toFixed(2)}% >= ${requiredPercentage}%? ${passedInc ? '✅' : '❌'}`);
+        return passedInc;
 
-        if (!candle || !candle.volume || candle.volume === 0) {
-          console.log(
-            `   ⚠️ Timeframe ${timeframe}: Volume data not available, cannot verify`
-          );
-          allTimeframesPassed = false;
-          break;
-        }
+      case "DECREASING":
+        const volumeChangeDec = ((currentVolume - baselineVolume) / baselineVolume) * 100;
+        const passedDec = volumeChangeDec <= -requiredPercentage;
+        console.log(`   DECREASING: ${volumeChangeDec.toFixed(2)}% <= -${requiredPercentage}%? ${passedDec ? '✅' : '❌'}`);
+        return passedDec;
 
-        const currentVolume = candle.volume;
-        const baselineVolume = alert ? alert.baselineVolume || 0 : 0;
-        verifiedTimeframes++;
+      case "ABOVE":
+        const passedAbove = currentVolume > requiredPercentage;
+        console.log(`   ABOVE: ${currentVolume.toLocaleString()} > ${requiredPercentage.toLocaleString()}? ${passedAbove ? '✅' : '❌'}`);
+        return passedAbove;
 
-        console.log(
-          `   Timeframe ${timeframe}: Current Volume=${currentVolume.toLocaleString()}, Baseline Volume=${baselineVolume.toLocaleString()}`
-        );
+      case "BELOW":
+        const passedBelow = currentVolume < requiredPercentage;
+        console.log(`   BELOW: ${currentVolume.toLocaleString()} < ${requiredPercentage.toLocaleString()}? ${passedBelow ? '✅' : '❌'}`);
+        return passedBelow;
 
-        let timeframePassed = false;
-
-        switch (condition) {
-          case "INCREASING":
-            if (baselineVolume > 0) {
-              const volumeChange =
-                ((currentVolume - baselineVolume) / baselineVolume) * 100;
-              timeframePassed = volumeChange >= requiredPercentage;
-              console.log(
-                `   Timeframe ${timeframe}: Volume INCREASING check - Change ${volumeChange.toFixed(
-                  2
-                )}% >= ${requiredPercentage}%? ${timeframePassed}`
-              );
-            } else {
-              console.log(
-                `   ⚠️ Timeframe ${timeframe}: No baseline volume, skipping INCREASING check`
-              );
-              timeframePassed = true; // Skip if no baseline
-            }
-            break;
-
-          case "DECREASING":
-            if (baselineVolume > 0) {
-              const volumeChange =
-                ((currentVolume - baselineVolume) / baselineVolume) * 100;
-              timeframePassed = volumeChange <= -requiredPercentage;
-              console.log(
-                `   Timeframe ${timeframe}: Volume DECREASING check - Change ${volumeChange.toFixed(
-                  2
-                )}% <= -${requiredPercentage}%? ${timeframePassed}`
-              );
-            } else {
-              console.log(
-                `   ⚠️ Timeframe ${timeframe}: No baseline volume, skipping DECREASING check`
-              );
-              timeframePassed = true; // Skip if no baseline
-            }
-            break;
-
-          case "ABOVE":
-            timeframePassed = currentVolume > requiredPercentage;
-            console.log(
-              `   Timeframe ${timeframe}: Volume ABOVE check - ${currentVolume.toLocaleString()} > ${requiredPercentage.toLocaleString()}? ${timeframePassed}`
-            );
-            break;
-
-          case "BELOW":
-            timeframePassed = currentVolume < requiredPercentage;
-            console.log(
-              `   Timeframe ${timeframe}: Volume BELOW check - ${currentVolume.toLocaleString()} < ${requiredPercentage.toLocaleString()}? ${timeframePassed}`
-            );
-            break;
-
-          default:
-            console.log(`   Unknown volume condition: ${condition}`);
-            timeframePassed = false;
-        }
-
-        if (!timeframePassed) {
-          allTimeframesPassed = false;
-          console.log(
-            `   ❌ Timeframe ${timeframe} FAILED: Volume condition ${condition} not met`
-          );
-          break; // One timeframe failed, condition invalid
-        } else {
-          console.log(
-            `   ✅ Timeframe ${timeframe} PASSED: Volume condition ${condition} met`
-          );
-        }
-      }
-
-      console.log(
-        `   Volume check (multi-timeframe): ${allTimeframesPassed} (${verifiedTimeframes}/${timeframes.length} timeframes verified, ALL must pass)`
-      );
-      return allTimeframesPassed;
-    } else {
-      // Fallback: use single volume check if no timeframes specified
-      const currentVolume =
-        parseFloat(priceData.volume || priceData.volume24h) || 0;
-
-      if (currentVolume === 0) {
-        console.log("⚠️ Volume data missing, skipping volume condition");
+      default:
+        console.log(`   Unknown condition: ${condition}`);
         return true;
-      }
-
-      console.log(`   Current Volume: ${currentVolume.toLocaleString()}`);
-
-      switch (condition) {
-        case "ABOVE":
-          const isAbove = currentVolume > requiredPercentage;
-          console.log(
-            `   Above check: ${currentVolume.toLocaleString()} > ${requiredPercentage.toLocaleString()}? ${isAbove}`
-          );
-          return isAbove;
-
-        case "BELOW":
-          const isBelow = currentVolume < requiredPercentage;
-          console.log(
-            `   Below check: ${currentVolume.toLocaleString()} < ${requiredPercentage.toLocaleString()}? ${isBelow}`
-          );
-          return isBelow;
-
-        default:
-          console.log(
-            `   ⚠️ No timeframes specified, using fallback calculation`
-          );
-          return true; // Skip if no timeframes
-      }
     }
   }
+
+
+
 
   // Fetch Open Interest from Binance Futures API
   async fetchOpenInterest(symbol) {
@@ -4293,6 +4299,13 @@ class RealTimeAlertProcessor {
         await this.sendProcessorStats();
         break;
         
+      case "reset_rsi_ban":
+        console.log("🛡️ Resetting RSI API ban...");
+        this.apiBanUntil = 0;
+        this.rsiQueue = [];
+        console.log("✅ RSI ban reset, queue cleared");
+        break;
+        
       case "get_microbatch_stats":
         console.log("📊 Sending micro-batch stats...");
         await this.sendMicroBatchStats();
@@ -4308,6 +4321,18 @@ class RealTimeAlertProcessor {
       default:
         console.log("❓ Unknown system control command:", data.command);
     }
+  }
+  
+  // 🛡️ Get RSI Queue Status
+  getRsiQueueStatus() {
+    return {
+      queueLength: this.rsiQueue.length,
+      isProcessing: this.isProcessingRsiQueue,
+      isApiBanned: Date.now() < this.apiBanUntil,
+      banTimeRemaining: Math.max(0, this.apiBanUntil - Date.now()),
+      historySize: this.rsiHistory.size,
+      nextBanReset: this.apiBanUntil > 0 ? new Date(this.apiBanUntil).toISOString() : null
+    };
   }
 
   // Emergency cleanup for memory issues
@@ -4330,6 +4355,11 @@ class RealTimeAlertProcessor {
 
       // Clear old RSI data
       this.rsiData.clear();
+      
+      // 🛡️ Clear RSI queue and history
+      this.rsiQueue = [];
+      this.rsiHistory.clear();
+      this.apiBanUntil = 0; // Reset ban
 
       // Clear old open interest data
       this.openInterestData.clear();
