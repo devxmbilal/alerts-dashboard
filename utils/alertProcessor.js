@@ -33,7 +33,7 @@ export class SafeAlertProcessor {
   async acquireProcessingLock(alertId, symbol) {
     const lockKey = `alert:processing:${alertId}`;
     const lockValue = `${Date.now()}_${Math.random()}`;
-    const lockTTL = 30; // 30 seconds lock timeout
+    const lockTTL = 5; // CRITICAL FIX: Reduce to 5 seconds to prevent stuck locks
     
     try {
       // Try to acquire Redis lock first (distributed lock across multiple instances)
@@ -97,9 +97,9 @@ export class SafeAlertProcessor {
     const processed = this.processedAlerts.get(alertId);
     if (!processed) return false;
     
-    // Consider alert recently processed if within last 60 seconds
+    // CRITICAL FIX: Reduce to 10 seconds to allow faster re-processing
     const timeDiff = currentTimestamp - processed.timestamp;
-    return timeDiff < 60000; // 60 seconds
+    return timeDiff < 10000; // 10 seconds
   }
 
   // Mark alert as processed
@@ -228,26 +228,27 @@ export class SafeAlertProcessor {
   startCleanupInterval() {
     this.cleanupInterval = setInterval(() => {
       this.cleanup();
-    }, 30000); // Clean every 30 seconds
+    }, 5000); // CRITICAL FIX: Clean every 5 seconds to prevent stuck locks
   }
 
   cleanup() {
     const now = Date.now();
-    const oldThreshold = 300000; // 5 minutes
+    const processedThreshold = 60000; // 1 minute for processed alerts
+    const lockThreshold = 10000; // 10 seconds for processing locks
 
     // Clean old processed alerts
     let cleanedProcessed = 0;
     for (const [alertId, data] of this.processedAlerts.entries()) {
-      if (now - data.timestamp > oldThreshold) {
+      if (now - data.timestamp > processedThreshold) {
         this.processedAlerts.delete(alertId);
         cleanedProcessed++;
       }
     }
 
-    // Clean old processing locks
+    // CRITICAL FIX: Clean old processing locks more aggressively
     let cleanedLocks = 0;
     for (const [alertId, lock] of this.processingLocks.entries()) {
-      if (now - lock.timestamp > oldThreshold) {
+      if (now - lock.timestamp > lockThreshold) {
         this.processingLocks.delete(alertId);
         cleanedLocks++;
       }
@@ -256,6 +257,32 @@ export class SafeAlertProcessor {
     if (cleanedProcessed > 0 || cleanedLocks > 0) {
       console.log(`🧹 Cleaned ${cleanedProcessed} processed alerts and ${cleanedLocks} old locks`);
     }
+  }
+
+  // CRITICAL FIX: Force clear all processing locks
+  async clearAllProcessingLocks() {
+    console.log(`🧹 Force clearing ${this.processingLocks.size} processing locks...`);
+    
+    // Clear Redis locks
+    const lockKeys = [];
+    for (const alertId of this.processingLocks.keys()) {
+      lockKeys.push(`alert:processing:${alertId}`);
+    }
+    
+    if (lockKeys.length > 0 && this.redis) {
+      try {
+        await this.redis.del(...lockKeys);
+        console.log(`✅ Cleared ${lockKeys.length} Redis processing locks`);
+      } catch (error) {
+        console.error(`❌ Error clearing Redis locks:`, error.message);
+      }
+    }
+    
+    // Clear in-memory locks
+    this.processingLocks.clear();
+    this.processedAlerts.clear();
+    
+    console.log(`✅ All processing locks cleared`);
   }
 
   // Get processing statistics

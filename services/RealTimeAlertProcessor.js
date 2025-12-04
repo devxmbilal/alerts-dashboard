@@ -47,11 +47,21 @@ class RealTimeAlertProcessor {
     this.dbQueueStreamName = "db:operations:queue"; // Redis Stream name for DB operations
     this.heartbeatInterval = null; // Heartbeat interval for health monitoring
     
-    // 🛡️ RSI RATE LIMITER - Fix for 418 Error
+    // 🛡️ API RATE LIMITER - Fix for 418 Error
     this.rsiQueue = []; // Queue for RSI calculation requests
     this.isProcessingRsiQueue = false; // Queue processing state
     this.apiBanUntil = 0; // API ban timestamp
     this.rsiHistory = new Map(); // RSI history cache for local calculation
+    
+    // 🛡️ CANDLE FETCH QUEUE - Fix for Candle 418 Error
+    this.candleQueue = []; // Queue for candle fetch requests
+    this.isProcessingCandleQueue = false; // Candle queue processing state
+    this.pendingCandleRequests = new Set(); // Prevent duplicate requests
+    this.candleCache = new Map(); // Cache for fetched candles
+    this.candleApiBanUntil = 0; // Candle API ban timestamp
+    
+    // 🛡️ CIRCUIT BREAKER - Prevent infinite retry loops
+    this.rsiFailures = new Map(); // Track RSI calculation failures
   }
 
   // Get or create Redis publisher connection (reused for performance)
@@ -2448,12 +2458,30 @@ class RealTimeAlertProcessor {
   async calculateRSI(symbol, timeframe, period = 14) {
     const key = `${symbol}_${timeframe}`;
     
+    // CRITICAL FIX: Circuit breaker - if we've failed too many times, skip
+    const failureKey = `rsi_failures_${key}`;
+    const failures = this.rsiFailures?.get(failureKey) || 0;
+    
+    if (failures >= 5) {
+      console.log(`⚠️ RSI circuit breaker active for ${key} (${failures} failures)`);
+      return null;
+    }
+    
     // 1. Check if we have history for local calculation
     let closes = this.rsiHistory.get(key);
     
     if (!closes || closes.length < period + 1) {
-      // Data missing -> Queue background fetch
-      this.queueRsiHistoryFetch(symbol, timeframe, period);
+      // Data missing -> Queue background fetch (but only if not already queued)
+      const alreadyQueued = this.rsiQueue.some(item => item.key === key);
+      if (!alreadyQueued) {
+        console.log(`⏳ Queueing RSI history fetch for ${key}`);
+        this.queueRsiHistoryFetch(symbol, timeframe, period);
+      }
+      
+      // Track failure
+      if (!this.rsiFailures) this.rsiFailures = new Map();
+      this.rsiFailures.set(failureKey, failures + 1);
+      
       // Return null immediately (alert will miss this tick, but system stays safe)
       return null;
     }
@@ -2467,7 +2495,14 @@ class RealTimeAlertProcessor {
     }
     
     // 3. Calculate RSI locally (no API call)
-    return this.computeRSILocally(calculationCloses, period);
+    const rsi = this.computeRSILocally(calculationCloses, period);
+    
+    // Reset failure count on success
+    if (rsi !== null && this.rsiFailures) {
+      this.rsiFailures.delete(failureKey);
+    }
+    
+    return rsi;
   }
   
   // Queue RSI history fetch (prevents multiple simultaneous API calls)
@@ -2476,10 +2511,27 @@ class RealTimeAlertProcessor {
     
     // Check if already queued
     const exists = this.rsiQueue.some(item => item.key === key);
-    if (exists) return;
+    if (exists) {
+      console.log(`⏳ RSI fetch already queued for ${key}`);
+      return;
+    }
     
-    // Add to queue
-    this.rsiQueue.push({ symbol, timeframe, period, key });
+    // CRITICAL FIX: Limit queue size to prevent memory issues
+    if (this.rsiQueue.length >= 100) {
+      console.log(`⚠️ RSI queue full (${this.rsiQueue.length} items), skipping ${key}`);
+      return;
+    }
+    
+    // Add to queue with timestamp for timeout tracking
+    this.rsiQueue.push({ 
+      symbol, 
+      timeframe, 
+      period, 
+      key,
+      queuedAt: Date.now()
+    });
+    
+    console.log(`⏳ Queued RSI fetch for ${key} (queue size: ${this.rsiQueue.length})`);
     
     // Start processing if not already running
     this.processRsiQueue();
@@ -2492,7 +2544,17 @@ class RealTimeAlertProcessor {
     
     console.log(`🔄 RSI Queue Started: ${this.rsiQueue.length} items pending...`);
     
+    const maxProcessingTime = 5 * 60 * 1000; // 5 minutes max
+    const startTime = Date.now();
+    let processedCount = 0;
+    
     while (this.rsiQueue.length > 0) {
+      // CRITICAL FIX: Add timeout to prevent infinite processing
+      if (Date.now() - startTime > maxProcessingTime) {
+        console.log(`⏰ RSI Queue timeout after 5 minutes, stopping processing`);
+        break;
+      }
+      
       // 1. Check for API ban
       if (Date.now() < this.apiBanUntil) {
         const waitTime = Math.ceil((this.apiBanUntil - Date.now()) / 1000);
@@ -2503,14 +2565,23 @@ class RealTimeAlertProcessor {
         continue;
       }
       
-      // 2. Get next item
+      // 2. Get next item and check if it's too old
       const task = this.rsiQueue[0];
+      const taskAge = Date.now() - (task.queuedAt || 0);
+      
+      // CRITICAL FIX: Remove tasks older than 10 minutes
+      if (taskAge > 10 * 60 * 1000) {
+        console.log(`⏰ Removing stale RSI task for ${task.key} (age: ${Math.round(taskAge/1000)}s)`);
+        this.rsiQueue.shift();
+        continue;
+      }
       
       try {
         await this.fetchAndStoreRsiHistory(task.symbol, task.timeframe, task.period);
         
         // Success: Remove from queue
         this.rsiQueue.shift();
+        processedCount++;
         
         // 🛑 SLOW DOWN: 500ms delay between requests (Safe Limit)
         await this.delay(500);
@@ -2525,10 +2596,23 @@ class RealTimeAlertProcessor {
           this.rsiQueue.shift();
         }
       }
+      
+      // CRITICAL FIX: Limit processing per session to prevent overload
+      if (processedCount >= 50) {
+        console.log(`🛑 RSI Queue processed 50 items, taking a break...`);
+        break;
+      }
     }
     
     this.isProcessingRsiQueue = false;
-    console.log("✅ RSI Queue Processed.");
+    console.log(`✅ RSI Queue Processed: ${processedCount} items, ${this.rsiQueue.length} remaining`);
+    
+    // CRITICAL FIX: If queue still has items, schedule next processing
+    if (this.rsiQueue.length > 0) {
+      setTimeout(() => {
+        this.processRsiQueue();
+      }, 10000); // Resume in 10 seconds
+    }
   }
   
   // Fetch RSI history from Binance API (actual API call)
@@ -2669,7 +2753,7 @@ class RealTimeAlertProcessor {
               if (redis) {
                 const redisKey = `rsi:${key}`;
                 redis
-                  .setEx(
+                  .setex(
                     redisKey,
                     Math.floor(ttl / 1000),
                     JSON.stringify(updated)
@@ -2705,7 +2789,7 @@ class RealTimeAlertProcessor {
           if (redis) {
             const redisKey = `rsi:${key}`;
             redis
-              .setEx(redisKey, Math.floor(ttl / 1000), JSON.stringify(updated))
+              .setex(redisKey, Math.floor(ttl / 1000), JSON.stringify(updated))
               .catch(() => {}); // Silent fail
           }
         })
@@ -2736,18 +2820,21 @@ class RealTimeAlertProcessor {
 
         console.log(`🔍 Checking ${timeframes.length} timeframes (AND condition - ALL must pass)`);
         
+        let allTimeframesPassed = true;
         const now = Date.now();
+        
         for (const timeframe of timeframes) {
-          // Fetch CURRENT candle from Binance (most reliable)
-          const binanceCandle = await this.fetchCurrentCandleFromBinance(symbol, timeframe);
-          
-          if (!binanceCandle || !binanceCandle.open) {
-            console.log(`❌ [${timeframe}] Failed to fetch current candle data`);
-            return false; // Cannot verify - fail safe
+          // 🔥 CHANGE: Use getCandleDataOrQueue instead of direct fetch
+          let candle = this.getCandleDataOrQueue(symbol, timeframe);
+
+          // Agar data abhi tak fetch nahi hua (Queue mein hai)
+          if (!candle || candle.open === null) {
+            console.log(`⏳ [${timeframe}] Data pending, skipping check...`);
+            return false; // Safe exit: Alert next tick pe check hoga jab data ajayega
           }
 
-          const candleStartTime = binanceCandle.startTime;
-          const openPrice = parseFloat(binanceCandle.open);
+          const candleStartTime = candle.startTime;
+          const openPrice = parseFloat(candle.open);
           const timeSinceCandleStart = now - candleStartTime;
 
           // Safety: Skip if we're too close to candle boundary (avoid stale data)
@@ -2763,14 +2850,17 @@ class RealTimeAlertProcessor {
 
           if (!priceAboveOpen) {
             console.log(`❌ [${timeframe}] FAILED: ${currentPrice} <= ${openPrice * EPSILON}`);
-            return false; // One timeframe failed - no alert
+            allTimeframesPassed = false;
+            break;
           }
           
           console.log(`✅ [${timeframe}] PASSED: ${currentPrice} > ${openPrice * EPSILON}`);
         }
-
-        console.log(`🎉 ALL ${timeframes.length} timeframes PASSED - Alert condition met`);
-        return true;
+        
+        if (allTimeframesPassed) {
+          console.log(`🎉 ALL ${timeframes.length} timeframes PASSED - Alert condition met`);
+        }
+        return allTimeframesPassed;
 
       case "HAMMER":
         // Hammer: Bullish reversal pattern
@@ -2990,6 +3080,7 @@ class RealTimeAlertProcessor {
     if (timeframes && timeframes.length > 0 && symbol) {
       let allTimeframesPassed = true;
       let verifiedTimeframes = 0;
+      let unavailableTimeframes = 0;
 
       for (const timeframe of timeframes) {
         console.log(`   Checking timeframe: ${timeframe}`);
@@ -3001,6 +3092,10 @@ class RealTimeAlertProcessor {
           console.log(
             `   ⚠️ Timeframe ${timeframe}: RSI data not available, cannot verify`
           );
+          unavailableTimeframes++;
+          
+          // CRITICAL FIX: If data is not available, fail the condition immediately
+          // Don't keep retrying - this prevents infinite loops
           allTimeframesPassed = false;
           break;
         }
@@ -3078,6 +3173,14 @@ class RealTimeAlertProcessor {
             `   ✅ Timeframe ${timeframe} PASSED: Condition ${condition} met`
           );
         }
+      }
+
+      // CRITICAL FIX: Add timeout logic to prevent infinite loops
+      if (unavailableTimeframes > 0) {
+        console.log(
+          `   ❌ RSI check FAILED: ${unavailableTimeframes} timeframes have no data available`
+        );
+        return false;
       }
 
       console.log(
@@ -3842,48 +3945,132 @@ class RealTimeAlertProcessor {
     }
   }
 
-  // Fetch CURRENT candle from Binance API (most reliable source)
-  async fetchCurrentCandleFromBinance(symbol, timeframe) {
-    try {
-      const binanceInterval = this.getBinanceInterval(timeframe);
-      const response = await fetch(
-        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=1`
-      );
+  // 🛡️ SAFE CANDLE GETTER - Uses Queue System to Prevent 418 Ban
+  getCandleDataOrQueue(symbol, timeframe) {
+    const key = `${symbol}_${timeframe}`;
+    
+    // 1. Check Cache
+    if (this.candleCache.has(key)) {
+      return this.candleCache.get(key);
+    }
 
-      if (!response.ok) {
-        console.warn(`⚠️ Binance API error for ${symbol} ${timeframe}: ${response.status}`);
+    // 2. Agar Cache nahi hai, aur ye request already queue mein nahi hai
+    if (!this.pendingCandleRequests.has(key)) {
+      console.log(`⏳ Queueing candle fetch for ${key}`);
+      this.addCandleToQueue(symbol, timeframe);
+    }
+
+    return null; // Abhi k liye null, background mein data aa jayega
+  }
+
+  // Add to Candle Queue Logic
+  addCandleToQueue(symbol, timeframe) {
+    const key = `${symbol}_${timeframe}`;
+    this.pendingCandleRequests.add(key);
+    this.candleQueue.push({ symbol, timeframe, key });
+    this.processCandleQueue();
+  }
+
+  // Process Candle Queue (Dhire Dhire API Call)
+  async processCandleQueue() {
+    if (this.isProcessingCandleQueue) return;
+    this.isProcessingCandleQueue = true;
+
+    console.log(`🔄 Candle Queue Started: ${this.candleQueue.length} items pending...`);
+    
+    while (this.candleQueue.length > 0) {
+      // 1. Check for API ban
+      if (Date.now() < this.candleApiBanUntil) {
+        const waitTime = Math.ceil((this.candleApiBanUntil - Date.now()) / 1000);
+        if (waitTime % 10 === 0) {
+          console.log(`⛔ Candle API Paused due to 418 Error. Resuming in ${waitTime}s...`);
+        }
+        await this.delay(2000);
+        continue;
+      }
+      
+      // 2. Get next item
+      const task = this.candleQueue[0];
+      
+      try {
+        await this.fetchAndStoreCandleData(task.symbol, task.timeframe);
+        
+        // Success: Remove from queue
+        this.candleQueue.shift();
+        this.pendingCandleRequests.delete(task.key);
+        
+        // 🛑 SLOW DOWN: 200ms delay between requests (5 requests per second)
+        await this.delay(200);
+        
+      } catch (error) {
+        if (error.status === 418 || error.status === 429) {
+          console.error(`🚨 Candle 418/429 ERROR! Pausing queue for 2 minutes.`);
+          this.candleApiBanUntil = Date.now() + 120 * 1000; // 2 Minutes Ban
+        } else {
+          // Other error: Remove task and log
+          console.error(`❌ [${task.timeframe}] Failed to fetch current candle data`);
+          this.candleQueue.shift();
+          this.pendingCandleRequests.delete(task.key);
+        }
+      }
+    }
+    
+    this.isProcessingCandleQueue = false;
+    console.log("✅ Candle Queue Processed.");
+  }
+
+  // Actual API Call for Candle (Private)
+  async fetchAndStoreCandleData(symbol, timeframe) {
+    const binanceInterval = this.getBinanceInterval(timeframe);
+    const response = await fetch(
+      `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=1`
+    );
+
+    if (response.status === 418 || response.status === 429) {
+      const err = new Error("Rate Limit");
+      err.status = response.status;
+      throw err;
+    }
+
+    if (!response.ok) {
+      throw new Error(`API Error ${response.status}`);
+    }
+
+    const klines = await response.json();
+    if (klines && klines.length > 0) {
+      const kline = klines[0];
+      const candleStartTime = parseInt(kline[0]);
+      const timeframeMs = this.getTimeframeMs(timeframe);
+      const expectedStartTime = Math.floor(Date.now() / timeframeMs) * timeframeMs;
+      
+      // Verify this is the CURRENT candle (not stale)
+      if (Math.abs(candleStartTime - expectedStartTime) > 5000) {
+        console.warn(`⚠️ Stale candle detected for ${symbol} ${timeframe}`);
         return null;
       }
 
-      const klines = await response.json();
-      if (klines && klines.length > 0) {
-        const kline = klines[0]; // Current candle
-        const candleStartTime = parseInt(kline[0]);
-        const timeframeMs = this.getTimeframeMs(timeframe);
-        const expectedStartTime = Math.floor(Date.now() / timeframeMs) * timeframeMs;
-        
-        // Verify this is the CURRENT candle (not stale)
-        if (Math.abs(candleStartTime - expectedStartTime) > 5000) {
-          console.warn(`⚠️ Stale candle detected for ${symbol} ${timeframe}`);
-          return null;
-        }
-
-        return {
-          open: parseFloat(kline[1]),
-          high: parseFloat(kline[2]),
-          low: parseFloat(kline[3]),
-          close: parseFloat(kline[4]),
-          volume: parseFloat(kline[5]),
-          startTime: candleStartTime,
-          endTime: parseInt(kline[6]),
-          isComplete: false, // Current candle is forming
-        };
-      }
-      return null;
-    } catch (error) {
-      console.warn(`⚠️ Error fetching candle for ${symbol} ${timeframe}:`, error.message);
-      return null;
+      const candle = {
+        open: parseFloat(kline[1]),
+        high: parseFloat(kline[2]),
+        low: parseFloat(kline[3]),
+        close: parseFloat(kline[4]),
+        volume: parseFloat(kline[5]),
+        startTime: candleStartTime,
+        endTime: parseInt(kline[6]),
+        isComplete: false,
+      };
+      
+      // Store in Cache
+      const key = `${symbol}_${timeframe}`;
+      this.candleCache.set(key, candle);
+      console.log(`✅ Candle data fetched & cached for ${key}`);
     }
+  }
+
+  // Legacy method - kept for backward compatibility
+  async fetchCurrentCandleFromBinance(symbol, timeframe) {
+    // Use safe queue system instead of direct API call
+    return this.getCandleDataOrQueue(symbol, timeframe);
   }
 
   // Legacy method - kept for backward compatibility
@@ -4303,7 +4490,28 @@ class RealTimeAlertProcessor {
         console.log("🛡️ Resetting RSI API ban...");
         this.apiBanUntil = 0;
         this.rsiQueue = [];
-        console.log("✅ RSI ban reset, queue cleared");
+        if (this.rsiFailures) {
+          this.rsiFailures.clear();
+          console.log(`✅ Reset ${this.rsiFailures.size} circuit breaker failures`);
+        }
+        console.log("✅ RSI ban reset, queue cleared, circuit breaker reset");
+        break;
+        
+      case "reset_rsi_circuit_breaker":
+        console.log("🛡️ Resetting RSI circuit breaker...");
+        if (this.rsiFailures) {
+          const count = this.rsiFailures.size;
+          this.rsiFailures.clear();
+          console.log(`✅ Reset ${count} RSI circuit breaker failures`);
+        }
+        break;
+        
+      case "reset_candle_ban":
+        console.log("🛡️ Resetting Candle API ban...");
+        this.candleApiBanUntil = 0;
+        this.candleQueue = [];
+        this.pendingCandleRequests.clear();
+        console.log("✅ Candle ban reset, queue cleared");
         break;
         
       case "get_microbatch_stats":
@@ -4315,6 +4523,13 @@ class RealTimeAlertProcessor {
         console.log("🔄 Resetting micro-batch metrics...");
         if (this.microBatchEngine) {
           this.microBatchEngine.resetMetrics();
+        }
+        break;
+        
+      case "clear_processing_locks":
+        console.log("🧹 Clearing all processing locks...");
+        if (this.safeProcessor) {
+          await this.safeProcessor.clearAllProcessingLocks();
         }
         break;
 
@@ -4334,15 +4549,29 @@ class RealTimeAlertProcessor {
       nextBanReset: this.apiBanUntil > 0 ? new Date(this.apiBanUntil).toISOString() : null
     };
   }
+  
+  // 🛡️ Get Candle Queue Status
+  getCandleQueueStatus() {
+    return {
+      queueLength: this.candleQueue.length,
+      isProcessing: this.isProcessingCandleQueue,
+      isApiBanned: Date.now() < this.candleApiBanUntil,
+      banTimeRemaining: Math.max(0, this.candleApiBanUntil - Date.now()),
+      cacheSize: this.candleCache.size,
+      pendingRequests: this.pendingCandleRequests.size,
+      nextBanReset: this.candleApiBanUntil > 0 ? new Date(this.candleApiBanUntil).toISOString() : null
+    };
+  }
 
   // Emergency cleanup for memory issues
   async emergencyCleanup() {
     try {
       console.log("🚨 Running emergency cleanup...");
 
-      // Clear old processed alerts
+      // Clear old processed alerts and processing locks
       if (this.safeProcessor) {
         this.safeProcessor.cleanup();
+        await this.safeProcessor.clearAllProcessingLocks();
       }
 
       // Clear old candle data (keep only last 1 hour)
@@ -4360,6 +4589,17 @@ class RealTimeAlertProcessor {
       this.rsiQueue = [];
       this.rsiHistory.clear();
       this.apiBanUntil = 0; // Reset ban
+      
+      // 🛡️ Reset circuit breaker failures
+      if (this.rsiFailures) {
+        this.rsiFailures.clear();
+      }
+      
+      // 🛡️ Clear Candle queue and cache
+      this.candleQueue = [];
+      this.candleCache.clear();
+      this.pendingCandleRequests.clear();
+      this.candleApiBanUntil = 0; // Reset candle ban
 
       // Clear old open interest data
       this.openInterestData.clear();
