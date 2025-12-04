@@ -776,7 +776,8 @@ class RealTimeAlertProcessor {
           const symbol = ticker.s;
           const priceData = {
             price: parseFloat(ticker.c),
-            change: parseFloat(ticker.P),
+            priceChangePercent: parseFloat(ticker.P),
+            priceChange: parseFloat(ticker.p),
             volume: parseFloat(ticker.q), // USDT volume (quote volume)
             volume24h: parseFloat(ticker.q),
             high: parseFloat(ticker.h),
@@ -3076,123 +3077,109 @@ class RealTimeAlertProcessor {
       `📈 RSI Evaluation: ${condition} ${targetLevel} (Period: ${rsiPeriod})`
     );
 
-    // If timeframes are specified, check ALL timeframes
-    if (timeframes && timeframes.length > 0 && symbol) {
-      let allTimeframesPassed = true;
-      let verifiedTimeframes = 0;
-      let unavailableTimeframes = 0;
+    // Validate timeframes
+    if (!timeframes || timeframes.length === 0 || !symbol) {
+      console.log(`   ⚠️ No timeframes specified or symbol missing`);
+      return true; // Skip if no timeframes
+    }
 
-      for (const timeframe of timeframes) {
-        console.log(`   Checking timeframe: ${timeframe}`);
+    console.log(`   🔍 Checking ${timeframes.length} timeframes (ALL must satisfy condition)`);
 
-        // Get RSI value for this timeframe
-        const rsiData = await this.getRSI(symbol, timeframe, rsiPeriod);
+    // Loop through all selected timeframes
+    for (const timeframe of timeframes) {
+      console.log(`   📊 Checking timeframe: ${timeframe}`);
 
-        if (!rsiData || rsiData.current === null) {
-          console.log(
-            `   ⚠️ Timeframe ${timeframe}: RSI data not available, cannot verify`
-          );
-          unavailableTimeframes++;
-          
-          // CRITICAL FIX: If data is not available, fail the condition immediately
-          // Don't keep retrying - this prevents infinite loops
-          allTimeframesPassed = false;
-          break;
-        }
+      // Fetch RSI value for this timeframe
+      const rsiData = await this.getRSI(symbol, timeframe, rsiPeriod);
 
-        const currentRSI = rsiData.current;
-        const previousRSI = rsiData.previous || currentRSI;
-        verifiedTimeframes++;
-
+      if (!rsiData || rsiData.current === null) {
         console.log(
-          `   Timeframe ${timeframe}: Current RSI=${currentRSI.toFixed(
-            2
-          )}, Previous RSI=${previousRSI.toFixed(2)}`
+          `   ❌ Timeframe ${timeframe}: RSI data not available, FAILING condition`
         );
-
-        let timeframePassed = false;
-
-        switch (condition) {
-          case "ABOVE":
-            timeframePassed = currentRSI > targetLevel;
-            console.log(
-              `   Timeframe ${timeframe}: RSI ${currentRSI.toFixed(
-                2
-              )} > ${targetLevel}? ${timeframePassed}`
-            );
-            break;
-
-          case "BELOW":
-            timeframePassed = currentRSI < targetLevel;
-            console.log(
-              `   Timeframe ${timeframe}: RSI ${currentRSI.toFixed(
-                2
-              )} < ${targetLevel}? ${timeframePassed}`
-            );
-            break;
-
-          case "CROSSING_UP":
-            // Previous RSI was below or equal, now above
-            timeframePassed =
-              previousRSI <= targetLevel && currentRSI > targetLevel;
-            console.log(
-              `   Timeframe ${timeframe}: Crossing Up check - Previous ${previousRSI.toFixed(
-                2
-              )} <= ${targetLevel} AND Current ${currentRSI.toFixed(
-                2
-              )} > ${targetLevel}? ${timeframePassed}`
-            );
-            break;
-
-          case "CROSSING_DOWN":
-            // Previous RSI was above or equal, now below
-            timeframePassed =
-              previousRSI >= targetLevel && currentRSI < targetLevel;
-            console.log(
-              `   Timeframe ${timeframe}: Crossing Down check - Previous ${previousRSI.toFixed(
-                2
-              )} >= ${targetLevel} AND Current ${currentRSI.toFixed(
-                2
-              )} < ${targetLevel}? ${timeframePassed}`
-            );
-            break;
-
-          default:
-            console.log(`   Unknown RSI condition: ${condition}`);
-            timeframePassed = false;
-        }
-
-        if (!timeframePassed) {
-          allTimeframesPassed = false;
-          console.log(
-            `   ❌ Timeframe ${timeframe} FAILED: Condition ${condition} not met`
-          );
-          break; // One timeframe failed, condition invalid
-        } else {
-          console.log(
-            `   ✅ Timeframe ${timeframe} PASSED: Condition ${condition} met`
-          );
-        }
+        return false; // If even one timeframe fails, alert should NOT trigger
       }
 
-      // CRITICAL FIX: Add timeout logic to prevent infinite loops
-      if (unavailableTimeframes > 0) {
+      const currentRSI = rsiData.current;
+      const previousRSI = rsiData.previous || currentRSI;
+
+      console.log(
+        `   📈 Timeframe ${timeframe}: Current RSI=${currentRSI.toFixed(
+          2
+        )}, Previous RSI=${previousRSI.toFixed(2)}`
+      );
+
+      // Apply condition based on type
+      let conditionMet = false;
+
+      switch (condition) {
+        case "ABOVE":
+          conditionMet = currentRSI > targetLevel;
+          console.log(
+            `   ${conditionMet ? '✅' : '❌'} Timeframe ${timeframe}: RSI ${currentRSI.toFixed(
+              2
+            )} > ${targetLevel}? ${conditionMet}`
+          );
+          break;
+
+        case "BELOW":
+          conditionMet = currentRSI < targetLevel;
+          console.log(
+            `   ${conditionMet ? '✅' : '❌'} Timeframe ${timeframe}: RSI ${currentRSI.toFixed(
+              2
+            )} < ${targetLevel}? ${conditionMet}`
+          );
+          break;
+
+        case "CROSSING_UP":
+          // Previous RSI was below or equal, now above
+          conditionMet = previousRSI <= targetLevel && currentRSI > targetLevel;
+          console.log(
+            `   ${conditionMet ? '✅' : '❌'} Timeframe ${timeframe}: Crossing Up - Previous ${previousRSI.toFixed(
+              2
+            )} <= ${targetLevel} AND Current ${currentRSI.toFixed(
+              2
+            )} > ${targetLevel}? ${conditionMet}`
+          );
+          break;
+
+        case "CROSSING_DOWN":
+          // Previous RSI was above or equal, now below
+          conditionMet = previousRSI >= targetLevel && currentRSI < targetLevel;
+          console.log(
+            `   ${conditionMet ? '✅' : '❌'} Timeframe ${timeframe}: Crossing Down - Previous ${previousRSI.toFixed(
+              2
+            )} >= ${targetLevel} AND Current ${currentRSI.toFixed(
+              2
+            )} < ${targetLevel}? ${conditionMet}`
+          );
+          break;
+
+        default:
+          console.log(`   ❌ Unknown RSI condition: ${condition}`);
+          conditionMet = false;
+      }
+
+      // CRITICAL: If even one timeframe fails, return false immediately
+      if (!conditionMet) {
         console.log(
-          `   ❌ RSI check FAILED: ${unavailableTimeframes} timeframes have no data available`
+          `   ❌ ALERT BLOCKED: Timeframe ${timeframe} failed condition ${condition}`
         );
-        return false;
+        console.log(
+          `   ⚠️ All ${timeframes.length} timeframes must pass, but ${timeframe} failed`
+        );
+        return false; // Exit immediately - no need to check remaining timeframes
       }
 
       console.log(
-        `   RSI check (multi-timeframe): ${allTimeframesPassed} (${verifiedTimeframes}/${timeframes.length} timeframes verified, ALL must pass)`
+        `   ✅ Timeframe ${timeframe} PASSED: Condition ${condition} met`
       );
-      return allTimeframesPassed;
-    } else {
-      // Fallback: use single RSI calculation if no timeframes specified
-      // This should not happen in normal flow, but keeping for compatibility
-      console.log(`   ⚠️ No timeframes specified, using fallback calculation`);
-      return true; // Skip if no timeframes
     }
+
+    // All timeframes passed
+    console.log(
+      `   🎉 SUCCESS: All ${timeframes.length} timeframes satisfied RSI condition ${condition}`
+    );
+    return true;
   }
 
   async evaluateVolumeConditions(
