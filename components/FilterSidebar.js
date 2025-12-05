@@ -130,7 +130,6 @@ const FilterSidebar = forwardRef(
       candle: {},
       rsiRange: {},
       volume: {},
-      openInterest: {},
     });
 
     const [isCreating, setIsCreating] = useState(false);
@@ -152,7 +151,6 @@ const FilterSidebar = forwardRef(
           candle: {},
           rsiRange: {},
           volume: {},
-          openInterest: {},
         });
       },
     }));
@@ -287,9 +285,6 @@ const FilterSidebar = forwardRef(
         const hasVolume = Object.values(filters.volume).some(
           (value) => value === true
         );
-        const hasOpenInterest = Object.values(filters.openInterest).some(
-          (value) => value === true
-        );
 
         if (hasAlertCount) {
           const alertCountKey = Object.keys(filters.alertCount).find(
@@ -334,21 +329,6 @@ const FilterSidebar = forwardRef(
             timeframes: volumeTimeframes,
             condition: filters.volume.condition || "INCREASING",
             percentage: filters.volume.percentage || "",
-          };
-        }
-
-        if (hasOpenInterest) {
-          const openInterestTimeframes = Object.keys(
-            filters.openInterest
-          ).filter(
-            (key) =>
-              !["direction", "percentage"].includes(key) &&
-              filters.openInterest[key] === true
-          );
-          alertConditions.openInterest = {
-            timeframes: openInterestTimeframes,
-            direction: filters.openInterest.direction || "INCREASING",
-            percentage: filters.openInterest.percentage || "",
           };
         }
 
@@ -495,23 +475,6 @@ const FilterSidebar = forwardRef(
 
     // Volume condition options - matching the image
     const volumeConditionOptions = [
-      { value: "INCREASING", label: "INCREASING" },
-      { value: "DECREASING", label: "DECREASING" },
-      { value: "ABOVE", label: "ABOVE" },
-      { value: "BELOW", label: "BELOW" },
-    ];
-
-    // OPEN INTEREST timeframe options
-    const openInterestTimeframeOptions = [
-      { value: "1MIN", label: "1MIN" },
-      { value: "5MIN", label: "5MIN" },
-      { value: "15MIN", label: "15MIN" },
-      { value: "1HR", label: "1HR" },
-      { value: "4H", label: "4H" },
-    ];
-
-    // OPEN INTEREST direction options
-    const openInterestDirectionOptions = [
       { value: "INCREASING", label: "INCREASING" },
       { value: "DECREASING", label: "DECREASING" },
       { value: "ABOVE", label: "ABOVE" },
@@ -969,117 +932,6 @@ const FilterSidebar = forwardRef(
               />
             </AccordionDetails>
           </DarkAccordion>
-
-          {/* OPEN INTEREST Filter */}
-          <DarkAccordion>
-            <AccordionSummary
-              expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
-            >
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                <ShowChartIcon sx={{ color: "#3f51b5" }} />
-                <Typography sx={{ color: "text.primary" }}>
-                  OPEN INTEREST (Multiple)
-                </Typography>
-              </Box>
-            </AccordionSummary>
-            <AccordionDetails>
-              {/* Timeframe checkboxes */}
-              <Grid container spacing={1} sx={{ mb: 2 }}>
-                {openInterestTimeframeOptions.map((option) => (
-                  <Grid item xs={4} key={option.value}>
-                    <FormControlLabel
-                      control={
-                        <CustomCheckbox
-                          checked={filters.openInterest[option.value] || false}
-                          onChange={() =>
-                            handleCheckboxChange("openInterest", option.value)
-                          }
-                        />
-                      }
-                      label={option.label}
-                      sx={{
-                        color: "text.primary",
-                        "& .MuiFormControlLabel-label": {
-                          fontSize: "14px",
-                        },
-                      }}
-                    />
-                  </Grid>
-                ))}
-              </Grid>
-
-              {/* Direction dropdown */}
-              <Grid container spacing={2} sx={{ mb: 2 }}>
-                <Grid item xs={12}>
-                  <CustomTextField
-                    fullWidth
-                    select
-                    size="small"
-                    label="Direction"
-                    value={filters.openInterest.direction || "INCREASING"}
-                    onChange={(e) =>
-                      handleInputChange(
-                        "openInterest",
-                        "direction",
-                        e.target.value
-                      )
-                    }
-                    SelectProps={{
-                      MenuProps: {
-                        PaperProps: {
-                          sx: {
-                            backgroundColor: theme.palette.mode === 'dark' ? "#1e1e1e" : "#fff",
-                            color: theme.palette.text.primary,
-                            "& .MuiMenuItem-root": {
-                              color: theme.palette.text.primary,
-                              "&:hover": {
-                                backgroundColor: theme.palette.mode === 'dark' ? "#333" : "#f5f5f5",
-                              },
-                              "&.Mui-selected": {
-                                backgroundColor: theme.palette.primary.main,
-                                color: "#fff",
-                              },
-                            },
-                          },
-                        },
-                      },
-                    }}
-                  >
-                    {openInterestDirectionOptions.map((option) => (
-                      <MenuItem key={option.value} value={option.value}>
-                        {option.label}
-                      </MenuItem>
-                    ))}
-                  </CustomTextField>
-                </Grid>
-              </Grid>
-
-              {/* Percentage input */}
-              <Grid container spacing={2}>
-                <Grid item xs={12}>
-                  <CustomTextField
-                    fullWidth
-                    size="small"
-                    label="Percentage %"
-                    type="number"
-                    value={filters.openInterest.percentage || ""}
-                    onChange={(e) =>
-                      handleInputChange(
-                        "openInterest",
-                        "percentage",
-                        e.target.value
-                      )
-                    }
-                    InputProps={{
-                      endAdornment: (
-                        <InputAdornment position="end">%</InputAdornment>
-                      ),
-                    }}
-                  />
-                </Grid>
-              </Grid>
-            </AccordionDetails>
-          </DarkAccordion>
         </Box>
 
         {/* Actions */}
@@ -1108,7 +960,6 @@ const FilterSidebar = forwardRef(
                 candle: {},
                 rsiRange: {},
                 volume: {},
-                openInterest: {},
               });
             }}
             sx={{ mb: 1 }}
