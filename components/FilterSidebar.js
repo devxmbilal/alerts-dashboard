@@ -846,22 +846,26 @@ const FilterSidebar = forwardRef(
                   <CustomTextField
                     fullWidth
                     size="small"
+                    type="number"
                     label="RSI Period"
-                    value={filters.rsiRange.period || "14"}
+                    value={filters.rsiRange.period }
                     onChange={(e) =>
                       handleInputChange("rsiRange", "period", e.target.value)
                     }
+                    inputProps={{ min: 7, max: 14}}
                   />
                 </Grid>
                 <Grid item xs={6}>
                   <CustomTextField
                     fullWidth
                     size="small"
+                    type="number"
                     label="Level (1-100)"
-                    value={filters.rsiRange.level || "70"}
+                    value={filters.rsiRange.level}
                     onChange={(e) =>
                       handleInputChange("rsiRange", "level", e.target.value)
                     }
+                    inputProps={{ min: 1, max: 100 }}
                   />
                 </Grid>
               </Grid>

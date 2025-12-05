@@ -954,19 +954,20 @@ class RealTimeAlertProcessor {
             );
           });
 
-          // OPTIMIZATION: Update in-memory cache immediately
+          // CRITICAL FIX: Update in-memory cache with baseline AND preserve lock
           const alertsForSymbol = this.activeAlerts.get(alert.symbol);
           if (alertsForSymbol) {
             const alertIndex = alertsForSymbol.findIndex(
               (a) => a._id.toString() === alert._id.toString()
             );
             if (alertIndex !== -1) {
-              // Update with new baseline values
+              // Update with new baseline AND preserve conditions (lock)
               alertsForSymbol[alertIndex] = {
                 ...alertsForSymbol[alertIndex],
                 baselinePrice: liveData.price,
                 baselineVolume: liveData.volume || liveData.volume24h,
                 baselineTimestamp: new Date(),
+                conditions: alert.conditions, // Preserve lock
               };
             }
           }
@@ -990,7 +991,7 @@ class RealTimeAlertProcessor {
         }
       }
 
-      // FIRST: Check if alert is locked (prevent duplicate triggers)
+      // CRITICAL: Check if alert is locked FIRST (prevent duplicate triggers)
       if (isAlertLocked(alert)) {
         const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
         const now = new Date();
@@ -998,12 +999,14 @@ class RealTimeAlertProcessor {
         const minutesRemaining = Math.ceil(timeRemaining / (1000 * 60));
 
         console.log(
-          `🔒 Alert ${alert._id} for ${
+          `🔒 ALERT BLOCKED - Alert ${alert._id} for ${
             alert.symbol
-          } is LOCKED until ${lockUntil.toISOString()}`
+          } is LOCKED until ${lockUntil.toISOString()} (${minutesRemaining} minutes remaining)`
         );
         return { triggered: false, reason: "alert_locked" };
       }
+      
+      console.log(`✅ Alert ${alert._id} for ${alert.symbol} is NOT locked, proceeding...`);
 
       // Check price direction based on alert settings
       const direction =
@@ -1362,6 +1365,14 @@ class RealTimeAlertProcessor {
 
   // Trigger alert with live data and update baseline
   async triggerAlertWithLiveData(alert, liveData) {
+    // CRITICAL: Check if alert is ALREADY locked (Alert Count condition)
+    if (isAlertLocked(alert)) {
+      const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
+      const timeRemaining = Math.max(0, lockUntil.getTime() - Date.now());
+      console.log(`🔒 Alert ${alert._id} LOCKED by Alert Count until ${lockUntil.toISOString()} (${Math.ceil(timeRemaining/60000)}min remaining)`);
+      return false;
+    }
+
     // CRITICAL: Acquire Redis lock to prevent duplicate processing
     // Especially important when alertCount condition is set
     const hasAlertCount = alert.conditions?.alertCount?.timeframe;
@@ -1488,6 +1499,9 @@ class RealTimeAlertProcessor {
         console.log(
           `🔒 Alert ${alert._id} LOCKED for ${alert.conditions.alertCount.timeframe} until ${updatedConditions.alertCount.lockUntil}`
         );
+        
+        // CRITICAL FIX: Update in-memory alert IMMEDIATELY with lock
+        alert.conditions = updatedConditions;
       }
 
       // CRITICAL: Immediate database update for baseline price (blocking)
@@ -1515,21 +1529,23 @@ class RealTimeAlertProcessor {
         `✅ Alert ${alert._id} updated with new baseline price: ${liveData.price}`
       );
 
-      // OPTIMIZATION: Update in-memory cache immediately (no DB query needed)
+      // CRITICAL FIX: Update in-memory cache IMMEDIATELY with lock
       const alertsForSymbol = this.activeAlerts.get(alert.symbol);
       if (alertsForSymbol) {
         const alertIndex = alertsForSymbol.findIndex(
           (a) => a._id.toString() === alert._id.toString()
         );
         if (alertIndex !== -1) {
-          // Update in memory immediately
+          // Update in memory immediately with NEW CONDITIONS (including lock)
           alertsForSymbol[alertIndex] = {
             ...alertsForSymbol[alertIndex],
             ...updateData,
+            conditions: updateData.conditions || alertsForSymbol[alertIndex].conditions,
             baselinePrice: liveData.price,
             baselineVolume: liveData.volume || liveData.volume24h,
             baselineTimestamp: new Date(),
           };
+          console.log(`✅ In-memory alert updated with lock: ${alert._id}`);
         }
       }
 

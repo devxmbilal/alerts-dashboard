@@ -41,14 +41,21 @@ const BINANCE_API_ENDPOINTS = [
 
 // Network configuration for better connectivity
 const FETCH_CONFIG = {
-  timeout: 10000, // 10 second timeout
+  timeout: 15000, // 15 second timeout
   headers: {
     "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     Accept: "application/json",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Language": "en-US,en;q=0.9",
     Connection: "keep-alive",
+    "Cache-Control": "no-cache",
   },
 };
+
+// Rate limiting
+let lastRequestTime = 0;
+const MIN_REQUEST_INTERVAL = 2000; // 2 seconds between requests
 
 // Track active connections
 const activeConnections = new Map();
@@ -57,8 +64,18 @@ const subscribedPairs = new Set();
 // Dynamic USDT pairs - will be fetched from Binance
 let USDT_PAIRS = [];
 
-// Robust fetch function with retry logic
+// Robust fetch function with retry logic and rate limiting
 async function robustFetch(url, options = {}) {
+  // Rate limiting - wait if needed
+  const now = Date.now();
+  const timeSinceLastRequest = now - lastRequestTime;
+  if (timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
+    const waitTime = MIN_REQUEST_INTERVAL - timeSinceLastRequest;
+    console.log(`⏳ Rate limiting: waiting ${waitTime}ms...`);
+    await new Promise((resolve) => setTimeout(resolve, waitTime));
+  }
+  lastRequestTime = Date.now();
+
   const maxRetries = 3;
   let lastError;
 
@@ -80,6 +97,13 @@ async function robustFetch(url, options = {}) {
 
       clearTimeout(timeoutId);
 
+      // Handle 418 specifically
+      if (response.status === 418) {
+        console.log(`⚠️ HTTP 418: IP banned/rate limited. Waiting 60 seconds...`);
+        await new Promise((resolve) => setTimeout(resolve, 60000));
+        throw new Error(`HTTP 418: Rate limited by Binance`);
+      }
+
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
@@ -91,7 +115,8 @@ async function robustFetch(url, options = {}) {
       console.log(`❌ Attempt ${attempt} failed: ${error.message}`);
 
       if (attempt < maxRetries) {
-        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+        // Exponential backoff with longer delays
+        const delay = Math.min(5000 * Math.pow(2, attempt - 1), 30000);
         console.log(`⏳ Waiting ${delay}ms before retry...`);
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
@@ -168,6 +193,14 @@ class BinanceWorker {
     try {
       console.log("📊 Fetching all USDT spot pairs from Binance...");
 
+      // Try to get cached pairs first
+      const cachedPairs = await redis.get("crypto:usdt_pairs");
+      if (cachedPairs) {
+        USDT_PAIRS = JSON.parse(cachedPairs);
+        console.log(`💾 Using cached pairs: ${USDT_PAIRS.length} pairs`);
+        return;
+      }
+
       // Get exchange info to get all trading pairs
       const response = await fetchWithFallback("/exchangeInfo");
       const exchangeInfo = await response.json();
@@ -198,22 +231,28 @@ class BinanceWorker {
       USDT_PAIRS = usdtPairs;
       console.log(`✅ Found ${USDT_PAIRS.length} USDT spot pairs`);
 
-      // Cache the pairs list in Redis
-      await redis.setex("crypto:usdt_pairs", 1800, JSON.stringify(USDT_PAIRS)); // 30 minutes cache
+      // Cache the pairs list in Redis for longer
+      await redis.setex("crypto:usdt_pairs", 7200, JSON.stringify(USDT_PAIRS)); // 2 hours cache
     } catch (error) {
       console.error("❌ Failed to fetch USDT pairs:", error);
+      console.log("⚠️ Using fallback pairs list...");
       // Fallback to default pairs if API fails
       USDT_PAIRS = [
         "btcusdt",
         "ethusdt",
+        "bnbusdt",
         "adausdt",
         "solusdt",
+        "xrpusdt",
         "dotusdt",
         "linkusdt",
         "uniusdt",
         "avaxusdt",
         "maticusdt",
         "atomusdt",
+        "ltcusdt",
+        "nearusdt",
+        "algousdt",
       ];
     }
   }
@@ -381,7 +420,7 @@ class BinanceWorker {
   }
 
   startPairCleanup() {
-    // Clean up delisted pairs every 5 minutes
+    // Clean up delisted pairs every 10 minutes (reduced frequency)
     setInterval(async () => {
       try {
         console.log("🧹 Starting pair cleanup...");
@@ -458,7 +497,7 @@ class BinanceWorker {
         console.log("⚠️ Pair cleanup failed, will retry in next cycle");
         // Don't throw error to prevent interval from stopping
       }
-    }, 300000); // Every 5 minutes
+    }, 600000); // Every 10 minutes (reduced frequency)
   }
 
   reconnect() {
