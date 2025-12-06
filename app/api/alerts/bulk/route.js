@@ -170,12 +170,11 @@ export async function POST(request) {
           if (ticker) {
             currentPrices[symbol] = {
               price: parseFloat(ticker.lastPrice),
-              volume: parseFloat(ticker.volume),
+              volume: parseFloat(ticker.quoteVolume), // USDT volume (24h)
               timestamp: Date.now(),
             };
             console.log(
-              `✅ Fetched ${symbol} from Binance API:`,
-              currentPrices[symbol]
+              `✅ Fetched ${symbol} from Binance API - Price: ${currentPrices[symbol].price}, Volume (USDT): ${currentPrices[symbol].volume}`
             );
           }
         }

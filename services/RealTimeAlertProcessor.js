@@ -43,6 +43,22 @@ class RealTimeAlertProcessor {
     this.dbQueueClient = null; // Redis client for database queue operations
     this.dbQueueStreamName = "db:operations:queue"; // Redis Stream name for DB operations
     this.heartbeatInterval = null; // Heartbeat interval for health monitoring
+    
+    // 🛡️ API RATE LIMITER - Fix for 418 Error
+    this.rsiQueue = []; // Queue for RSI calculation requests
+    this.isProcessingRsiQueue = false; // Queue processing state
+    this.apiBanUntil = 0; // API ban timestamp
+    this.rsiHistory = new Map(); // RSI history cache for local calculation
+    
+    // 🛡️ CANDLE FETCH QUEUE - Fix for Candle 418 Error
+    this.candleQueue = []; // Queue for candle fetch requests
+    this.isProcessingCandleQueue = false; // Candle queue processing state
+    this.pendingCandleRequests = new Set(); // Prevent duplicate requests
+    this.candleCache = new Map(); // Cache for fetched candles
+    this.candleApiBanUntil = 0; // Candle API ban timestamp
+    
+    // 🛡️ CIRCUIT BREAKER - Prevent infinite retry loops
+    this.rsiFailures = new Map(); // Track RSI calculation failures
   }
 
   // Get or create Redis publisher connection (reused for performance)
@@ -447,15 +463,20 @@ class RealTimeAlertProcessor {
 
   async loadAllActiveAlerts() {
     try {
+      console.log("🔄 Loading all active alerts from database...");
+      
       // Get all active alerts from MongoDB (including previously triggered ones)
       const alerts = await Alert.find({
         status: "active",
         // Don't filter by triggered: false - we want retriggerable alerts
       }).lean();
 
+      console.log(`📊 Found ${alerts.length} active alerts in database`);
+
       // Filter alerts to only include those for pairs still in user's favorites
       const validAlerts = [];
       const userFavoritesMap = new Map(); // Cache user favorites
+      let inactiveCount = 0;
 
       for (const alert of alerts) {
         // Get user's current favorites (with caching)
@@ -471,8 +492,12 @@ class RealTimeAlertProcessor {
         } else {
           // Mark alert as inactive since pair is no longer favorited
           await Alert.findByIdAndUpdate(alert._id, { status: "inactive" });
+          inactiveCount++;
+          console.log(`⚠️ Alert ${alert._id} for ${alert.symbol} marked inactive (not in favorites)`);
         }
       }
+
+      console.log(`✅ Valid alerts: ${validAlerts.length}, Marked inactive: ${inactiveCount}`);
 
       // Group valid alerts by symbol for fast lookup
       this.activeAlerts.clear();
@@ -482,6 +507,13 @@ class RealTimeAlertProcessor {
         }
         this.activeAlerts.get(alert.symbol).push(alert);
       });
+      
+      console.log(`📊 Active symbols: ${this.activeAlerts.size}`);
+      
+      // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
+      // This ensures the engine only processes symbols with valid alerts
+      await this.updateMicroBatchActiveSymbols();
+      console.log(`✅ MicroBatchEngine activeSymbols updated after loading alerts`);
 
       return validAlerts;
     } catch (error) {
@@ -776,10 +808,9 @@ class RealTimeAlertProcessor {
           const symbol = ticker.s;
           const priceData = {
             price: parseFloat(ticker.c),
-            change: parseFloat(ticker.P),
-            priceChangePercent: parseFloat(ticker.P), // 24-hour price change percent from Binance
-            priceChange: parseFloat(ticker.p), // 24-hour price change amount
-            volume: parseFloat(ticker.v),
+            priceChangePercent: parseFloat(ticker.P),
+            priceChange: parseFloat(ticker.p),
+            volume: parseFloat(ticker.q), // USDT volume (quote volume)
             volume24h: parseFloat(ticker.q),
             high: parseFloat(ticker.h),
             low: parseFloat(ticker.l),
@@ -843,13 +874,31 @@ class RealTimeAlertProcessor {
 
           // Update baseline to current live price
           alert.baselinePrice = liveData.price;
-          alert.baselineVolume = liveData.volume || liveData.volume24h;
           alert.baselineTimestamp = new Date();
+          
+          // Update baseline volume based on smallest volume timeframe (if volume condition exists)
+          let updatedVolume = liveData.volume || liveData.volume24h;
+          if (alert.conditions?.volume?.timeframes?.length > 0) {
+            const volumeTimeframes = alert.conditions.volume.timeframes;
+            const smallestTimeframe = volumeTimeframes.reduce((min, tf) => {
+              const minMs = this.getTimeframeMs(min);
+              const tfMs = this.getTimeframeMs(tf);
+              return tfMs < minMs ? tf : min;
+            });
+            const smallestTimeframeMs = this.getTimeframeMs(smallestTimeframe);
+            
+            if (timeSinceBaseline >= smallestTimeframeMs) {
+              alert.baselineVolume = updatedVolume;
+              console.log(`📊 Volume baseline updated (${smallestTimeframe}): ${alert.baselineVolume}`);
+            }
+          } else {
+            alert.baselineVolume = updatedVolume;
+          }
 
           // Update in database (non-blocking)
           Alert.findByIdAndUpdate(alert._id, {
             baselinePrice: liveData.price,
-            baselineVolume: liveData.volume || liveData.volume24h,
+            baselineVolume: alert.baselineVolume,
             baselineTimestamp: new Date(),
           }).catch((error) => {
             console.error(
@@ -858,19 +907,20 @@ class RealTimeAlertProcessor {
             );
           });
 
-          // OPTIMIZATION: Update in-memory cache immediately
+          // CRITICAL FIX: Update in-memory cache with baseline AND preserve lock
           const alertsForSymbol = this.activeAlerts.get(alert.symbol);
           if (alertsForSymbol) {
             const alertIndex = alertsForSymbol.findIndex(
               (a) => a._id.toString() === alert._id.toString()
             );
             if (alertIndex !== -1) {
-              // Update with new baseline values
+              // Update with new baseline AND preserve conditions (lock)
               alertsForSymbol[alertIndex] = {
                 ...alertsForSymbol[alertIndex],
                 baselinePrice: liveData.price,
                 baselineVolume: liveData.volume || liveData.volume24h,
                 baselineTimestamp: new Date(),
+                conditions: alert.conditions, // Preserve lock
               };
             }
           }
@@ -894,7 +944,7 @@ class RealTimeAlertProcessor {
         }
       }
 
-      // FIRST: Check if alert is locked (prevent duplicate triggers)
+      // CRITICAL: Check if alert is locked FIRST (prevent duplicate triggers)
       if (isAlertLocked(alert)) {
         const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
         const now = new Date();
@@ -902,12 +952,14 @@ class RealTimeAlertProcessor {
         const minutesRemaining = Math.ceil(timeRemaining / (1000 * 60));
 
         console.log(
-          `🔒 Alert ${alert._id} for ${
+          `🔒 ALERT BLOCKED - Alert ${alert._id} for ${
             alert.symbol
-          } is LOCKED until ${lockUntil.toISOString()}`
+          } is LOCKED until ${lockUntil.toISOString()} (${minutesRemaining} minutes remaining)`
         );
         return { triggered: false, reason: "alert_locked" };
       }
+      
+      console.log(`✅ Alert ${alert._id} for ${alert.symbol} is NOT locked, proceeding...`);
 
       // Check price direction based on alert settings
       const direction =
@@ -1266,6 +1318,14 @@ class RealTimeAlertProcessor {
 
   // Trigger alert with live data and update baseline
   async triggerAlertWithLiveData(alert, liveData) {
+    // CRITICAL: Check if alert is ALREADY locked (Alert Count condition)
+    if (isAlertLocked(alert)) {
+      const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
+      const timeRemaining = Math.max(0, lockUntil.getTime() - Date.now());
+      console.log(`🔒 Alert ${alert._id} LOCKED by Alert Count until ${lockUntil.toISOString()} (${Math.ceil(timeRemaining/60000)}min remaining)`);
+      return false;
+    }
+
     // CRITICAL: Acquire Redis lock to prevent duplicate processing
     // Especially important when alertCount condition is set
     const hasAlertCount = alert.conditions?.alertCount?.timeframe;
@@ -1392,6 +1452,9 @@ class RealTimeAlertProcessor {
         console.log(
           `🔒 Alert ${alert._id} LOCKED for ${alert.conditions.alertCount.timeframe} until ${updatedConditions.alertCount.lockUntil}`
         );
+        
+        // CRITICAL FIX: Update in-memory alert IMMEDIATELY with lock
+        alert.conditions = updatedConditions;
       }
 
       // CRITICAL: Immediate database update for baseline price (blocking)
@@ -1419,21 +1482,23 @@ class RealTimeAlertProcessor {
         `✅ Alert ${alert._id} updated with new baseline price: ${liveData.price}`
       );
 
-      // OPTIMIZATION: Update in-memory cache immediately (no DB query needed)
+      // CRITICAL FIX: Update in-memory cache IMMEDIATELY with lock
       const alertsForSymbol = this.activeAlerts.get(alert.symbol);
       if (alertsForSymbol) {
         const alertIndex = alertsForSymbol.findIndex(
           (a) => a._id.toString() === alert._id.toString()
         );
         if (alertIndex !== -1) {
-          // Update in memory immediately
+          // Update in memory immediately with NEW CONDITIONS (including lock)
           alertsForSymbol[alertIndex] = {
             ...alertsForSymbol[alertIndex],
             ...updateData,
+            conditions: updateData.conditions || alertsForSymbol[alertIndex].conditions,
             baselinePrice: liveData.price,
             baselineVolume: liveData.volume || liveData.volume24h,
             baselineTimestamp: new Date(),
           };
+          console.log(`✅ In-memory alert updated with lock: ${alert._id}`);
         }
       }
 
@@ -1558,8 +1623,8 @@ class RealTimeAlertProcessor {
             if (ticker) {
               livePrices[symbol] = {
                 price: parseFloat(ticker.lastPrice),
-                volume: parseFloat(ticker.volume),
-                volume24h: parseFloat(ticker.volume),
+                volume: parseFloat(ticker.quoteVolume), // USDT volume
+                volume24h: parseFloat(ticker.quoteVolume),
                 priceChange: parseFloat(ticker.priceChange),
                 priceChangePercent: parseFloat(ticker.priceChangePercent),
                 high: parseFloat(ticker.highPrice),
@@ -1582,9 +1647,413 @@ class RealTimeAlertProcessor {
     }
   }
 
-  // NOTE: This duplicate method has been removed.
-  // All condition checking is handled by checkAlertConditionsWithLiveData() at line 950
-  // which uses optimized parallel checking via getActiveConditions()
+  async processPriceUpdate(priceData) {
+    if (this.isProcessing) return;
+
+    this.isProcessing = true;
+
+    try {
+      const symbol = priceData.symbol;
+      const alerts = this.activeAlerts.get(symbol);
+
+      console.log(
+        `📡 Price update received for ${symbol}: Price=${
+          priceData.price
+        }, Volume=${priceData.volume || priceData.volume24h}, Change=${
+          priceData.priceChangePercent
+        }%`
+      );
+
+      if (!alerts || alerts.length === 0) {
+        console.log(`⚠️ No active alerts found for ${symbol}`);
+        return;
+      }
+
+      console.log(`🔍 Found ${alerts.length} active alerts for ${symbol}`);
+
+      // Update candle data for all timeframes used by alerts
+      // Include timeframes from both changePercent and candle conditions
+      const timeframes = new Set();
+      for (const alert of alerts) {
+        // Add changePercent timeframes
+        if (
+          alert.conditions.changePercent &&
+          alert.conditions.changePercent.timeframe
+        ) {
+          timeframes.add(alert.conditions.changePercent.timeframe);
+        }
+        // Add candle condition timeframes
+        if (
+          alert.conditions.candle &&
+          alert.conditions.candle.timeframes &&
+          Array.isArray(alert.conditions.candle.timeframes)
+        ) {
+          for (const tf of alert.conditions.candle.timeframes) {
+            timeframes.add(tf);
+          }
+        }
+      }
+
+      // Update candle data for each timeframe
+      for (const timeframe of timeframes) {
+        await this.updateCandleData(symbol, timeframe, priceData);
+      }
+
+      // Process each alert for this symbol
+      for (const alert of alerts) {
+        await this.checkAlertConditions(alert, priceData);
+      }
+    } catch (error) {
+      console.error(
+        `❌ Error processing price update for ${priceData.symbol}:`,
+        error
+      );
+    } finally {
+      this.isProcessing = false;
+    }
+  }
+
+  async checkAlertConditions(alert, priceData) {
+    try {
+      console.log(
+        `🔍 Checking alert conditions for ${alert.symbol} (Alert ID: ${alert._id})`
+      );
+      console.log(
+        `📊 Live data: Price=${priceData.price}, Volume=${priceData.volume24h}, Change=${priceData.priceChangePercent}%`
+      );
+      console.log(
+        `📊 Baseline: Price=${alert.baselinePrice}, Volume=${alert.baselineVolume}, Timestamp=${alert.baselineTimestamp}`
+      );
+
+      // CRITICAL: Check if baseline needs to be updated based on timeframe
+      // If timeframe interval has passed, update baseline to current live price
+      if (alert.conditions?.changePercent?.timeframe) {
+        const timeframe = alert.conditions.changePercent.timeframe;
+        const timeframeMs = this.getTimeframeMs(timeframe);
+        const baselineTimestamp = alert.baselineTimestamp
+          ? new Date(alert.baselineTimestamp).getTime()
+          : Date.now();
+        const currentTime = Date.now();
+        const timeSinceBaseline = currentTime - baselineTimestamp;
+
+        // Check if timeframe interval has passed
+        if (timeSinceBaseline >= timeframeMs) {
+          console.log(
+            `🔄 Timeframe interval passed for ${alert.symbol}, updating baseline from ${alert.baselinePrice} to ${priceData.price}`
+          );
+
+          // Update baseline to current live price
+          alert.baselinePrice = priceData.price;
+          alert.baselineTimestamp = new Date();
+          
+          // Update baseline volume based on smallest volume timeframe (if volume condition exists)
+          if (alert.conditions?.volume?.timeframes?.length > 0) {
+            const volumeTimeframes = alert.conditions.volume.timeframes;
+            const smallestTimeframe = volumeTimeframes.reduce((min, tf) => {
+              const minMs = this.getTimeframeMs(min);
+              const tfMs = this.getTimeframeMs(tf);
+              return tfMs < minMs ? tf : min;
+            });
+            const smallestTimeframeMs = this.getTimeframeMs(smallestTimeframe);
+            
+            if (timeSinceBaseline >= smallestTimeframeMs) {
+              alert.baselineVolume = priceData.volume || priceData.volume24h;
+              console.log(`📊 Volume baseline updated (${smallestTimeframe}): ${alert.baselineVolume}`);
+            }
+          } else {
+            // No volume condition - update normally
+            alert.baselineVolume = priceData.volume || priceData.volume24h;
+          }
+
+          // OPTIMIZATION: Queue baseline update to Redis Stream (non-blocking)
+          await this.enqueueDbOperation({
+            type: "update_baseline",
+            alertId: alert._id.toString(),
+            data: {
+              baselinePrice: priceData.price,
+              baselineVolume: priceData.volume || priceData.volume24h,
+              baselineTimestamp: new Date(),
+            },
+            priority: "normal",
+          }).catch((error) => {
+            console.error(
+              `❌ Error enqueueing baseline update to DB queue:`,
+              error.message
+            );
+            // Fallback: Try direct DB update if queue fails
+            Alert.findByIdAndUpdate(alert._id, {
+              baselinePrice: priceData.price,
+              baselineVolume: priceData.volume || priceData.volume24h,
+              baselineTimestamp: new Date(),
+            }).catch((dbError) => {
+              console.error(
+                `❌ Error updating baseline for ${alert.symbol} (fallback):`,
+                dbError.message
+              );
+            });
+          });
+
+          // OPTIMIZATION: Update in-memory cache immediately
+          const alertsForSymbol = this.activeAlerts.get(alert.symbol);
+          if (alertsForSymbol) {
+            const alertIndex = alertsForSymbol.findIndex(
+              (a) => a._id.toString() === alert._id.toString()
+            );
+            if (alertIndex !== -1) {
+              // Update with new baseline values
+              alertsForSymbol[alertIndex] = {
+                ...alertsForSymbol[alertIndex],
+                baselinePrice: priceData.price,
+                baselineVolume: priceData.volume || priceData.volume24h,
+                baselineTimestamp: new Date(),
+              };
+            }
+          }
+
+          // OPTIMIZATION: Update Redis cache (non-blocking)
+          await this.updateAlertInCache({
+            ...alert,
+            baselinePrice: priceData.price,
+            baselineVolume: priceData.volume || priceData.volume24h,
+            baselineTimestamp: new Date(),
+          }).catch((error) => {
+            console.error(
+              `❌ Error updating alert in Redis cache for ${alert.symbol}:`,
+              error.message
+            );
+          });
+
+          console.log(
+            `✅ Baseline updated in memory and Redis cache for ${alert.symbol}`
+          );
+        } else {
+          const remainingMs = timeframeMs - timeSinceBaseline;
+          const remainingMinutes = Math.ceil(remainingMs / (1000 * 60));
+          console.log(
+            `⏰ Timeframe interval (${timeframe}) not yet reached for ${alert.symbol}`
+          );
+        }
+      }
+
+      // Check if alert is locked (temporary lock due to alert count)
+      if (isAlertLocked(alert)) {
+        const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
+        const now = new Date();
+        const timeRemaining = Math.max(0, lockUntil.getTime() - now.getTime());
+        const minutesRemaining = Math.ceil(timeRemaining / (1000 * 60));
+
+        console.log(
+          `🔒 Alert ${alert._id} for ${
+            alert.symbol
+          } is LOCKED until ${lockUntil.toISOString()}`
+        );
+        return false;
+      }
+
+      // IMPORTANT: Check price direction based on alert settings
+      const direction =
+        alert.conditions?.changePercent?.direction || "increase";
+      const priceChanged = priceData.price !== alert.baselinePrice;
+
+      console.log(
+        `📊 Direction Check: Required=${direction}, Baseline=${alert.baselinePrice}, Live=${priceData.price}`
+      );
+
+      if (direction === "increase" && priceData.price <= alert.baselinePrice) {
+        console.log(
+          `❌ Direction: INCREASE - Live price ${priceData.price} <= baseline ${alert.baselinePrice}, skipping alert`
+        );
+        return false;
+      }
+
+      if (direction === "decrease" && priceData.price >= alert.baselinePrice) {
+        console.log(
+          `❌ Direction: DECREASE - Live price ${priceData.price} >= baseline ${alert.baselinePrice}, skipping alert`
+        );
+        return false;
+      }
+
+      if (!priceChanged) {
+        console.log(
+          `❌ Price hasn't changed from baseline ${alert.baselinePrice}, skipping alert`
+        );
+        return false;
+      }
+
+      console.log(
+        `✅ Direction condition met: ${direction.toUpperCase()} - Price moved from ${
+          alert.baselinePrice
+        } to ${priceData.price}`
+      );
+
+      const conditions = alert.conditions;
+      let conditionsMet = true;
+
+      console.log(`📋 Alert conditions:`, JSON.stringify(conditions, null, 2));
+
+      // Check Min Daily volume condition (required)
+      if (conditions.minDaily && (priceData.volume || priceData.volume24h)) {
+        const minVolume = parseFloat(conditions.minDaily);
+        const actualVolume = parseFloat(
+          priceData.volume || priceData.volume24h
+        );
+
+        if (actualVolume < minVolume) {
+          console.log(
+            `❌ Min Daily condition FAILED: ${actualVolume} < ${minVolume}`
+          );
+          conditionsMet = false;
+        } else {
+          console.log(
+            `✅ Min Daily condition PASSED: ${actualVolume} >= ${minVolume}`
+          );
+        }
+      } else {
+        console.log(`⚠️ Min Daily condition not set or volume data missing`);
+      }
+
+      // Check Change % condition (required) - Now based on candle timeframe
+      if (
+        conditionsMet &&
+        conditions.changePercent &&
+        conditions.changePercent.percentage
+      ) {
+        const requiredChange = parseFloat(conditions.changePercent.percentage);
+        const timeframe = conditions.changePercent.timeframe || "5m";
+
+        console.log(
+          `📊 Checking candle change condition: ${requiredChange}% in ${timeframe}`
+        );
+
+        // Check if candle meets the change requirement using baseline price
+        if (!alert.baselinePrice || alert.baselinePrice === 0) {
+          console.log(
+            `❌ Candle Change % condition FAILED: Baseline price is 0 or missing`
+          );
+          conditionsMet = false;
+        } else {
+          const candleChangeMet = this.checkCandleChangeCondition(
+            alert.symbol,
+            timeframe,
+            requiredChange,
+            alert.baselinePrice
+          );
+
+          if (!candleChangeMet) {
+            console.log(
+              `❌ Candle Change % condition FAILED: Candle change < ${requiredChange}% in ${timeframe}`
+            );
+            conditionsMet = false;
+          } else {
+            console.log(
+              `✅ Candle Change % condition PASSED: Candle change >= ${requiredChange}% in ${timeframe}`
+            );
+          }
+        }
+      } else {
+        console.log(`⚠️ Change % condition not set or data missing`);
+      }
+
+      // Check Candle conditions (optional)
+      if (
+        conditionsMet &&
+        conditions.candle &&
+        conditions.candle.timeframes &&
+        conditions.candle.timeframes.length > 0
+      ) {
+        // CRITICAL: Initialize/update candle data for all required timeframes before evaluation
+        for (const timeframe of conditions.candle.timeframes) {
+          await this.updateCandleData(alert.symbol, timeframe, priceData);
+        }
+
+        const candleMatch = await this.evaluateCandleConditions(
+          conditions.candle,
+          priceData,
+          alert.symbol
+        );
+        if (!candleMatch) {
+          conditionsMet = false;
+        }
+      }
+
+      // Check RSI Range conditions (optional)
+      if (
+        conditionsMet &&
+        conditions.rsiRange &&
+        conditions.rsiRange.timeframes &&
+        conditions.rsiRange.timeframes.length > 0
+      ) {
+        const rsiMatch = await this.evaluateRSIConditions(
+          conditions.rsiRange,
+          priceData,
+          alert.symbol
+        );
+        if (!rsiMatch) {
+          conditionsMet = false;
+        }
+      }
+
+      // Check Volume conditions (optional)
+      if (
+        conditionsMet &&
+        conditions.volume &&
+        conditions.volume.timeframes &&
+        conditions.volume.timeframes.length > 0
+      ) {
+        const volumeMatch = await this.evaluateVolumeConditions(
+          conditions.volume,
+          priceData,
+          alert.symbol,
+          alert
+        );
+        if (!volumeMatch) {
+          conditionsMet = false;
+        }
+      }
+
+      // Check OPEN INTEREST conditions (optional)
+      if (
+        conditionsMet &&
+        conditions.openInterest &&
+        conditions.openInterest.timeframes &&
+        conditions.openInterest.timeframes.length > 0
+      ) {
+        const openInterestMatch = await this.evaluateOpenInterestConditions(
+          conditions.openInterest,
+          alert,
+          priceData
+        );
+        if (!openInterestMatch) {
+          conditionsMet = false;
+        }
+      }
+
+      if (conditionsMet) {
+        console.log(
+          `🚨 ALL CONDITIONS MET! Triggering alert for ${alert.symbol}, 🎯 Alert will be triggered with price: ${priceData.price}`
+        );
+      
+
+        console.log(`🔄 Calling triggerAlert for ${alert.symbol}...`);
+        const triggerResult = await this.triggerAlert(alert, priceData);
+        console.log(
+          `🔄 triggerAlert result for ${alert.symbol}: ${triggerResult}`
+        );
+      } else {
+        console.log(
+          `❌ CONDITIONS NOT MET for ${alert.symbol} - Alert will NOT trigger`
+        );
+      }
+
+      return conditionsMet;
+    } catch (error) {
+      console.error(
+        `❌ Error checking alert conditions for ${alert.symbol}:`,
+        error
+      );
+      return false;
+    }
+  }
 
   async triggerAlert(alert, priceData) {
     try {
@@ -1906,7 +2375,7 @@ class RealTimeAlertProcessor {
         targetValue:
           alert.alertConditions?.changePercent?.percentage ||
           alert.conditions?.changePercent?.percentage,
-        actualValue: parseFloat(priceData.priceChangePercent) || 0,
+        actualValue: parseFloat(alertHistory.baselineData?.changeFromBaselinePercent) || 0,
         timeframe:
           alert.alertConditions?.changePercent?.timeframe ||
           alert.conditions?.changePercent?.timeframe ||
@@ -1963,93 +2432,258 @@ class RealTimeAlertProcessor {
     }
   }
 
-  // Calculate RSI from Binance klines data
+  // 🛡️ SAFE RSI CALCULATION - Queue System to Prevent 418 Ban
   async calculateRSI(symbol, timeframe, period = 14) {
-    try {
-      const binanceInterval = this.getBinanceInterval(timeframe);
-      // Fetch enough candles for RSI calculation (period + 1 for safety)
-      const limit = period + 5;
-
-      const response = await fetch(
-        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`
-      );
-
-      if (!response.ok) {
-        console.warn(
-          `⚠️ Failed to fetch klines for RSI calculation: ${response.status}`
-        );
-        return null;
+    const key = `${symbol}_${timeframe}`;
+    
+    // Circuit breaker - check if we've had actual API failures
+    const failureKey = `rsi_failures_${key}`;
+    const failures = this.rsiFailures?.get(failureKey) || 0;
+    const lastFailureTime = this.rsiFailures?.get(`${failureKey}_time`) || 0;
+    const timeSinceLastFailure = Date.now() - lastFailureTime;
+    
+    // Only block if we have real failures AND within 10 minute window
+    if (failures >= 5 && timeSinceLastFailure < 10 * 60 * 1000) {
+      return null;
+    } else if (failures >= 5 && timeSinceLastFailure >= 10 * 60 * 1000) {
+      // Reset after 10 minutes
+      this.rsiFailures.delete(failureKey);
+      this.rsiFailures.delete(`${failureKey}_time`);
+    }
+    
+    // 1. Check if we have history for local calculation
+    let closes = this.rsiHistory.get(key);
+    
+    if (!closes || closes.length < period + 1) {
+      // Data missing -> Queue background fetch (but only if not already queued)
+      const alreadyQueued = this.rsiQueue.some(item => item.key === key);
+      if (!alreadyQueued && this.rsiQueue.length < 500) {
+        this.queueRsiHistoryFetch(symbol, timeframe, period);
       }
-
-      const klines = await response.json();
-
-      if (klines.length < period + 1) {
-        console.warn(
-          `⚠️ Not enough data for RSI calculation: need ${period + 1}, got ${
-            klines.length
-          }`
-        );
-        return null;
-      }
-
-      // Extract close prices
-      const closes = klines.map((kline) => parseFloat(kline[4]));
-
-      // Calculate price changes
-      const changes = [];
-      for (let i = 1; i < closes.length; i++) {
-        changes.push(closes[i] - closes[i - 1]);
-      }
-
-      // Separate gains and losses
-      const gains = changes.map((change) => (change > 0 ? change : 0));
-      const losses = changes.map((change) =>
-        change < 0 ? Math.abs(change) : 0
-      );
-
-      // Calculate initial average gain and loss (first period)
-      let avgGain = 0;
-      let avgLoss = 0;
-
-      for (let i = 0; i < period; i++) {
-        avgGain += gains[i];
-        avgLoss += losses[i];
-      }
-
-      avgGain = avgGain / period;
-      avgLoss = avgLoss / period;
-
-      // Calculate RSI using Wilder's smoothing method
-      for (let i = period; i < changes.length; i++) {
-        avgGain = (avgGain * (period - 1) + gains[i]) / period;
-        avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
-      }
-
-      // Avoid division by zero
-      if (avgLoss === 0) {
-        return avgGain > 0 ? 100 : 50;
-      }
-
-      const rs = avgGain / avgLoss;
-      const rsi = 100 - 100 / (1 + rs);
-
-      console.log(
-        `📈 RSI calculated for ${symbol} (${timeframe}): ${rsi.toFixed(
-          2
-        )} (Period: ${period})`
-      );
-
-      return rsi;
-    } catch (error) {
-      console.error(
-        `❌ Error calculating RSI for ${symbol} (${timeframe}):`,
-        error.message
-      );
+      
+      // ✅ FIX: Don't count as failure - data is just loading
+      // Return null immediately (alert will retry next tick)
       return null;
     }
+    
+    // 2. Add current live price for real-time RSI
+    const livePrice = this.livePrices[symbol]?.price;
+    let calculationCloses = [...closes];
+    
+    if (livePrice) {
+      calculationCloses.push(livePrice);
+    }
+    
+    // 3. Calculate RSI locally (no API call)
+    const rsi = this.computeRSILocally(calculationCloses, period);
+    
+    // Reset failure count on success
+    if (rsi !== null && this.rsiFailures) {
+      this.rsiFailures.delete(failureKey);
+      this.rsiFailures.delete(`${failureKey}_time`);
+    }
+    
+    return rsi;
+  }
+  
+  // Queue RSI history fetch (prevents multiple simultaneous API calls)
+  queueRsiHistoryFetch(symbol, timeframe, period) {
+    const key = `${symbol}_${timeframe}`;
+    
+    // Check if already queued
+    const exists = this.rsiQueue.some(item => item.key === key);
+    if (exists) {
+      console.log(`⏳ RSI fetch already queued for ${key}`);
+      return;
+    }
+    
+    // CRITICAL FIX: Limit queue size to prevent memory issues
+    if (this.rsiQueue.length >= 500) {
+      return;
+    }
+    
+    // Add to queue with timestamp for timeout tracking
+    this.rsiQueue.push({ 
+      symbol, 
+      timeframe, 
+      period, 
+      key,
+      queuedAt: Date.now()
+    });
+    
+    console.log(`⏳ Queued RSI fetch for ${key} (queue size: ${this.rsiQueue.length})`);
+    
+    // Start processing if not already running
+    this.processRsiQueue();
+  }
+  
+  // Process RSI queue with rate limiting
+  async processRsiQueue() {
+    if (this.isProcessingRsiQueue) return;
+    this.isProcessingRsiQueue = true;
+    
+    console.log(`🔄 RSI Queue Started: ${this.rsiQueue.length} items pending...`);
+    
+    const maxProcessingTime = 5 * 60 * 1000; // 5 minutes max
+    const startTime = Date.now();
+    let processedCount = 0;
+    
+    while (this.rsiQueue.length > 0) {
+      // CRITICAL FIX: Add timeout to prevent infinite processing
+      if (Date.now() - startTime > maxProcessingTime) {
+        console.log(`⏰ RSI Queue timeout after 5 minutes, stopping processing`);
+        break;
+      }
+      
+      // 1. Check for API ban
+      if (Date.now() < this.apiBanUntil) {
+        const waitTime = Math.ceil((this.apiBanUntil - Date.now()) / 1000);
+        if (waitTime % 10 === 0) {
+          console.log(`⛔ API Paused due to 418 Error. Resuming in ${waitTime}s...`);
+        }
+        await this.delay(2000);
+        continue;
+      }
+      
+      // 2. Get next item and check if it's too old
+      const task = this.rsiQueue[0];
+      const taskAge = Date.now() - (task.queuedAt || 0);
+      
+      // CRITICAL FIX: Remove tasks older than 10 minutes
+      if (taskAge > 10 * 60 * 1000) {
+        console.log(`⏰ Removing stale RSI task for ${task.key} (age: ${Math.round(taskAge/1000)}s)`);
+        this.rsiQueue.shift();
+        continue;
+      }
+      
+      try {
+        await this.fetchAndStoreRsiHistory(task.symbol, task.timeframe, task.period);
+        
+        // Success: Remove from queue and reset failures
+        this.rsiQueue.shift();
+        const failureKey = `rsi_failures_${task.key}`;
+        if (this.rsiFailures) {
+          this.rsiFailures.delete(failureKey);
+          this.rsiFailures.delete(`${failureKey}_time`);
+        }
+        processedCount++;
+        
+        // 🛑 SLOW DOWN: 300ms delay between requests
+        await this.delay(300);
+        
+      } catch (error) {
+        if (error.status === 418 || error.status === 429) {
+          console.error(`🚨 418/429 ERROR! Pausing queue for 2 minutes.`);
+          this.apiBanUntil = Date.now() + 120 * 1000;
+        } else {
+          // ✅ FIX: Count actual API failures here
+          const failureKey = `rsi_failures_${task.key}`;
+          if (!this.rsiFailures) this.rsiFailures = new Map();
+          const failures = this.rsiFailures.get(failureKey) || 0;
+          this.rsiFailures.set(failureKey, failures + 1);
+          this.rsiFailures.set(`${failureKey}_time`, Date.now());
+          
+          console.error(`❌ RSI fetch failed for ${task.key}: ${error.message} (failure #${failures + 1})`);
+          this.rsiQueue.shift();
+        }
+      }
+      
+      // CRITICAL FIX: Limit processing per session to prevent overload
+      if (processedCount >= 50) {
+        console.log(`🛑 RSI Queue processed 50 items, taking a break...`);
+        break;
+      }
+    }
+    
+    this.isProcessingRsiQueue = false;
+    console.log(`✅ RSI Queue Processed: ${processedCount} items, ${this.rsiQueue.length} remaining`);
+    
+    // CRITICAL FIX: If queue still has items, schedule next processing
+    if (this.rsiQueue.length > 0) {
+      setTimeout(() => {
+        this.processRsiQueue();
+      }, 10000); // Resume in 10 seconds
+    }
+  }
+  
+  // Fetch RSI history from Binance API (actual API call)
+  async fetchAndStoreRsiHistory(symbol, timeframe, period) {
+    const binanceInterval = this.getBinanceInterval(timeframe);
+    const limit = period + 10; // Extra buffer
+    
+    const response = await fetch(
+      `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`
+    );
+    
+    if (response.status === 418 || response.status === 429) {
+      const err = new Error("Rate Limit");
+      err.status = response.status;
+      throw err;
+    }
+    
+    if (!response.ok) {
+      throw new Error(`API Error ${response.status}`);
+    }
+    
+    const klines = await response.json();
+    const closes = klines.map(k => parseFloat(k[4]));
+    
+    // Store in history cache
+    const key = `${symbol}_${timeframe}`;
+    this.rsiHistory.set(key, closes);
+    
+    console.log(`📥 RSI History loaded for ${symbol} ${timeframe}: ${closes.length} candles`);
+  }
+  
+  // Local RSI calculation (no API calls)
+  computeRSILocally(closes, period) {
+    if (closes.length < period + 1) return null;
+    
+    // Calculate price changes
+    const changes = [];
+    for (let i = 1; i < closes.length; i++) {
+      changes.push(closes[i] - closes[i - 1]);
+    }
+    
+    // Separate gains and losses
+    const gains = changes.map((change) => (change > 0 ? change : 0));
+    const losses = changes.map((change) => (change < 0 ? Math.abs(change) : 0));
+    
+    // Calculate initial average gain and loss
+    let avgGain = 0;
+    let avgLoss = 0;
+    
+    for (let i = 0; i < period; i++) {
+      avgGain += gains[i];
+      avgLoss += losses[i];
+    }
+    
+    avgGain = avgGain / period;
+    avgLoss = avgLoss / period;
+    
+    // Calculate RSI using Wilder's smoothing method
+    for (let i = period; i < changes.length; i++) {
+      avgGain = (avgGain * (period - 1) + gains[i]) / period;
+      avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+    }
+    
+    // Avoid division by zero
+    if (avgLoss === 0) {
+      return avgGain > 0 ? 100 : 50;
+    }
+    
+    const rs = avgGain / avgLoss;
+    const rsi = 100 - 100 / (1 + rs);
+    
+    return rsi;
+  }
+  
+  // Helper: Delay function
+  delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  // Get RSI value for a symbol and timeframe (OPTIMIZED with Redis + In-Memory cache)
+  // 🛡️ SAFE RSI GETTER - Uses Queue System to Prevent 418 Ban
   async getRSI(symbol, timeframe, period = 14) {
     const key = `${symbol}_${timeframe}_${period}`;
     const now = Date.now();
@@ -2092,7 +2726,7 @@ class RealTimeAlertProcessor {
       // Return stale data immediately (non-blocking)
       const staleData = inMemoryCache;
 
-      // Update cache in background (non-blocking)
+      // 🛡️ SAFE UPDATE: Use queue system instead of direct API call
       this.calculateRSI(symbol, timeframe, period)
         .then((rsiValue) => {
           if (rsiValue !== null) {
@@ -2126,7 +2760,7 @@ class RealTimeAlertProcessor {
       return staleData;
     }
 
-    // OPTIMIZATION 4: Only calculate if no cache exists (first time)
+    // OPTIMIZATION 4: 🛡️ SAFE FIRST-TIME CALCULATION - Use queue system
     const rsiValue = await this.calculateRSI(symbol, timeframe, period);
 
     if (rsiValue !== null) {
@@ -2160,98 +2794,64 @@ class RealTimeAlertProcessor {
 
   // Technical analysis helper methods
   async evaluateCandleConditions(candleConditions, priceData, symbol = null) {
-    // Get current live price for timeframe confirmation
-    const currentPrice = priceData.price || priceData.close;
-    const { open, high, low, close } = priceData;
-
-    // Validate OHLC data
-    if (!open || !high || !low || !close) {
-      console.log("⚠️ Missing OHLC data for candle evaluation");
-      return true; // Skip if data missing
-    }
-
+    const currentPrice = parseFloat(priceData.price || priceData.close);
     const condition = candleConditions.condition;
     const timeframes = candleConditions.timeframes || [];
-    const range = high - low;
+    const EPSILON = 1.0001; // 0.01% epsilon to avoid float equality issues
+    const CANDLE_START_BUFFER_MS = 2000; // Wait 2s after candle starts
 
-    console.log(`🕯️ Candle Evaluation: ${condition}`);
-    console.log(`   OHLC: O=${open}, H=${high}, L=${low}, C=${close}`);
-    console.log(`   Range: ${range.toFixed(6)} (High ${high} - Low ${low})`);
+    console.log(`🕯️ Candle Evaluation: ${condition}, Live Price: ${currentPrice}`);
 
     switch (condition) {
       case "CANDLE_ABOVE_OPEN":
-        // Bullish candle: Close > Open
-        // For multiple timeframes: ALL selected timeframes must have Close > Open
-        let allTimeframesAboveOpen = true;
+        if (timeframes.length === 0 || !symbol) {
+          console.log(`⚠️ No timeframes selected for candle condition`);
+          return false;
+        }
 
-        if (timeframes.length > 0 && symbol) {
-          // Check ALL selected timeframes - ALL must pass
-          let verifiedTimeframes = 0;
-          for (const timeframe of timeframes) {
-            let candle = this.getCandleData(symbol, timeframe);
+        console.log(`🔍 Checking ${timeframes.length} timeframes (AND condition - ALL must pass)`);
+        
+        let allTimeframesPassed = true;
+        const now = Date.now();
+        
+        for (const timeframe of timeframes) {
+          // 🔥 CHANGE: Use getCandleDataOrQueue instead of direct fetch
+          let candle = this.getCandleDataOrQueue(symbol, timeframe);
 
-            // If candle data is missing or null, fetch from Binance API
-            if (!candle || candle.open === null || candle.close === null) {
-              console.log(
-                `   ⚠️ Timeframe ${timeframe}: Local candle data missing, fetching from Binance...`
-              );
-              const binanceCandle = await this.fetchCandleFromBinance(
-                symbol,
-                timeframe
-              );
-              if (binanceCandle) {
-                // Update local candle data with Binance data
-                candle = this.getCandleData(symbol, timeframe);
-                candle.open = binanceCandle.open;
-                candle.high = binanceCandle.high;
-                candle.low = binanceCandle.low;
-                candle.close = binanceCandle.close;
-                candle.volume = binanceCandle.volume;
-                candle.startTime = binanceCandle.startTime;
-                candle.endTime = binanceCandle.endTime;
-                candle.isComplete = binanceCandle.isComplete;
-                console.log(
-                  `   ✅ Fetched candle from Binance for ${timeframe}: O=${candle.open}, C=${candle.close}`
-                );
-              }
-            }
-
-            if (candle && candle.open !== null && candle.close !== null) {
-              const tfAboveOpen = candle.close > candle.open;
-              verifiedTimeframes++;
-              console.log(
-                `   Timeframe ${timeframe}: Close ${candle.close} > Open ${candle.open}? ${tfAboveOpen}`
-              );
-              if (!tfAboveOpen) {
-                allTimeframesAboveOpen = false;
-                console.log(
-                  `   ❌ Timeframe ${timeframe} FAILED: Close ${candle.close} <= Open ${candle.open}`
-                );
-                break; // One timeframe failed, condition invalid
-              }
-            } else {
-              console.log(
-                `   ⚠️ Timeframe ${timeframe}: Missing candle data (open/close), cannot verify`
-              );
-              // If candle data is missing for a required timeframe, we can't verify
-              // This means the condition cannot be confirmed, so fail it
-              allTimeframesAboveOpen = false;
-              break;
-            }
+          // Agar data abhi tak fetch nahi hua (Queue mein hai)
+          if (!candle || candle.open === null) {
+            console.log(`⏳ [${timeframe}] Data pending, skipping check...`);
+            return false; // Safe exit: Alert next tick pe check hoga jab data ajayega
           }
 
-          console.log(
-            `   Candle Above Open check (multi-timeframe): ${allTimeframesAboveOpen} (${verifiedTimeframes}/${timeframes.length} timeframes verified, ALL must pass)`
-          );
-          return allTimeframesAboveOpen;
-        } else {
-          // Fallback: use current priceData if no timeframes specified
-          const isAboveOpen = close > open;
-          console.log(
-            `   Candle Above Open check: ${isAboveOpen} (Close ${close} > Open ${open})`
-          );
-          return isAboveOpen;
+          const candleStartTime = candle.startTime;
+          const openPrice = parseFloat(candle.open);
+          const timeSinceCandleStart = now - candleStartTime;
+
+          // Safety: Skip if we're too close to candle boundary (avoid stale data)
+          if (timeSinceCandleStart < CANDLE_START_BUFFER_MS) {
+            console.log(`⏳ [${timeframe}] Too close to candle start (${timeSinceCandleStart}ms), skipping`);
+            return false;
+          }
+
+          // Apply epsilon: currentPrice must be > openPrice * 1.0001
+          const priceAboveOpen = currentPrice > (openPrice * EPSILON);
+          
+          console.log(`📊 [${timeframe}] Start: ${new Date(candleStartTime).toISOString()}, Open: ${openPrice}, Current: ${currentPrice}, Above: ${priceAboveOpen}`);
+
+          if (!priceAboveOpen) {
+            console.log(`❌ [${timeframe}] FAILED: ${currentPrice} <= ${openPrice * EPSILON}`);
+            allTimeframesPassed = false;
+            break;
+          }
+          
+          console.log(`✅ [${timeframe}] PASSED: ${currentPrice} > ${openPrice * EPSILON}`);
         }
+        
+        if (allTimeframesPassed) {
+          console.log(`🎉 ALL ${timeframes.length} timeframes PASSED - Alert condition met`);
+        }
+        return allTimeframesPassed;
 
       case "HAMMER":
         // Hammer: Bullish reversal pattern
@@ -2467,110 +3067,109 @@ class RealTimeAlertProcessor {
       `📈 RSI Evaluation: ${condition} ${targetLevel} (Period: ${rsiPeriod})`
     );
 
-    // If timeframes are specified, check ALL timeframes
-    if (timeframes && timeframes.length > 0 && symbol) {
-      let allTimeframesPassed = true;
-      let verifiedTimeframes = 0;
+    // Validate timeframes
+    if (!timeframes || timeframes.length === 0 || !symbol) {
+      console.log(`   ⚠️ No timeframes specified or symbol missing`);
+      return true; // Skip if no timeframes
+    }
 
-      for (const timeframe of timeframes) {
-        console.log(`   Checking timeframe: ${timeframe}`);
+    console.log(`   🔍 Checking ${timeframes.length} timeframes (ALL must have data AND satisfy condition)`);
 
-        // Get RSI value for this timeframe
-        const rsiData = await this.getRSI(symbol, timeframe, rsiPeriod);
+    // Loop through all selected timeframes
+    for (const timeframe of timeframes) {
+      console.log(`   📊 Checking timeframe: ${timeframe}`);
 
-        if (!rsiData || rsiData.current === null) {
-          console.log(
-            `   ⚠️ Timeframe ${timeframe}: RSI data not available, cannot verify`
-          );
-          allTimeframesPassed = false;
-          break;
-        }
+      // Fetch RSI value for this timeframe
+      const rsiData = await this.getRSI(symbol, timeframe, rsiPeriod);
 
-        const currentRSI = rsiData.current;
-        const previousRSI = rsiData.previous || currentRSI;
-        verifiedTimeframes++;
-
+      if (!rsiData || rsiData.current === null) {
         console.log(
-          `   Timeframe ${timeframe}: Current RSI=${currentRSI.toFixed(
-            2
-          )}, Previous RSI=${previousRSI.toFixed(2)}`
+          `   ❌ Timeframe ${timeframe}: RSI data not available, FAILING condition (data required for ALL timeframes)`
         );
+        return false; // STRICT: All timeframes must have data
+      }
 
-        let timeframePassed = false;
+      const currentRSI = rsiData.current;
+      const previousRSI = rsiData.previous || currentRSI;
 
-        switch (condition) {
-          case "ABOVE":
-            timeframePassed = currentRSI > targetLevel;
-            console.log(
-              `   Timeframe ${timeframe}: RSI ${currentRSI.toFixed(
-                2
-              )} > ${targetLevel}? ${timeframePassed}`
-            );
-            break;
+      console.log(
+        `   📈 Timeframe ${timeframe}: Current RSI=${currentRSI.toFixed(
+          2
+        )}, Previous RSI=${previousRSI.toFixed(2)}`
+      );
 
-          case "BELOW":
-            timeframePassed = currentRSI < targetLevel;
-            console.log(
-              `   Timeframe ${timeframe}: RSI ${currentRSI.toFixed(
-                2
-              )} < ${targetLevel}? ${timeframePassed}`
-            );
-            break;
+      // Apply condition based on type
+      let conditionMet = false;
 
-          case "CROSSING_UP":
-            // Previous RSI was below or equal, now above
-            timeframePassed =
-              previousRSI <= targetLevel && currentRSI > targetLevel;
-            console.log(
-              `   Timeframe ${timeframe}: Crossing Up check - Previous ${previousRSI.toFixed(
-                2
-              )} <= ${targetLevel} AND Current ${currentRSI.toFixed(
-                2
-              )} > ${targetLevel}? ${timeframePassed}`
-            );
-            break;
-
-          case "CROSSING_DOWN":
-            // Previous RSI was above or equal, now below
-            timeframePassed =
-              previousRSI >= targetLevel && currentRSI < targetLevel;
-            console.log(
-              `   Timeframe ${timeframe}: Crossing Down check - Previous ${previousRSI.toFixed(
-                2
-              )} >= ${targetLevel} AND Current ${currentRSI.toFixed(
-                2
-              )} < ${targetLevel}? ${timeframePassed}`
-            );
-            break;
-
-          default:
-            console.log(`   Unknown RSI condition: ${condition}`);
-            timeframePassed = false;
-        }
-
-        if (!timeframePassed) {
-          allTimeframesPassed = false;
+      switch (condition) {
+        case "ABOVE":
+          conditionMet = currentRSI > targetLevel;
           console.log(
-            `   ❌ Timeframe ${timeframe} FAILED: Condition ${condition} not met`
+            `   ${conditionMet ? '✅' : '❌'} Timeframe ${timeframe}: RSI ${currentRSI.toFixed(
+              2
+            )} > ${targetLevel}? ${conditionMet}`
           );
-          break; // One timeframe failed, condition invalid
-        } else {
+          break;
+
+        case "BELOW":
+          conditionMet = currentRSI < targetLevel;
           console.log(
-            `   ✅ Timeframe ${timeframe} PASSED: Condition ${condition} met`
+            `   ${conditionMet ? '✅' : '❌'} Timeframe ${timeframe}: RSI ${currentRSI.toFixed(
+              2
+            )} < ${targetLevel}? ${conditionMet}`
           );
-        }
+          break;
+
+        case "CROSSING_UP":
+          // Previous RSI was below or equal, now above
+          conditionMet = previousRSI <= targetLevel && currentRSI > targetLevel;
+          console.log(
+            `   ${conditionMet ? '✅' : '❌'} Timeframe ${timeframe}: Crossing Up - Previous ${previousRSI.toFixed(
+              2
+            )} <= ${targetLevel} AND Current ${currentRSI.toFixed(
+              2
+            )} > ${targetLevel}? ${conditionMet}`
+          );
+          break;
+
+        case "CROSSING_DOWN":
+          // Previous RSI was above or equal, now below
+          conditionMet = previousRSI >= targetLevel && currentRSI < targetLevel;
+          console.log(
+            `   ${conditionMet ? '✅' : '❌'} Timeframe ${timeframe}: Crossing Down - Previous ${previousRSI.toFixed(
+              2
+            )} >= ${targetLevel} AND Current ${currentRSI.toFixed(
+              2
+            )} < ${targetLevel}? ${conditionMet}`
+          );
+          break;
+
+        default:
+          console.log(`   ❌ Unknown RSI condition: ${condition}`);
+          conditionMet = false;
+      }
+
+      // CRITICAL: If even one timeframe fails, return false immediately
+      if (!conditionMet) {
+        console.log(
+          `   ❌ ALERT BLOCKED: Timeframe ${timeframe} failed condition ${condition}`
+        );
+        console.log(
+          `   ⚠️ All ${timeframes.length} timeframes must pass, but ${timeframe} failed`
+        );
+        return false; // Exit immediately - no need to check remaining timeframes
       }
 
       console.log(
-        `   RSI check (multi-timeframe): ${allTimeframesPassed} (${verifiedTimeframes}/${timeframes.length} timeframes verified, ALL must pass)`
+        `   ✅ Timeframe ${timeframe} PASSED: Condition ${condition} met`
       );
-      return allTimeframesPassed;
-    } else {
-      // Fallback: use single RSI calculation if no timeframes specified
-      // This should not happen in normal flow, but keeping for compatibility
-      console.log(`   ⚠️ No timeframes specified, using fallback calculation`);
-      return true; // Skip if no timeframes
     }
+
+    // All timeframes passed
+    console.log(
+      `   🎉 SUCCESS: All ${timeframes.length} timeframes satisfied RSI condition ${condition}`
+    );
+    return true;
   }
 
   async evaluateVolumeConditions(
@@ -2588,163 +3187,49 @@ class RealTimeAlertProcessor {
       }`
     );
 
-    // If timeframes are specified, check ALL timeframes
-    if (timeframes && timeframes.length > 0 && symbol) {
-      let allTimeframesPassed = true;
-      let verifiedTimeframes = 0;
+    // Timeframes only for baseline update (like changePercent)
+    // Condition check: current volume vs baseline volume
+    const currentVolume = parseFloat(priceData.volume || priceData.volume24h) || 0;
+    const baselineVolume = alert ? parseFloat(alert.baselineVolume) || 0 : 0;
 
-      for (const timeframe of timeframes) {
-        console.log(`   Checking timeframe: ${timeframe}`);
+    if (currentVolume === 0 || baselineVolume === 0) {
+      console.log("⚠️ Volume data missing, skipping condition");
+      return true;
+    }
 
-        // Get candle data for this timeframe to get volume
-        let candle = this.getCandleData(symbol, timeframe);
+    console.log(`   Current: ${currentVolume.toLocaleString()}, Baseline: ${baselineVolume.toLocaleString()}`);
 
-        // If candle data is missing, fetch from Binance
-        if (!candle || candle.volume === null || candle.volume === 0) {
-          console.log(
-            `   ⚠️ Timeframe ${timeframe}: Candle volume data missing, fetching from Binance...`
-          );
-          const binanceCandle = await this.fetchCandleFromBinance(
-            symbol,
-            timeframe
-          );
-          if (binanceCandle) {
-            candle = this.getCandleData(symbol, timeframe);
-            candle.volume = binanceCandle.volume;
-            candle.open = binanceCandle.open;
-            candle.close = binanceCandle.close;
-            console.log(
-              `   ✅ Fetched candle volume from Binance for ${timeframe}: ${binanceCandle.volume.toLocaleString()}`
-            );
-          }
-        }
+    switch (condition) {
+      case "INCREASING":
+        const volumeChangeInc = ((currentVolume - baselineVolume) / baselineVolume) * 100;
+        const passedInc = volumeChangeInc >= requiredPercentage;
+        console.log(`   INCREASING: ${volumeChangeInc.toFixed(2)}% >= ${requiredPercentage}%? ${passedInc ? '✅' : '❌'}`);
+        return passedInc;
 
-        if (!candle || !candle.volume || candle.volume === 0) {
-          console.log(
-            `   ⚠️ Timeframe ${timeframe}: Volume data not available, cannot verify`
-          );
-          allTimeframesPassed = false;
-          break;
-        }
+      case "DECREASING":
+        const volumeChangeDec = ((currentVolume - baselineVolume) / baselineVolume) * 100;
+        const passedDec = volumeChangeDec <= -requiredPercentage;
+        console.log(`   DECREASING: ${volumeChangeDec.toFixed(2)}% <= -${requiredPercentage}%? ${passedDec ? '✅' : '❌'}`);
+        return passedDec;
 
-        const currentVolume = candle.volume;
-        const baselineVolume = alert ? alert.baselineVolume || 0 : 0;
-        verifiedTimeframes++;
+      case "ABOVE":
+        const passedAbove = currentVolume > requiredPercentage;
+        console.log(`   ABOVE: ${currentVolume.toLocaleString()} > ${requiredPercentage.toLocaleString()}? ${passedAbove ? '✅' : '❌'}`);
+        return passedAbove;
 
-        console.log(
-          `   Timeframe ${timeframe}: Current Volume=${currentVolume.toLocaleString()}, Baseline Volume=${baselineVolume.toLocaleString()}`
-        );
+      case "BELOW":
+        const passedBelow = currentVolume < requiredPercentage;
+        console.log(`   BELOW: ${currentVolume.toLocaleString()} < ${requiredPercentage.toLocaleString()}? ${passedBelow ? '✅' : '❌'}`);
+        return passedBelow;
 
-        let timeframePassed = false;
-
-        switch (condition) {
-          case "INCREASING":
-            if (baselineVolume > 0) {
-              const volumeChange =
-                ((currentVolume - baselineVolume) / baselineVolume) * 100;
-              timeframePassed = volumeChange >= requiredPercentage;
-              console.log(
-                `   Timeframe ${timeframe}: Volume INCREASING check - Change ${volumeChange.toFixed(
-                  2
-                )}% >= ${requiredPercentage}%? ${timeframePassed}`
-              );
-            } else {
-              console.log(
-                `   ⚠️ Timeframe ${timeframe}: No baseline volume, skipping INCREASING check`
-              );
-              timeframePassed = true; // Skip if no baseline
-            }
-            break;
-
-          case "DECREASING":
-            if (baselineVolume > 0) {
-              const volumeChange =
-                ((currentVolume - baselineVolume) / baselineVolume) * 100;
-              timeframePassed = volumeChange <= -requiredPercentage;
-              console.log(
-                `   Timeframe ${timeframe}: Volume DECREASING check - Change ${volumeChange.toFixed(
-                  2
-                )}% <= -${requiredPercentage}%? ${timeframePassed}`
-              );
-            } else {
-              console.log(
-                `   ⚠️ Timeframe ${timeframe}: No baseline volume, skipping DECREASING check`
-              );
-              timeframePassed = true; // Skip if no baseline
-            }
-            break;
-
-          case "ABOVE":
-            timeframePassed = currentVolume > requiredPercentage;
-            console.log(
-              `   Timeframe ${timeframe}: Volume ABOVE check - ${currentVolume.toLocaleString()} > ${requiredPercentage.toLocaleString()}? ${timeframePassed}`
-            );
-            break;
-
-          case "BELOW":
-            timeframePassed = currentVolume < requiredPercentage;
-            console.log(
-              `   Timeframe ${timeframe}: Volume BELOW check - ${currentVolume.toLocaleString()} < ${requiredPercentage.toLocaleString()}? ${timeframePassed}`
-            );
-            break;
-
-          default:
-            console.log(`   Unknown volume condition: ${condition}`);
-            timeframePassed = false;
-        }
-
-        if (!timeframePassed) {
-          allTimeframesPassed = false;
-          console.log(
-            `   ❌ Timeframe ${timeframe} FAILED: Volume condition ${condition} not met`
-          );
-          break; // One timeframe failed, condition invalid
-        } else {
-          console.log(
-            `   ✅ Timeframe ${timeframe} PASSED: Volume condition ${condition} met`
-          );
-        }
-      }
-
-      console.log(
-        `   Volume check (multi-timeframe): ${allTimeframesPassed} (${verifiedTimeframes}/${timeframes.length} timeframes verified, ALL must pass)`
-      );
-      return allTimeframesPassed;
-    } else {
-      // Fallback: use single volume check if no timeframes specified
-      const currentVolume =
-        parseFloat(priceData.volume || priceData.volume24h) || 0;
-
-      if (currentVolume === 0) {
-        console.log("⚠️ Volume data missing, skipping volume condition");
+      default:
+        console.log(`   Unknown condition: ${condition}`);
         return true;
-      }
-
-      console.log(`   Current Volume: ${currentVolume.toLocaleString()}`);
-
-      switch (condition) {
-        case "ABOVE":
-          const isAbove = currentVolume > requiredPercentage;
-          console.log(
-            `   Above check: ${currentVolume.toLocaleString()} > ${requiredPercentage.toLocaleString()}? ${isAbove}`
-          );
-          return isAbove;
-
-        case "BELOW":
-          const isBelow = currentVolume < requiredPercentage;
-          console.log(
-            `   Below check: ${currentVolume.toLocaleString()} < ${requiredPercentage.toLocaleString()}? ${isBelow}`
-          );
-          return isBelow;
-
-        default:
-          console.log(
-            `   ⚠️ No timeframes specified, using fallback calculation`
-          );
-          return true; // Skip if no timeframes
-      }
     }
   }
+
+
+
 
   // Fetch Open Interest from Binance Futures API
   async fetchOpenInterest(symbol) {
@@ -3057,78 +3542,58 @@ class RealTimeAlertProcessor {
     }
   }
 
-  // Remove alerts for a specific symbol when it's unfavorited
-  async removeAlertsForSymbol(symbol) {
+  // Remove alerts for a specific symbol and user when it's unfavorited
+  async removeAlertsForSymbol(symbol, userId) {
     try {
-      console.log(`🗑️ Removing all alerts for symbol ${symbol}...`);
-
-      // Get alert IDs before removing
-      const alerts = this.activeAlerts.get(symbol) || [];
-      const alertIdsToRemove = new Set();
-      alerts.forEach((alert) => {
-        alertIdsToRemove.add(alert._id.toString());
-      });
-
-      // Remove from active alerts map
-      this.activeAlerts.delete(symbol);
-
-      // CRITICAL: Remove alert IDs from alertIds Set
-      for (const alertId of alertIdsToRemove) {
-        this.alertIds.delete(alertId);
-      }
-
-      // CRITICAL: Clean up processedAlerts Set
-      for (const key of this.processedAlerts) {
-        if (alertIdsToRemove.has(key.split("_")[0])) {
-          this.processedAlerts.delete(key);
-        }
-      }
-
-      // CRITICAL: Clean up baseline data for removed alerts
-      for (const alertId of alertIdsToRemove) {
-        for (const [key] of this.alertBaselines.entries()) {
-          if (key.startsWith(`${alertId}_`)) {
-            this.alertBaselines.delete(key);
+      console.log(`🗑️ Removing alerts for symbol: ${symbol}, user: ${userId}`);
+      
+      // Get current alerts for this symbol
+      const symbolAlerts = this.activeAlerts.get(symbol) || [];
+      
+      // Filter out alerts for this specific user
+      const remainingAlerts = symbolAlerts.filter(
+        (alert) => alert.userId.toString() !== userId.toString()
+      );
+      
+      const removedCount = symbolAlerts.length - remainingAlerts.length;
+      console.log(`📊 Removed ${removedCount} alerts for ${symbol} (user: ${userId})`);
+      
+      // Update in-memory cache
+      if (remainingAlerts.length === 0) {
+        // No alerts left for this symbol - remove completely
+        this.activeAlerts.delete(symbol);
+        console.log(`✅ Removed symbol ${symbol} from activeAlerts (no alerts left)`);
+        
+        // Clean up candle data for this symbol
+        for (const [key, candle] of this.candleData.entries()) {
+          if (key.startsWith(`${symbol}_`)) {
+            this.candleData.delete(key);
           }
         }
+      } else {
+        // Other users still have alerts for this symbol
+        this.activeAlerts.set(symbol, remainingAlerts);
+        console.log(`✅ Updated ${symbol}: ${remainingAlerts.length} alerts remaining (other users)`);
       }
 
-      // CRITICAL: Remove from Redis cache immediately
+      // CRITICAL: Update Redis cache
       const redis = await this.initRedisClient();
       if (redis) {
         const cacheKey = `alerts:cache:${symbol}`;
-        await redis.del(cacheKey);
-      }
-
-      // Clean up RSI data for this symbol
-      for (const [key] of this.rsiData.entries()) {
-        if (key.startsWith(`${symbol}_`)) {
-          this.rsiData.delete(key);
+        
+        if (remainingAlerts.length === 0) {
+          await redis.del(cacheKey);
+          console.log(`✅ Deleted Redis cache for ${symbol}`);
+        } else {
+          await redis.set(cacheKey, JSON.stringify(remainingAlerts));
+          console.log(`✅ Updated Redis cache for ${symbol}`);
         }
       }
-
-      // Clean up open interest data for this symbol
-      for (const [key] of this.openInterestData.entries()) {
-        if (key.startsWith(`${symbol}_`)) {
-          this.openInterestData.delete(key);
-        }
-      }
-
-      // Clean up candle data for this symbol
-      for (const [key] of this.candleData.entries()) {
-        if (key.startsWith(`${symbol}_`)) {
-          this.candleData.delete(key);
-        }
-      }
-
-      // CRITICAL: Update micro-batch engine active symbols
-      if (this.microBatchEngine) {
-        await this.updateMicroBatchActiveSymbols();
-      }
-
-      console.log(
-        `✅ Removed ${alertIdsToRemove.size} alerts for symbol ${symbol} from all caches`
-      );
+      
+      // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
+      // This ensures the engine stops processing if no alerts remain
+      await this.updateMicroBatchActiveSymbols();
+      console.log(`✅ MicroBatchEngine activeSymbols updated after removing alerts`);
     } catch (error) {
       console.error(`❌ Error removing alerts for ${symbol}:`, error);
     }
@@ -3137,7 +3602,7 @@ class RealTimeAlertProcessor {
   // Remove alerts for a specific user when they clear all favorites
   async removeAlertsForUser(userId) {
     try {
-      console.log(`🗑️ Removing all alerts for user ${userId}...`);
+      console.log(`🗑️ Removing all alerts for user: ${userId}`);
       const symbolsToUpdate = new Set();
       const alertIdsToRemove = new Set();
 
@@ -3166,51 +3631,11 @@ class RealTimeAlertProcessor {
           if (remainingAlerts.length > 0) {
             this.activeAlerts.set(symbol, [...remainingAlerts]); // Create new array reference
             symbolsToUpdate.add(symbol);
+            console.log(`✅ Updated ${symbol}: ${remainingAlerts.length} alerts remaining`);
           } else {
             this.activeAlerts.delete(symbol);
             symbolsToUpdate.add(symbol);
-
-            // Clean up RSI data for this symbol
-            for (const [key] of this.rsiData.entries()) {
-              if (key.startsWith(`${symbol}_`)) {
-                this.rsiData.delete(key);
-              }
-            }
-
-            // Clean up open interest data for this symbol
-            for (const [key] of this.openInterestData.entries()) {
-              if (key.startsWith(`${symbol}_`)) {
-                this.openInterestData.delete(key);
-              }
-            }
-
-            // Clean up candle data for this symbol
-            for (const [key] of this.candleData.entries()) {
-              if (key.startsWith(`${symbol}_`)) {
-                this.candleData.delete(key);
-              }
-            }
-          }
-        }
-      }
-
-      // CRITICAL: Remove alert IDs from alertIds Set
-      for (const alertId of alertIdsToRemove) {
-        this.alertIds.delete(alertId);
-      }
-
-      // CRITICAL: Clean up processedAlerts Set (remove entries for deleted alerts)
-      for (const key of this.processedAlerts) {
-        if (alertIdsToRemove.has(key.split("_")[0])) {
-          this.processedAlerts.delete(key);
-        }
-      }
-
-      // CRITICAL: Clean up baseline data for removed alerts
-      for (const alertId of alertIdsToRemove) {
-        for (const [key] of this.alertBaselines.entries()) {
-          if (key.startsWith(`${alertId}_`)) {
-            this.alertBaselines.delete(key);
+            console.log(`✅ Removed ${symbol}: no alerts remaining`);
           }
         }
       }
@@ -3229,15 +3654,11 @@ class RealTimeAlertProcessor {
           }
         }
       }
-
-      // CRITICAL: Update micro-batch engine active symbols
-      if (this.microBatchEngine) {
-        await this.updateMicroBatchActiveSymbols();
-      }
-
-      console.log(
-        `✅ Removed ${alertIdsToRemove.size} alerts for user ${userId} from all caches`
-      );
+      
+      // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
+      // This ensures the engine stops processing removed symbols
+      await this.updateMicroBatchActiveSymbols();
+      console.log(`✅ MicroBatchEngine activeSymbols updated after removing user ${userId} alerts`);
     } catch (error) {
       console.error(`❌ Error removing alerts for user ${userId}:`, error);
     }
@@ -3307,6 +3728,11 @@ class RealTimeAlertProcessor {
         // Reset baseline for this alert (new conditions = new baseline)
         const alertKey = `${alertId}_${symbol}`;
         this.alertBaselines.delete(alertKey);
+        
+        // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
+        // This ensures the engine starts processing this new symbol
+        await this.updateMicroBatchActiveSymbols();
+        console.log(`✅ MicroBatchEngine activeSymbols updated after adding alert ${alertId}`);
 
         console.log(
           `✅ Alert ${alertId} for ${alert.symbol} added to active monitoring`
@@ -3341,6 +3767,8 @@ class RealTimeAlertProcessor {
           break;
         }
       }
+      
+      console.log(`🔍 Removing alert ${alertId}, found symbol: ${removedSymbol}`);
 
       if (!removed || !removedSymbol) {
         // Alert not found in in-memory cache, but still try to remove from Redis
@@ -3439,11 +3867,13 @@ class RealTimeAlertProcessor {
             await redis.del(cacheKey);
             // CRITICAL: Also remove from in-memory cache
             this.activeAlerts.delete(removedSymbol);
+            console.log(`✅ Removed symbol ${removedSymbol} from activeAlerts (no alerts left)`);
           } else {
             // Update with remaining alerts
             await redis.set(cacheKey, JSON.stringify(updatedAlerts));
             // CRITICAL: Update in-memory cache with new array (not modify in place)
             this.activeAlerts.set(removedSymbol, [...updatedAlerts]);
+            console.log(`✅ Updated symbol ${removedSymbol} in activeAlerts (${updatedAlerts.length} alerts remaining)`);
           }
         } else if (removedSymbol) {
           // If Redis is not available, still update in-memory cache
@@ -3454,12 +3884,19 @@ class RealTimeAlertProcessor {
             );
             if (updatedAlerts.length === 0) {
               this.activeAlerts.delete(removedSymbol);
+              console.log(`✅ Removed symbol ${removedSymbol} from activeAlerts (no Redis, no alerts left)`);
             } else {
               // Create new array to ensure reference is updated
               this.activeAlerts.set(removedSymbol, [...updatedAlerts]);
+              console.log(`✅ Updated symbol ${removedSymbol} in activeAlerts (no Redis, ${updatedAlerts.length} alerts remaining)`);
             }
           }
         }
+        
+        // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
+        // This ensures the engine stops processing removed symbols
+        await this.updateMicroBatchActiveSymbols();
+        console.log(`✅ MicroBatchEngine activeSymbols updated after removing alert ${alertId}`);
       }
 
       // CRITICAL: Update micro-batch engine active symbols after removal
@@ -3595,43 +4032,137 @@ class RealTimeAlertProcessor {
     }
   }
 
-  // Fetch latest candle from Binance API for accurate OHLC data
-  async fetchCandleFromBinance(symbol, timeframe) {
-    try {
-      const binanceInterval = this.getBinanceInterval(timeframe);
-      const response = await fetch(
-        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=1`
-      );
+  // 🛡️ SAFE CANDLE GETTER - Uses Queue System to Prevent 418 Ban
+  getCandleDataOrQueue(symbol, timeframe) {
+    const key = `${symbol}_${timeframe}`;
+    
+    // 1. Check Cache
+    if (this.candleCache.has(key)) {
+      return this.candleCache.get(key);
+    }
 
-      if (!response.ok) {
-        console.warn(
-          `⚠️ Failed to fetch candle from Binance for ${symbol} ${timeframe}: ${response.status}`
-        );
+    // 2. Agar Cache nahi hai, aur ye request already queue mein nahi hai
+    if (!this.pendingCandleRequests.has(key)) {
+      console.log(`⏳ Queueing candle fetch for ${key}`);
+      this.addCandleToQueue(symbol, timeframe);
+    }
+
+    return null; // Abhi k liye null, background mein data aa jayega
+  }
+
+  // Add to Candle Queue Logic
+  addCandleToQueue(symbol, timeframe) {
+    const key = `${symbol}_${timeframe}`;
+    this.pendingCandleRequests.add(key);
+    this.candleQueue.push({ symbol, timeframe, key });
+    this.processCandleQueue();
+  }
+
+  // Process Candle Queue (Dhire Dhire API Call)
+  async processCandleQueue() {
+    if (this.isProcessingCandleQueue) return;
+    this.isProcessingCandleQueue = true;
+
+    console.log(`🔄 Candle Queue Started: ${this.candleQueue.length} items pending...`);
+    
+    while (this.candleQueue.length > 0) {
+      // 1. Check for API ban
+      if (Date.now() < this.candleApiBanUntil) {
+        const waitTime = Math.ceil((this.candleApiBanUntil - Date.now()) / 1000);
+        if (waitTime % 10 === 0) {
+          console.log(`⛔ Candle API Paused due to 418 Error. Resuming in ${waitTime}s...`);
+        }
+        await this.delay(2000);
+        continue;
+      }
+      
+      // 2. Get next item
+      const task = this.candleQueue[0];
+      
+      try {
+        await this.fetchAndStoreCandleData(task.symbol, task.timeframe);
+        
+        // Success: Remove from queue
+        this.candleQueue.shift();
+        this.pendingCandleRequests.delete(task.key);
+        
+        // 🛑 SLOW DOWN: 200ms delay between requests (5 requests per second)
+        await this.delay(200);
+        
+      } catch (error) {
+        if (error.status === 418 || error.status === 429) {
+          console.error(`🚨 Candle 418/429 ERROR! Pausing queue for 2 minutes.`);
+          this.candleApiBanUntil = Date.now() + 120 * 1000; // 2 Minutes Ban
+        } else {
+          // Other error: Remove task and log
+          console.error(`❌ [${task.timeframe}] Failed to fetch current candle data`);
+          this.candleQueue.shift();
+          this.pendingCandleRequests.delete(task.key);
+        }
+      }
+    }
+    
+    this.isProcessingCandleQueue = false;
+    console.log("✅ Candle Queue Processed.");
+  }
+
+  // Actual API Call for Candle (Private)
+  async fetchAndStoreCandleData(symbol, timeframe) {
+    const binanceInterval = this.getBinanceInterval(timeframe);
+    const response = await fetch(
+      `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=1`
+    );
+
+    if (response.status === 418 || response.status === 429) {
+      const err = new Error("Rate Limit");
+      err.status = response.status;
+      throw err;
+    }
+
+    if (!response.ok) {
+      throw new Error(`API Error ${response.status}`);
+    }
+
+    const klines = await response.json();
+    if (klines && klines.length > 0) {
+      const kline = klines[0];
+      const candleStartTime = parseInt(kline[0]);
+      const timeframeMs = this.getTimeframeMs(timeframe);
+      const expectedStartTime = Math.floor(Date.now() / timeframeMs) * timeframeMs;
+      
+      // Verify this is the CURRENT candle (not stale)
+      if (Math.abs(candleStartTime - expectedStartTime) > 5000) {
+        console.warn(`⚠️ Stale candle detected for ${symbol} ${timeframe}`);
         return null;
       }
 
-      const klines = await response.json();
-      if (klines && klines.length > 0) {
-        const kline = klines[klines.length - 1]; // Get latest candle
-        return {
-          open: parseFloat(kline[1]),
-          high: parseFloat(kline[2]),
-          low: parseFloat(kline[3]),
-          close: parseFloat(kline[4]),
-          volume: parseFloat(kline[5]),
-          startTime: kline[0],
-          endTime: kline[6],
-          isComplete: true, // Binance returns completed candles
-        };
-      }
-      return null;
-    } catch (error) {
-      console.warn(
-        `⚠️ Error fetching candle from Binance for ${symbol} ${timeframe}:`,
-        error.message
-      );
-      return null;
+      const candle = {
+        open: parseFloat(kline[1]),
+        high: parseFloat(kline[2]),
+        low: parseFloat(kline[3]),
+        close: parseFloat(kline[4]),
+        volume: parseFloat(kline[5]),
+        startTime: candleStartTime,
+        endTime: parseInt(kline[6]),
+        isComplete: false,
+      };
+      
+      // Store in Cache
+      const key = `${symbol}_${timeframe}`;
+      this.candleCache.set(key, candle);
+      console.log(`✅ Candle data fetched & cached for ${key}`);
     }
+  }
+
+  // Legacy method - kept for backward compatibility
+  async fetchCurrentCandleFromBinance(symbol, timeframe) {
+    // Use safe queue system instead of direct API call
+    return this.getCandleDataOrQueue(symbol, timeframe);
+  }
+
+  // Legacy method - kept for backward compatibility
+  async fetchCandleFromBinance(symbol, timeframe) {
+    return this.fetchCurrentCandleFromBinance(symbol, timeframe);
   }
 
   // Get or create candle data for a symbol and timeframe
@@ -3868,7 +4399,13 @@ class RealTimeAlertProcessor {
   // Reload alerts cache from database
   // Called automatically on alert create/update/delete events
   async reloadAlertsCache() {
+    console.log("🔄 Reloading alerts cache...");
     await this.loadAlertsToRedisCache();
+    
+    // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
+    // This ensures the engine stays in sync with database changes
+    await this.updateMicroBatchActiveSymbols();
+    console.log("✅ MicroBatchEngine activeSymbols updated after cache reload");
   }
 
   async subscribeToAlertManagement() {
@@ -3918,7 +4455,13 @@ class RealTimeAlertProcessor {
           break;
 
         case "alerts_removed_for_symbol":
-          await this.removeAlertsForSymbol(data.symbol);
+          // Check if userId is provided (for single user removal)
+          if (data.userId) {
+            await this.removeAlertsForSymbol(data.symbol, data.userId);
+          } else {
+            // If no userId, this shouldn't happen but handle gracefully
+            console.warn(`⚠️ alerts_removed_for_symbol event without userId for ${data.symbol}`);
+          }
           // Reload cache to remove alerts for this symbol
           await this.reloadAlertsCache();
           break;
@@ -4092,7 +4635,35 @@ class RealTimeAlertProcessor {
         console.log("📊 Sending processor stats...");
         await this.sendProcessorStats();
         break;
-
+        
+      case "reset_rsi_ban":
+        console.log("🛡️ Resetting RSI API ban...");
+        this.apiBanUntil = 0;
+        this.rsiQueue = [];
+        if (this.rsiFailures) {
+          this.rsiFailures.clear();
+          console.log(`✅ Reset ${this.rsiFailures.size} circuit breaker failures`);
+        }
+        console.log("✅ RSI ban reset, queue cleared, circuit breaker reset");
+        break;
+        
+      case "reset_rsi_circuit_breaker":
+        console.log("🛡️ Resetting RSI circuit breaker...");
+        if (this.rsiFailures) {
+          const count = this.rsiFailures.size;
+          this.rsiFailures.clear();
+          console.log(`✅ Reset ${count} RSI circuit breaker failures`);
+        }
+        break;
+        
+      case "reset_candle_ban":
+        console.log("🛡️ Resetting Candle API ban...");
+        this.candleApiBanUntil = 0;
+        this.candleQueue = [];
+        this.pendingCandleRequests.clear();
+        console.log("✅ Candle ban reset, queue cleared");
+        break;
+        
       case "get_microbatch_stats":
         console.log("📊 Sending micro-batch stats...");
         await this.sendMicroBatchStats();
@@ -4104,10 +4675,42 @@ class RealTimeAlertProcessor {
           this.microBatchEngine.resetMetrics();
         }
         break;
+        
+      case "clear_processing_locks":
+        console.log("🧹 Clearing all processing locks...");
+        if (this.safeProcessor) {
+          await this.safeProcessor.clearAllProcessingLocks();
+        }
+        break;
 
       default:
         console.log("❓ Unknown system control command:", data.command);
     }
+  }
+  
+  // 🛡️ Get RSI Queue Status
+  getRsiQueueStatus() {
+    return {
+      queueLength: this.rsiQueue.length,
+      isProcessing: this.isProcessingRsiQueue,
+      isApiBanned: Date.now() < this.apiBanUntil,
+      banTimeRemaining: Math.max(0, this.apiBanUntil - Date.now()),
+      historySize: this.rsiHistory.size,
+      nextBanReset: this.apiBanUntil > 0 ? new Date(this.apiBanUntil).toISOString() : null
+    };
+  }
+  
+  // 🛡️ Get Candle Queue Status
+  getCandleQueueStatus() {
+    return {
+      queueLength: this.candleQueue.length,
+      isProcessing: this.isProcessingCandleQueue,
+      isApiBanned: Date.now() < this.candleApiBanUntil,
+      banTimeRemaining: Math.max(0, this.candleApiBanUntil - Date.now()),
+      cacheSize: this.candleCache.size,
+      pendingRequests: this.pendingCandleRequests.size,
+      nextBanReset: this.candleApiBanUntil > 0 ? new Date(this.candleApiBanUntil).toISOString() : null
+    };
   }
 
   // Emergency cleanup for memory issues
@@ -4115,9 +4718,10 @@ class RealTimeAlertProcessor {
     try {
       console.log("🚨 Running emergency cleanup...");
 
-      // Clear old processed alerts
+      // Clear old processed alerts and processing locks
       if (this.safeProcessor) {
         this.safeProcessor.cleanup();
+        await this.safeProcessor.clearAllProcessingLocks();
       }
 
       // Clear old candle data (keep only last 1 hour)
@@ -4130,6 +4734,22 @@ class RealTimeAlertProcessor {
 
       // Clear old RSI data
       this.rsiData.clear();
+      
+      // 🛡️ Clear RSI queue and history
+      this.rsiQueue = [];
+      this.rsiHistory.clear();
+      this.apiBanUntil = 0; // Reset ban
+      
+      // 🛡️ Reset circuit breaker failures
+      if (this.rsiFailures) {
+        this.rsiFailures.clear();
+      }
+      
+      // 🛡️ Clear Candle queue and cache
+      this.candleQueue = [];
+      this.candleCache.clear();
+      this.pendingCandleRequests.clear();
+      this.candleApiBanUntil = 0; // Reset candle ban
 
       // Clear old open interest data
       this.openInterestData.clear();
