@@ -43,7 +43,9 @@ class AlertWorker {
 
       // 🚀 MICRO-BATCH EXECUTION ENGINE - Ultra High Performance
       await RealTimeAlertProcessor.startWebSocketProcessing();
-      console.log("✅ Started Micro-Batch WebSocket processing (50k alerts/min capacity)");
+      console.log(
+        "✅ Started Micro-Batch WebSocket processing (50k alerts/min capacity)"
+      );
 
       // Subscribe to alert management events (for alert creation/removal)
       await RealTimeAlertProcessor.subscribeToAlertManagement();
@@ -51,15 +53,7 @@ class AlertWorker {
 
       this.isRunning = true;
       console.log("✅ Micro-Batch Alert Worker started successfully");
-      console.log("🚀 Micro-Batch Engine Active:");
-      console.log("   ⚡ 50,000+ alerts/minute capacity");
-      console.log("   📊 95% CPU efficiency (smart symbol filtering)");
-      console.log("   🛡️ Zero duplicates (distributed locking)");
-      console.log("   📊 Real-time performance monitoring available");
-      console.log("📊 Micro-Batch Performance Monitoring:");
-      console.log("   npm run microbatch-monitor    (real-time dashboard)");
-      console.log("   npm run microbatch-stats      (current performance)");
-      console.log("   npm run health-check          (system health)");
+
       console.log(
         "🔥 Monitoring live market data via Micro-Batch WebSocket for ultra-fast alerts..."
       );
@@ -78,7 +72,10 @@ class AlertWorker {
       );
 
       // Process via micro-batch engine (ultra-fast, zero duplicates)
-      await RealTimeAlertProcessor.processPriceUpdateRealTime(priceData.symbol, priceData);
+      await RealTimeAlertProcessor.processPriceUpdateRealTime(
+        priceData.symbol,
+        priceData
+      );
     } catch (error) {
       console.error(
         `❌ Error in micro-batch processing for ${priceData.symbol}:`,
@@ -87,181 +84,8 @@ class AlertWorker {
     }
   }
 
-  async evaluateAlertConditions(alert, marketData) {
-    const { conditions } = alert;
-
-    try {
-      // Check if alert is locked due to alert count condition
-      if (isAlertLocked(alert)) {
-        console.log(
-          `🔒 Alert ${alert._id} for ${alert.symbol} is locked until ${alert.conditions.alertCount.lockUntil}`
-        );
-        return false; // Alert is locked, don't trigger
-      }
-
-      // Check Min Daily volume condition (required)
-      if (conditions.minDaily && marketData.volume) {
-        const minVolume = parseFloat(conditions.minDaily);
-        const actualVolume = parseFloat(marketData.volume);
-
-        if (actualVolume < minVolume) {
-          return false; // Volume condition not met
-        }
-      }
-
-      // Check Change % condition (required)
-      if (
-        conditions.changePercent &&
-        conditions.changePercent.percentage &&
-        marketData.priceChangePercent
-      ) {
-        const requiredChange = parseFloat(conditions.changePercent.percentage);
-        const actualChange = Math.abs(
-          parseFloat(marketData.priceChangePercent)
-        );
-
-        if (actualChange < requiredChange) {
-          return false; // Change condition not met
-        }
-      }
-
-      // Check Candle conditions (optional)
-      if (
-        conditions.candle &&
-        conditions.candle.timeframes &&
-        conditions.candle.timeframes.length > 0
-      ) {
-        const candleMatch = await this.evaluateCandleConditions(
-          conditions.candle,
-          marketData
-        );
-        if (!candleMatch) {
-          return false;
-        }
-      }
-
-      // Check RSI Range conditions (optional)
-      if (
-        conditions.rsiRange &&
-        conditions.rsiRange.timeframes &&
-        conditions.rsiRange.timeframes.length > 0
-      ) {
-        const rsiMatch = await this.evaluateRSIConditions(
-          conditions.rsiRange,
-          marketData
-        );
-        if (!rsiMatch) {
-          return false;
-        }
-      }
-
-      // Check Volume conditions (optional)
-      if (
-        conditions.volume &&
-        conditions.volume.timeframes &&
-        conditions.volume.timeframes.length > 0
-      ) {
-        const volumeMatch = await this.evaluateVolumeConditions(
-          conditions.volume,
-          marketData
-        );
-        if (!volumeMatch) {
-          return false;
-        }
-      }
-
-      // Check OPEN INTEREST conditions (optional)
-      // Note: Open Interest evaluation is handled in RealTimeAlertProcessor
-      // This worker may not have access to Open Interest data, so skip for now
-      // The RealTimeAlertProcessor will handle Open Interest conditions
-      if (
-        conditions.openInterest &&
-        conditions.openInterest.timeframes &&
-        conditions.openInterest.timeframes.length > 0
-      ) {
-        console.log(
-          `📊 Open Interest condition detected, but evaluation handled by RealTimeAlertProcessor`
-        );
-        // Return true to not block, RealTimeAlertProcessor will handle it
-      }
-
-      // Check Alert Count conditions (optional) - this is handled by the lock check above
-      // If we reach here and alert count is set, we need to update the lock
-      if (conditions.alertCount && conditions.alertCount.timeframe) {
-        // Update the alert lock after successful trigger
-        const updatedConditions = updateAlertLock(alert);
-
-        // Update the alert in database with new lock time
-        try {
-          await AlertService.updateAlert(alert._id, {
-            conditions: updatedConditions,
-            triggered: true,
-            triggeredAt: new Date(),
-            triggeredPrice: parseFloat(marketData.price),
-            triggeredVolume: parseFloat(marketData.volume),
-            triggeredChange: parseFloat(marketData.priceChangePercent),
-          });
-
-          console.log(
-            `🔒 Alert ${alert._id} for ${alert.symbol} locked until ${updatedConditions.alertCount.lockUntil}`
-          );
-        } catch (error) {
-          console.error(
-            `❌ Error updating alert lock for ${alert.symbol}:`,
-            error
-          );
-        }
-      }
-
-      // All conditions met
-      return true;
-    } catch (error) {
-      console.error("❌ Error evaluating alert conditions:", error);
-      return false;
-    }
-  }
-
-  // Evaluate candle conditions
-  async evaluateCandleConditions(candleConditions, marketData) {
-    try {
-      // TODO: Implement candle pattern detection
-      // This would require historical data and pattern recognition
-      console.log(`🕯️ Evaluating candle conditions for ${marketData.symbol}`);
-      return true; // Placeholder - implement actual candle logic
-    } catch (error) {
-      console.error("❌ Error evaluating candle conditions:", error);
-      return false;
-    }
-  }
-
-  // Evaluate RSI conditions
-  async evaluateRSIConditions(rsiConditions, marketData) {
-    try {
-      // TODO: Implement RSI calculation and evaluation
-      // This would require historical price data to calculate RSI
-      console.log(`📊 Evaluating RSI conditions for ${marketData.symbol}`);
-      return true; // Placeholder - implement actual RSI logic
-    } catch (error) {
-      console.error("❌ Error evaluating RSI conditions:", error);
-      return false;
-    }
-  }
-
-  // Evaluate volume conditions
-  async evaluateVolumeConditions(volumeConditions, marketData) {
-    try {
-      // TODO: Implement volume trend analysis
-      // This would require historical volume data
-      console.log(`📈 Evaluating volume conditions for ${marketData.symbol}`);
-      return true; // Placeholder - implement actual volume logic
-    } catch (error) {
-      console.error("❌ Error evaluating volume conditions:", error);
-      return false;
-    }
-  }
-
-  // Open Interest evaluation is handled in RealTimeAlertProcessor
-  // This method is kept for backward compatibility but no longer used
+  // NOTE: All condition checking is handled by RealTimeAlertProcessor
+  // This worker only initializes and manages the processing system
 
   async triggerAlert(alert, marketData) {
     try {
@@ -346,10 +170,16 @@ class AlertWorker {
     try {
       const stats = this.getMicroBatchStats();
       console.log("🚀 ==========  MICRO-BATCH PERFORMANCE  ==========");
-      console.log(`   � Current Throughput: ${stats.currentThroughputPerMinute || 0}/min`);
-      console.log(`   🎯 Target Throughput: ${stats.targetThroughput || 50000}/min`);
+      console.log(
+        `   � Current Throughput: ${stats.currentThroughputPerMinute || 0}/min`
+      );
+      console.log(
+        `   🎯 Target Throughput: ${stats.targetThroughput || 50000}/min`
+      );
       console.log(`   📊 CPU Efficiency: ${stats.cpuEfficiency || 0}%`);
-      console.log(`   🛡️ System Health: ${stats.systemHealth?.overall || 0}/100`);
+      console.log(
+        `   🛡️ System Health: ${stats.systemHealth?.overall || 0}/100`
+      );
       console.log(`   🔄 Active Symbols: ${stats.activeSymbols || 0}`);
       console.log("✅ Use 'npm run microbatch-monitor' for live dashboard");
       console.log("================================================");
@@ -403,22 +233,24 @@ if (isMainModule) {
   });
 
   // Keep the process alive and show performance stats
-  setInterval(async () => {
-    if (worker.isRunning) {
-      console.log("🔄 Micro-Batch Worker is running...");
-      // Show performance stats every 5 minutes
-      const now = Date.now();
-      if (!worker.lastStatsTime || (now - worker.lastStatsTime) > 300000) {
-        worker.lastStatsTime = now;
-        await worker.showPerformance();
-      }
-    } else {
-      console.log("⚠️ Micro-Batch Worker is not running, attempting to restart...");
-      worker.start().catch((error) => {
-        console.error("❌ Failed to restart worker:", error);
-      });
-    }
-  }, 30000); // Log every 30 seconds
+  // setInterval(async () => {
+  //   if (worker.isRunning) {
+  //     console.log("🔄 Micro-Batch Worker is running...");
+  //     // Show performance stats every 5 minutes
+  //     const now = Date.now();
+  //     if (!worker.lastStatsTime || now - worker.lastStatsTime > 300000) {
+  //       worker.lastStatsTime = now;
+  //       await worker.showPerformance();
+  //     }
+  //   } else {
+  //     console.log(
+  //       "⚠️ Micro-Batch Worker is not running, attempting to restart..."
+  //     );
+  //     worker.start().catch((error) => {
+  //       console.error("❌ Failed to restart worker:", error);
+  //     });
+  //   }
+  // }, 30000); // Log every 30 seconds
 
   // Prevent process from exiting
   process.stdin.resume();

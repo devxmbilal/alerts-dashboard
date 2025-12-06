@@ -110,7 +110,7 @@ const CustomTextField = styled(TextField)(({ theme }) => ({
 }));
 
 const FilterSidebar = forwardRef(
-  ({ selectedSymbol, onCreateAlert, onAlertsCreated }, ref) => {
+  ({ selectedSymbol, onCreateAlert, onAlertsCreated, onClose }, ref) => {
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down("md"));
 
@@ -311,10 +311,18 @@ const FilterSidebar = forwardRef(
               !["period", "level", "condition"].includes(key) &&
               filters.rsiRange[key] === true
           );
+
+          // Validate that level is set if RSI condition is selected
+          if (!filters.rsiRange.level || filters.rsiRange.level.trim() === "") {
+            setErrorMessage("Please set RSI Level (1-100)");
+            setIsCreating(false);
+            return;
+          }
+
           alertConditions.rsiRange = {
             timeframes: rsiTimeframes,
             period: filters.rsiRange.period || "14",
-            level: filters.rsiRange.level || "70",
+            level: filters.rsiRange.level, // No default - user must set it
             condition: filters.rsiRange.condition || "ABOVE",
           };
         }
@@ -498,8 +506,10 @@ const FilterSidebar = forwardRef(
           </Typography>
           <IconButton
             onClick={() => {
-              // This will be handled by the parent component
-              if (window.parent && window.parent.setFilterSidebarOpen) {
+              // Call onClose prop if provided, otherwise try window.parent fallback
+              if (onClose) {
+                onClose();
+              } else if (window.parent && window.parent.setFilterSidebarOpen) {
                 window.parent.setFilterSidebarOpen(false);
               }
             }}
