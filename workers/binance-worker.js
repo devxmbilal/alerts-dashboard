@@ -315,7 +315,7 @@ class BinanceWorker {
       priceChangePercent: parseFloat(ticker.P),
       change: parseFloat(ticker.P),
       changeAmount: parseFloat(ticker.p),
-      volume24h: parseFloat(ticker.v), // 24-hour volume from Binance ticker
+      volume24h: parseFloat(ticker.q), // 24-hour quote volume (in USDT) from Binance ticker - ticker.q is quote volume, ticker.v is base volume
       high: parseFloat(ticker.h),
       low: parseFloat(ticker.l),
       high24h: parseFloat(ticker.h),
