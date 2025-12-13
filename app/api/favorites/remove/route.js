@@ -62,8 +62,8 @@ export async function POST(request) {
     // Remove from Redis alerts cache
     await AlertsCache.removeAlert(decoded.userId, symbol);
 
-    // Notify RealTimeAlertProcessor to stop processing alerts for this symbol
-    await RealTimeAlertProcessor.removeAlertsForSymbol(symbol);
+    // Notify RealTimeAlertProcessor to stop processing alerts for this symbol (only for this user)
+    await RealTimeAlertProcessor.removeAlertsForSymbol(symbol, decoded.userId);
 
     // Force refresh alerts to ensure worker has latest data
     await RealTimeAlertProcessor.forceRefreshAlerts();

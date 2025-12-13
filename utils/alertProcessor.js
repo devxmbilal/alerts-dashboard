@@ -33,7 +33,7 @@ export class SafeAlertProcessor {
   async acquireProcessingLock(alertId, symbol) {
     const lockKey = `alert:processing:${alertId}`;
     const lockValue = `${Date.now()}_${Math.random()}`;
-    const lockTTL = 30; // 30 seconds lock timeout
+    const lockTTL = 5; // CRITICAL FIX: Reduce to 5 seconds to prevent stuck locks
     
     try {
       // Try to acquire Redis lock first (distributed lock across multiple instances)
@@ -107,7 +107,7 @@ export class SafeAlertProcessor {
     
     // Consider alert recently processed if within last 60 seconds
     const timeDiff = currentTimestamp - processed.timestamp;
-    return timeDiff < 60000; // 60 seconds
+    return timeDiff < 10000; // 10 seconds
   }
 
   // Mark alert as processed

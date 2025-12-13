@@ -462,15 +462,20 @@ class RealTimeAlertProcessor {
 
   async loadAllActiveAlerts() {
     try {
+      console.log("🔄 Loading all active alerts from database...");
+      
       // Get all active alerts from MongoDB (including previously triggered ones)
       const alerts = await Alert.find({
         status: "active",
         // Don't filter by triggered: false - we want retriggerable alerts
       }).lean();
 
+      console.log(`📊 Found ${alerts.length} active alerts in database`);
+
       // Filter alerts to only include those for pairs still in user's favorites
       const validAlerts = [];
       const userFavoritesMap = new Map(); // Cache user favorites
+      let inactiveCount = 0;
 
       for (const alert of alerts) {
         // Get user's current favorites (with caching)
@@ -486,8 +491,12 @@ class RealTimeAlertProcessor {
         } else {
           // Mark alert as inactive since pair is no longer favorited
           await Alert.findByIdAndUpdate(alert._id, { status: "inactive" });
+          inactiveCount++;
+          console.log(`⚠️ Alert ${alert._id} for ${alert.symbol} marked inactive (not in favorites)`);
         }
       }
+
+      console.log(`✅ Valid alerts: ${validAlerts.length}, Marked inactive: ${inactiveCount}`);
 
       // Group valid alerts by symbol for fast lookup
       this.activeAlerts.clear();
@@ -497,6 +506,13 @@ class RealTimeAlertProcessor {
         }
         this.activeAlerts.get(alert.symbol).push(alert);
       });
+      
+      console.log(`📊 Active symbols: ${this.activeAlerts.size}`);
+      
+      // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
+      // This ensures the engine only processes symbols with valid alerts
+      await this.updateMicroBatchActiveSymbols();
+      console.log(`✅ MicroBatchEngine activeSymbols updated after loading alerts`);
 
       return validAlerts;
     } catch (error) {
@@ -891,19 +907,20 @@ class RealTimeAlertProcessor {
             );
           });
 
-          // OPTIMIZATION: Update in-memory cache immediately
+          // CRITICAL FIX: Update in-memory cache with baseline AND preserve lock
           const alertsForSymbol = this.activeAlerts.get(alert.symbol);
           if (alertsForSymbol) {
             const alertIndex = alertsForSymbol.findIndex(
               (a) => a._id.toString() === alert._id.toString()
             );
             if (alertIndex !== -1) {
-              // Update with new baseline values
+              // Update with new baseline AND preserve conditions (lock)
               alertsForSymbol[alertIndex] = {
                 ...alertsForSymbol[alertIndex],
                 baselinePrice: liveData.price,
                 baselineVolume: liveData.volume || liveData.volume24h,
                 baselineTimestamp: new Date(),
+                conditions: alert.conditions, // Preserve lock
               };
             }
           }
@@ -927,7 +944,7 @@ class RealTimeAlertProcessor {
         }
       }
 
-      // FIRST: Check if alert is locked (prevent duplicate triggers)
+      // CRITICAL: Check if alert is locked FIRST (prevent duplicate triggers)
       if (isAlertLocked(alert)) {
         const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
         const now = new Date();
@@ -940,6 +957,8 @@ class RealTimeAlertProcessor {
         );
         return { triggered: false, reason: "alert_locked" };
       }
+      
+      console.log(`✅ Alert ${alert._id} for ${alert.symbol} is NOT locked, proceeding...`);
 
       // Check price direction based on alert settings
       const direction =
@@ -1339,6 +1358,14 @@ class RealTimeAlertProcessor {
 
   // Trigger alert with live data and update baseline
   async triggerAlertWithLiveData(alert, liveData) {
+    // CRITICAL: Check if alert is ALREADY locked (Alert Count condition)
+    if (isAlertLocked(alert)) {
+      const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
+      const timeRemaining = Math.max(0, lockUntil.getTime() - Date.now());
+      console.log(`🔒 Alert ${alert._id} LOCKED by Alert Count until ${lockUntil.toISOString()} (${Math.ceil(timeRemaining/60000)}min remaining)`);
+      return false;
+    }
+
     // CRITICAL: Acquire Redis lock to prevent duplicate processing
     // Especially important when alertCount condition is set
     const hasAlertCount = alert.conditions?.alertCount?.timeframe;
@@ -1465,6 +1492,9 @@ class RealTimeAlertProcessor {
         console.log(
           `🔒 Alert ${alert._id} LOCKED for ${alert.conditions.alertCount.timeframe} until ${updatedConditions.alertCount.lockUntil}`
         );
+        
+        // CRITICAL FIX: Update in-memory alert IMMEDIATELY with lock
+        alert.conditions = updatedConditions;
       }
 
       // CRITICAL: Immediate database update for baseline price (blocking)
@@ -1492,21 +1522,23 @@ class RealTimeAlertProcessor {
         `✅ Alert ${alert._id} updated with new baseline price: ${liveData.price}`
       );
 
-      // OPTIMIZATION: Update in-memory cache immediately (no DB query needed)
+      // CRITICAL FIX: Update in-memory cache IMMEDIATELY with lock
       const alertsForSymbol = this.activeAlerts.get(alert.symbol);
       if (alertsForSymbol) {
         const alertIndex = alertsForSymbol.findIndex(
           (a) => a._id.toString() === alert._id.toString()
         );
         if (alertIndex !== -1) {
-          // Update in memory immediately
+          // Update in memory immediately with NEW CONDITIONS (including lock)
           alertsForSymbol[alertIndex] = {
             ...alertsForSymbol[alertIndex],
             ...updateData,
+            conditions: updateData.conditions || alertsForSymbol[alertIndex].conditions,
             baselinePrice: liveData.price,
             baselineVolume: liveData.volume || liveData.volume24h,
             baselineTimestamp: new Date(),
           };
+          console.log(`✅ In-memory alert updated with lock: ${alert._id}`);
         }
       }
 
@@ -2359,7 +2391,7 @@ class RealTimeAlertProcessor {
         targetValue:
           alert.alertConditions?.changePercent?.percentage ||
           alert.conditions?.changePercent?.percentage,
-        actualValue: parseFloat(priceData.priceChangePercent) || 0,
+        actualValue: parseFloat(alertHistory.baselineData?.changeFromBaselinePercent) || 0,
         timeframe:
           alert.alertConditions?.changePercent?.timeframe ||
           alert.conditions?.changePercent?.timeframe ||
@@ -2419,14 +2451,20 @@ class RealTimeAlertProcessor {
   // 🛡️ SAFE RSI CALCULATION - Queue System to Prevent 418 Ban
   async calculateRSI(symbol, timeframe, period = 14) {
     const key = `${symbol}_${timeframe}`;
-
-    // CRITICAL FIX: Circuit breaker - if we've failed too many times, skip
+    
+    // Circuit breaker - check if we've had actual API failures
     const failureKey = `rsi_failures_${key}`;
     const failures = this.rsiFailures?.get(failureKey) || 0;
-
-    if (failures >= 5) {
-      console.log(`⚠️ RSI circuit breaker active for ${key} (${failures} failures)`);
+    const lastFailureTime = this.rsiFailures?.get(`${failureKey}_time`) || 0;
+    const timeSinceLastFailure = Date.now() - lastFailureTime;
+    
+    // Only block if we have real failures AND within 10 minute window
+    if (failures >= 5 && timeSinceLastFailure < 10 * 60 * 1000) {
       return null;
+    } else if (failures >= 5 && timeSinceLastFailure >= 10 * 60 * 1000) {
+      // Reset after 10 minutes
+      this.rsiFailures.delete(failureKey);
+      this.rsiFailures.delete(`${failureKey}_time`);
     }
 
     // 1. Check if we have history for local calculation
@@ -2435,16 +2473,12 @@ class RealTimeAlertProcessor {
     if (!closes || closes.length < period + 1) {
       // Data missing -> Queue background fetch (but only if not already queued)
       const alreadyQueued = this.rsiQueue.some(item => item.key === key);
-      if (!alreadyQueued) {
-        console.log(`⏳ Queueing RSI history fetch for ${key}`);
+      if (!alreadyQueued && this.rsiQueue.length < 500) {
         this.queueRsiHistoryFetch(symbol, timeframe, period);
       }
-
-      // Track failure
-      if (!this.rsiFailures) this.rsiFailures = new Map();
-      this.rsiFailures.set(failureKey, failures + 1);
-
-      // Return null immediately (alert will miss this tick, but system stays safe)
+      
+      // ✅ FIX: Don't count as failure - data is just loading
+      // Return null immediately (alert will retry next tick)
       return null;
     }
 
@@ -2462,6 +2496,7 @@ class RealTimeAlertProcessor {
     // Reset failure count on success
     if (rsi !== null && this.rsiFailures) {
       this.rsiFailures.delete(failureKey);
+      this.rsiFailures.delete(`${failureKey}_time`);
     }
 
     return rsi;
@@ -2479,8 +2514,7 @@ class RealTimeAlertProcessor {
     }
 
     // CRITICAL FIX: Limit queue size to prevent memory issues
-    if (this.rsiQueue.length >= 100) {
-      console.log(`⚠️ RSI queue full (${this.rsiQueue.length} items), skipping ${key}`);
+    if (this.rsiQueue.length >= 500) {
       return;
     }
 
@@ -2540,21 +2574,32 @@ class RealTimeAlertProcessor {
 
       try {
         await this.fetchAndStoreRsiHistory(task.symbol, task.timeframe, task.period);
-
-        // Success: Remove from queue
+        
+        // Success: Remove from queue and reset failures
         this.rsiQueue.shift();
+        const failureKey = `rsi_failures_${task.key}`;
+        if (this.rsiFailures) {
+          this.rsiFailures.delete(failureKey);
+          this.rsiFailures.delete(`${failureKey}_time`);
+        }
         processedCount++;
-
-        // 🛑 SLOW DOWN: 500ms delay between requests (Safe Limit)
-        await this.delay(500);
-
+        
+        // 🛑 SLOW DOWN: 300ms delay between requests
+        await this.delay(300);
+        
       } catch (error) {
         if (error.status === 418 || error.status === 429) {
-          console.error(`🚨 418/429 ERROR DETECTED! Pausing queue for 2 minutes.`);
-          this.apiBanUntil = Date.now() + 120 * 1000; // 2 Minutes Ban
+          console.error(`🚨 418/429 ERROR! Pausing queue for 2 minutes.`);
+          this.apiBanUntil = Date.now() + 120 * 1000;
         } else {
-          // Other error: Remove task and log
-          console.error(`Failed to fetch RSI for ${task.symbol}: ${error.message}`);
+          // ✅ FIX: Count actual API failures here
+          const failureKey = `rsi_failures_${task.key}`;
+          if (!this.rsiFailures) this.rsiFailures = new Map();
+          const failures = this.rsiFailures.get(failureKey) || 0;
+          this.rsiFailures.set(failureKey, failures + 1);
+          this.rsiFailures.set(`${failureKey}_time`, Date.now());
+          
+          console.error(`❌ RSI fetch failed for ${task.key}: ${error.message} (failure #${failures + 1})`);
           this.rsiQueue.shift();
         }
       }
@@ -3044,7 +3089,7 @@ class RealTimeAlertProcessor {
       return true; // Skip if no timeframes
     }
 
-    console.log(`   🔍 Checking ${timeframes.length} timeframes (ALL must satisfy condition)`);
+    console.log(`   🔍 Checking ${timeframes.length} timeframes (ALL must have data AND satisfy condition)`);
 
     // Loop through all selected timeframes
     for (const timeframe of timeframes) {
@@ -3055,9 +3100,9 @@ class RealTimeAlertProcessor {
 
       if (!rsiData || rsiData.current === null) {
         console.log(
-          `   ❌ Timeframe ${timeframe}: RSI data not available, FAILING condition`
+          `   ❌ Timeframe ${timeframe}: RSI data not available, FAILING condition (data required for ALL timeframes)`
         );
-        return false; // If even one timeframe fails, alert should NOT trigger
+        return false; // STRICT: All timeframes must have data
       }
 
       const currentRSI = rsiData.current;
@@ -3563,78 +3608,58 @@ class RealTimeAlertProcessor {
     }
   }
 
-  // Remove alerts for a specific symbol when it's unfavorited
-  async removeAlertsForSymbol(symbol) {
+  // Remove alerts for a specific symbol and user when it's unfavorited
+  async removeAlertsForSymbol(symbol, userId) {
     try {
-      console.log(`🗑️ Removing all alerts for symbol ${symbol}...`);
-
-      // Get alert IDs before removing
-      const alerts = this.activeAlerts.get(symbol) || [];
-      const alertIdsToRemove = new Set();
-      alerts.forEach((alert) => {
-        alertIdsToRemove.add(alert._id.toString());
-      });
-
-      // Remove from active alerts map
-      this.activeAlerts.delete(symbol);
-
-      // CRITICAL: Remove alert IDs from alertIds Set
-      for (const alertId of alertIdsToRemove) {
-        this.alertIds.delete(alertId);
-      }
-
-      // CRITICAL: Clean up processedAlerts Set
-      for (const key of this.processedAlerts) {
-        if (alertIdsToRemove.has(key.split("_")[0])) {
-          this.processedAlerts.delete(key);
-        }
-      }
-
-      // CRITICAL: Clean up baseline data for removed alerts
-      for (const alertId of alertIdsToRemove) {
-        for (const [key] of this.alertBaselines.entries()) {
-          if (key.startsWith(`${alertId}_`)) {
-            this.alertBaselines.delete(key);
+      console.log(`🗑️ Removing alerts for symbol: ${symbol}, user: ${userId}`);
+      
+      // Get current alerts for this symbol
+      const symbolAlerts = this.activeAlerts.get(symbol) || [];
+      
+      // Filter out alerts for this specific user
+      const remainingAlerts = symbolAlerts.filter(
+        (alert) => alert.userId.toString() !== userId.toString()
+      );
+      
+      const removedCount = symbolAlerts.length - remainingAlerts.length;
+      console.log(`📊 Removed ${removedCount} alerts for ${symbol} (user: ${userId})`);
+      
+      // Update in-memory cache
+      if (remainingAlerts.length === 0) {
+        // No alerts left for this symbol - remove completely
+        this.activeAlerts.delete(symbol);
+        console.log(`✅ Removed symbol ${symbol} from activeAlerts (no alerts left)`);
+        
+        // Clean up candle data for this symbol
+        for (const [key, candle] of this.candleData.entries()) {
+          if (key.startsWith(`${symbol}_`)) {
+            this.candleData.delete(key);
           }
         }
+      } else {
+        // Other users still have alerts for this symbol
+        this.activeAlerts.set(symbol, remainingAlerts);
+        console.log(`✅ Updated ${symbol}: ${remainingAlerts.length} alerts remaining (other users)`);
       }
 
-      // CRITICAL: Remove from Redis cache immediately
+      // CRITICAL: Update Redis cache
       const redis = await this.initRedisClient();
       if (redis) {
         const cacheKey = `alerts:cache:${symbol}`;
-        await redis.del(cacheKey);
-      }
-
-      // Clean up RSI data for this symbol
-      for (const [key] of this.rsiData.entries()) {
-        if (key.startsWith(`${symbol}_`)) {
-          this.rsiData.delete(key);
+        
+        if (remainingAlerts.length === 0) {
+          await redis.del(cacheKey);
+          console.log(`✅ Deleted Redis cache for ${symbol}`);
+        } else {
+          await redis.set(cacheKey, JSON.stringify(remainingAlerts));
+          console.log(`✅ Updated Redis cache for ${symbol}`);
         }
       }
-
-      // Clean up open interest data for this symbol
-      for (const [key] of this.openInterestData.entries()) {
-        if (key.startsWith(`${symbol}_`)) {
-          this.openInterestData.delete(key);
-        }
-      }
-
-      // Clean up candle data for this symbol
-      for (const [key] of this.candleData.entries()) {
-        if (key.startsWith(`${symbol}_`)) {
-          this.candleData.delete(key);
-        }
-      }
-
-      // CRITICAL: Update micro-batch engine active symbols
-      if (this.microBatchEngine) {
-        await this.updateMicroBatchActiveSymbols();
-      }
-
-      console.log(
-        `✅ Removed ${alertIdsToRemove.size} alerts for symbol ${symbol} from all caches`
-      );
+      
+      // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
+      // This ensures the engine stops processing if no alerts remain
+      await this.updateMicroBatchActiveSymbols();
+      console.log(`✅ MicroBatchEngine activeSymbols updated after removing alerts`);
     } catch (error) {
       console.error(`❌ Error removing alerts for ${symbol}:`, error);
     }
@@ -3643,7 +3668,7 @@ class RealTimeAlertProcessor {
   // Remove alerts for a specific user when they clear all favorites
   async removeAlertsForUser(userId) {
     try {
-      console.log(`🗑️ Removing all alerts for user ${userId}...`);
+      console.log(`🗑️ Removing all alerts for user: ${userId}`);
       const symbolsToUpdate = new Set();
       const alertIdsToRemove = new Set();
 
@@ -3672,51 +3697,11 @@ class RealTimeAlertProcessor {
           if (remainingAlerts.length > 0) {
             this.activeAlerts.set(symbol, [...remainingAlerts]); // Create new array reference
             symbolsToUpdate.add(symbol);
+            console.log(`✅ Updated ${symbol}: ${remainingAlerts.length} alerts remaining`);
           } else {
             this.activeAlerts.delete(symbol);
             symbolsToUpdate.add(symbol);
-
-            // Clean up RSI data for this symbol
-            for (const [key] of this.rsiData.entries()) {
-              if (key.startsWith(`${symbol}_`)) {
-                this.rsiData.delete(key);
-              }
-            }
-
-            // Clean up open interest data for this symbol
-            for (const [key] of this.openInterestData.entries()) {
-              if (key.startsWith(`${symbol}_`)) {
-                this.openInterestData.delete(key);
-              }
-            }
-
-            // Clean up candle data for this symbol
-            for (const [key] of this.candleData.entries()) {
-              if (key.startsWith(`${symbol}_`)) {
-                this.candleData.delete(key);
-              }
-            }
-          }
-        }
-      }
-
-      // CRITICAL: Remove alert IDs from alertIds Set
-      for (const alertId of alertIdsToRemove) {
-        this.alertIds.delete(alertId);
-      }
-
-      // CRITICAL: Clean up processedAlerts Set (remove entries for deleted alerts)
-      for (const key of this.processedAlerts) {
-        if (alertIdsToRemove.has(key.split("_")[0])) {
-          this.processedAlerts.delete(key);
-        }
-      }
-
-      // CRITICAL: Clean up baseline data for removed alerts
-      for (const alertId of alertIdsToRemove) {
-        for (const [key] of this.alertBaselines.entries()) {
-          if (key.startsWith(`${alertId}_`)) {
-            this.alertBaselines.delete(key);
+            console.log(`✅ Removed ${symbol}: no alerts remaining`);
           }
         }
       }
@@ -3735,15 +3720,11 @@ class RealTimeAlertProcessor {
           }
         }
       }
-
-      // CRITICAL: Update micro-batch engine active symbols
-      if (this.microBatchEngine) {
-        await this.updateMicroBatchActiveSymbols();
-      }
-
-      console.log(
-        `✅ Removed ${alertIdsToRemove.size} alerts for user ${userId} from all caches`
-      );
+      
+      // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
+      // This ensures the engine stops processing removed symbols
+      await this.updateMicroBatchActiveSymbols();
+      console.log(`✅ MicroBatchEngine activeSymbols updated after removing user ${userId} alerts`);
     } catch (error) {
       console.error(`❌ Error removing alerts for user ${userId}:`, error);
     }
@@ -3813,6 +3794,11 @@ class RealTimeAlertProcessor {
         // Reset baseline for this alert (new conditions = new baseline)
         const alertKey = `${alertId}_${symbol}`;
         this.alertBaselines.delete(alertKey);
+        
+        // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
+        // This ensures the engine starts processing this new symbol
+        await this.updateMicroBatchActiveSymbols();
+        console.log(`✅ MicroBatchEngine activeSymbols updated after adding alert ${alertId}`);
 
         console.log(
           `✅ Alert ${alertId} for ${alert.symbol} added to active monitoring`
@@ -3847,6 +3833,8 @@ class RealTimeAlertProcessor {
           break;
         }
       }
+      
+      console.log(`🔍 Removing alert ${alertId}, found symbol: ${removedSymbol}`);
 
       if (!removed || !removedSymbol) {
         // Alert not found in in-memory cache, but still try to remove from Redis
@@ -3945,11 +3933,13 @@ class RealTimeAlertProcessor {
             await redis.del(cacheKey);
             // CRITICAL: Also remove from in-memory cache
             this.activeAlerts.delete(removedSymbol);
+            console.log(`✅ Removed symbol ${removedSymbol} from activeAlerts (no alerts left)`);
           } else {
             // Update with remaining alerts
             await redis.set(cacheKey, JSON.stringify(updatedAlerts));
             // CRITICAL: Update in-memory cache with new array (not modify in place)
             this.activeAlerts.set(removedSymbol, [...updatedAlerts]);
+            console.log(`✅ Updated symbol ${removedSymbol} in activeAlerts (${updatedAlerts.length} alerts remaining)`);
           }
         } else if (removedSymbol) {
           // If Redis is not available, still update in-memory cache
@@ -3960,12 +3950,19 @@ class RealTimeAlertProcessor {
             );
             if (updatedAlerts.length === 0) {
               this.activeAlerts.delete(removedSymbol);
+              console.log(`✅ Removed symbol ${removedSymbol} from activeAlerts (no Redis, no alerts left)`);
             } else {
               // Create new array to ensure reference is updated
               this.activeAlerts.set(removedSymbol, [...updatedAlerts]);
+              console.log(`✅ Updated symbol ${removedSymbol} in activeAlerts (no Redis, ${updatedAlerts.length} alerts remaining)`);
             }
           }
         }
+        
+        // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
+        // This ensures the engine stops processing removed symbols
+        await this.updateMicroBatchActiveSymbols();
+        console.log(`✅ MicroBatchEngine activeSymbols updated after removing alert ${alertId}`);
       }
 
       // CRITICAL: Update micro-batch engine active symbols after removal
@@ -4465,7 +4462,13 @@ class RealTimeAlertProcessor {
   // Reload alerts cache from database
   // Called automatically on alert create/update/delete events
   async reloadAlertsCache() {
+    console.log("🔄 Reloading alerts cache...");
     await this.loadAlertsToRedisCache();
+    
+    // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
+    // This ensures the engine stays in sync with database changes
+    await this.updateMicroBatchActiveSymbols();
+    console.log("✅ MicroBatchEngine activeSymbols updated after cache reload");
   }
 
   async subscribeToAlertManagement() {
@@ -4515,7 +4518,13 @@ class RealTimeAlertProcessor {
           break;
 
         case "alerts_removed_for_symbol":
-          await this.removeAlertsForSymbol(data.symbol);
+          // Check if userId is provided (for single user removal)
+          if (data.userId) {
+            await this.removeAlertsForSymbol(data.symbol, data.userId);
+          } else {
+            // If no userId, this shouldn't happen but handle gracefully
+            console.warn(`⚠️ alerts_removed_for_symbol event without userId for ${data.symbol}`);
+          }
           // Reload cache to remove alerts for this symbol
           await this.reloadAlertsCache();
           break;
@@ -4689,7 +4698,35 @@ class RealTimeAlertProcessor {
         console.log("📊 Sending processor stats...");
         await this.sendProcessorStats();
         break;
-
+        
+      case "reset_rsi_ban":
+        console.log("🛡️ Resetting RSI API ban...");
+        this.apiBanUntil = 0;
+        this.rsiQueue = [];
+        if (this.rsiFailures) {
+          this.rsiFailures.clear();
+          console.log(`✅ Reset ${this.rsiFailures.size} circuit breaker failures`);
+        }
+        console.log("✅ RSI ban reset, queue cleared, circuit breaker reset");
+        break;
+        
+      case "reset_rsi_circuit_breaker":
+        console.log("🛡️ Resetting RSI circuit breaker...");
+        if (this.rsiFailures) {
+          const count = this.rsiFailures.size;
+          this.rsiFailures.clear();
+          console.log(`✅ Reset ${count} RSI circuit breaker failures`);
+        }
+        break;
+        
+      case "reset_candle_ban":
+        console.log("🛡️ Resetting Candle API ban...");
+        this.candleApiBanUntil = 0;
+        this.candleQueue = [];
+        this.pendingCandleRequests.clear();
+        console.log("✅ Candle ban reset, queue cleared");
+        break;
+        
       case "get_microbatch_stats":
         console.log("📊 Sending micro-batch stats...");
         await this.sendMicroBatchStats();
