@@ -43,20 +43,20 @@ class RealTimeAlertProcessor {
     this.dbQueueClient = null; // Redis client for database queue operations
     this.dbQueueStreamName = "db:operations:queue"; // Redis Stream name for DB operations
     this.heartbeatInterval = null; // Heartbeat interval for health monitoring
-    
+
     // 🛡️ API RATE LIMITER - Fix for 418 Error
     this.rsiQueue = []; // Queue for RSI calculation requests
     this.isProcessingRsiQueue = false; // Queue processing state
     this.apiBanUntil = 0; // API ban timestamp
     this.rsiHistory = new Map(); // RSI history cache for local calculation
-    
+
     // 🛡️ CANDLE FETCH QUEUE - Fix for Candle 418 Error
     this.candleQueue = []; // Queue for candle fetch requests
     this.isProcessingCandleQueue = false; // Candle queue processing state
     this.pendingCandleRequests = new Set(); // Prevent duplicate requests
     this.candleCache = new Map(); // Cache for fetched candles
     this.candleApiBanUntil = 0; // Candle API ban timestamp
-    
+
     // 🛡️ CIRCUIT BREAKER - Prevent infinite retry loops
     this.rsiFailures = new Map(); // Track RSI calculation failures
   }
@@ -383,8 +383,7 @@ class RealTimeAlertProcessor {
       }
 
       console.log(
-        `✅ Cached ${alerts.length} alerts for ${
-          Object.keys(alertsBySymbol).length
+        `✅ Cached ${alerts.length} alerts for ${Object.keys(alertsBySymbol).length
         } symbols in Redis`
       );
       return true;
@@ -561,8 +560,7 @@ class RealTimeAlertProcessor {
             const efficiency = (relevantUpdates.size / tickers.length) * 100;
 
             console.log(
-              `⚡ Micro-Batch: ${relevantUpdates.size}/${
-                tickers.length
+              `⚡ Micro-Batch: ${relevantUpdates.size}/${tickers.length
               } relevant (${efficiency.toFixed(
                 1
               )}% efficiency) queued in ${processingTime.toFixed(2)}ms`
@@ -657,10 +655,10 @@ class RealTimeAlertProcessor {
                 .lean()
                 .then((updatedAlert) => {
                   if (updatedAlert) {
-                    this.updateAlertInCache(updatedAlert).catch(() => {});
+                    this.updateAlertInCache(updatedAlert).catch(() => { });
                   }
                 })
-                .catch(() => {}); // Silent fail - non-critical
+                .catch(() => { }); // Silent fail - non-critical
             }
 
             return result.result || { triggered: false, reason: result.reason };
@@ -793,8 +791,11 @@ class RealTimeAlertProcessor {
           const priceData = {
             price: parseFloat(ticker.c),
             change: parseFloat(ticker.P),
-            volume: parseFloat(ticker.v),
-            volume24h: parseFloat(ticker.q),
+            // ✅ FIX: Use ONLY ticker.q (quote volume in USDT)
+            // ticker.v = base volume (BTC) - WRONG!
+            // ticker.q = quote volume (USDT) - CORRECT!
+            volume: parseFloat(ticker.q),      // Now using quote volume (USDT)
+            volume24h: parseFloat(ticker.q),   // Quote volume in USDT
             high: parseFloat(ticker.h),
             low: parseFloat(ticker.l),
             open: parseFloat(ticker.o),
@@ -813,7 +814,7 @@ class RealTimeAlertProcessor {
                 300, // 5 minutes TTL
                 JSON.stringify(priceData)
               )
-              .catch(() => {}); // Silent fail - non-critical
+              .catch(() => { }); // Silent fail - non-critical
           }
         }
       } catch (error) {
@@ -858,7 +859,7 @@ class RealTimeAlertProcessor {
           // Update baseline to current live price
           alert.baselinePrice = liveData.price;
           alert.baselineTimestamp = new Date();
-          
+
           // Update baseline volume based on smallest volume timeframe (if volume condition exists)
           let updatedVolume = liveData.volume || liveData.volume24h;
           if (alert.conditions?.volume?.timeframes?.length > 0) {
@@ -869,7 +870,7 @@ class RealTimeAlertProcessor {
               return tfMs < minMs ? tf : min;
             });
             const smallestTimeframeMs = this.getTimeframeMs(smallestTimeframe);
-            
+
             if (timeSinceBaseline >= smallestTimeframeMs) {
               alert.baselineVolume = updatedVolume;
               console.log(`📊 Volume baseline updated (${smallestTimeframe}): ${alert.baselineVolume}`);
@@ -934,8 +935,7 @@ class RealTimeAlertProcessor {
         const minutesRemaining = Math.ceil(timeRemaining / (1000 * 60));
 
         console.log(
-          `🔒 Alert ${alert._id} for ${
-            alert.symbol
+          `🔒 Alert ${alert._id} for ${alert.symbol
           } is LOCKED until ${lockUntil.toISOString()}`
         );
         return { triggered: false, reason: "alert_locked" };
@@ -1037,23 +1037,58 @@ class RealTimeAlertProcessor {
     const activeConditions = [];
 
     // Priority 1: Min Daily (fastest check, most likely to fail)
+    // ✅ CRITICAL: Use ONLY volume24h (ticker.q = quote volume in USDT)
+    // ticker.v = base volume (e.g., BTC) - WRONG for USDT comparison!
+    // ticker.q = quote volume (USDT) - CORRECT for minDaily comparison!
     if (
       this.isConditionSet(conditions.minDaily) &&
-      (liveData.volume || liveData.volume24h)
+      liveData.volume24h  // Only check if quote volume exists
     ) {
       activeConditions.push({
         name: "Min Daily Volume",
         priority: 1,
         check: async () => {
           const minVolume = parseFloat(conditions.minDaily);
-          const actualVolume = parseFloat(
-            liveData.volume || liveData.volume24h
+
+          // ✅ FIX: Use ONLY volume24h (quote volume in USDT)
+          // NOT liveData.volume which is base volume!
+          const actualVolume = parseFloat(liveData.volume24h || 0);
+
+          // ✅ Explicit validation
+          if (isNaN(minVolume) || minVolume <= 0) {
+            console.warn(`⚠️ Invalid minDaily value: ${conditions.minDaily}`);
+            return {
+              passed: false,
+              reason: `Invalid minDaily: ${conditions.minDaily}`
+            };
+          }
+
+          if (isNaN(actualVolume) || actualVolume <= 0) {
+            console.warn(`⚠️ No USDT volume data for ${liveData.symbol || 'UNKNOWN'}`);
+            return {
+              passed: false,
+              reason: `No USDT volume data available`
+            };
+          }
+
+          // Log for debugging
+          console.log(
+            `📊 Min Daily Check - ${liveData.symbol || 'UNKNOWN'}: ` +
+            `Required=${minVolume.toLocaleString()} USDT, ` +
+            `Actual=${actualVolume.toLocaleString()} USDT (quote volume)`
           );
 
           if (actualVolume < minVolume) {
-            return { passed: false, reason: `${actualVolume} < ${minVolume}` };
+            return {
+              passed: false,
+              reason: `Volume ${actualVolume.toLocaleString()} < ${minVolume.toLocaleString()} USDT`
+            };
           }
-          return { passed: true, reason: `${actualVolume} >= ${minVolume}` };
+
+          return {
+            passed: true,
+            reason: `Volume ${actualVolume.toLocaleString()} >= ${minVolume.toLocaleString()} USDT`
+          };
         },
       });
     }
@@ -1279,9 +1314,15 @@ class RealTimeAlertProcessor {
       return condition.length > 0;
     }
 
-    // For strings/numbers
+    // For strings/numbers (minDaily, percentage, etc.)
     if (typeof condition === "string") {
-      return condition.trim() !== "";
+      const trimmed = condition.trim();
+      if (trimmed === "") return false;
+
+      // ✅ FIX: Parse as number and check if > 0
+      // This prevents "0" or "0.0" from being considered valid
+      const numValue = parseFloat(trimmed);
+      return !isNaN(numValue) && numValue > 0;
     }
 
     if (typeof condition === "number") {
@@ -1293,7 +1334,7 @@ class RealTimeAlertProcessor {
       return Object.keys(condition).length > 0;
     }
 
-    return Boolean(condition);
+    return false;
   }
 
   // Trigger alert with live data and update baseline
@@ -1342,8 +1383,8 @@ class RealTimeAlertProcessor {
         changeFromBaselinePercent > 0
           ? "increase"
           : changeFromBaselinePercent < 0
-          ? "decrease"
-          : "both";
+            ? "decrease"
+            : "both";
 
       // Create alert history entry with all required fields
       const alertHistory = {
@@ -1444,7 +1485,7 @@ class RealTimeAlertProcessor {
           alertId: alert._id.toString(),
           data: updateData,
           priority: "critical", // Critical priority for failed immediate updates
-        }).catch(() => {});
+        }).catch(() => { });
       }
 
       console.log(
@@ -1476,7 +1517,7 @@ class RealTimeAlertProcessor {
         baselinePrice: liveData.price,
         baselineVolume: liveData.volume || liveData.volume24h,
         baselineTimestamp: new Date(),
-      }).catch(() => {}); // Silent fail - non-critical
+      }).catch(() => { }); // Silent fail - non-critical
 
       // Update live price in cache for this symbol
       // No TTL - WebSocket provides real-time updates continuously
@@ -1624,10 +1665,8 @@ class RealTimeAlertProcessor {
       const alerts = this.activeAlerts.get(symbol);
 
       console.log(
-        `📡 Price update received for ${symbol}: Price=${
-          priceData.price
-        }, Volume=${priceData.volume || priceData.volume24h}, Change=${
-          priceData.priceChangePercent
+        `📡 Price update received for ${symbol}: Price=${priceData.price
+        }, Volume=${priceData.volume || priceData.volume24h}, Change=${priceData.priceChangePercent
         }%`
       );
 
@@ -1792,8 +1831,7 @@ class RealTimeAlertProcessor {
         const minutesRemaining = Math.ceil(timeRemaining / (1000 * 60));
 
         console.log(
-          `🔒 Alert ${alert._id} for ${
-            alert.symbol
+          `🔒 Alert ${alert._id} for ${alert.symbol
           } is LOCKED until ${lockUntil.toISOString()}`
         );
         return false;
@@ -1830,8 +1868,7 @@ class RealTimeAlertProcessor {
       }
 
       console.log(
-        `✅ Direction condition met: ${direction.toUpperCase()} - Price moved from ${
-          alert.baselinePrice
+        `✅ Direction condition met: ${direction.toUpperCase()} - Price moved from ${alert.baselinePrice
         } to ${priceData.price}`
       );
 
@@ -1981,7 +2018,7 @@ class RealTimeAlertProcessor {
         console.log(
           `🚨 ALL CONDITIONS MET! Triggering alert for ${alert.symbol}, 🎯 Alert will be triggered with price: ${priceData.price}`
         );
-      
+
 
         console.log(`🔄 Calling triggerAlert for ${alert.symbol}...`);
         const triggerResult = await this.triggerAlert(alert, priceData);
@@ -2030,8 +2067,7 @@ class RealTimeAlertProcessor {
       )}`;
       if (this.processedAlerts.has(priceKey)) {
         console.log(
-          `⚠️ Alert ${
-            alert._id
+          `⚠️ Alert ${alert._id
           } already triggered at same price level (${Math.floor(
             parseFloat(priceData.price)
           )}), skipping duplicate`
@@ -2068,8 +2104,8 @@ class RealTimeAlertProcessor {
         changeFromBaselinePercent > 0
           ? "increase"
           : changeFromBaselinePercent < 0
-          ? "decrease"
-          : "both";
+            ? "decrease"
+            : "both";
 
       // Create alert history entry
       const alertHistory = {
@@ -2290,10 +2326,9 @@ class RealTimeAlertProcessor {
 
     if (conditions.openInterest) {
       parts.push(
-        `Open Interest: ${conditions.openInterest.direction}${
-          conditions.openInterest.percentage
-            ? ` ${conditions.openInterest.percentage}%`
-            : ""
+        `Open Interest: ${conditions.openInterest.direction}${conditions.openInterest.percentage
+          ? ` ${conditions.openInterest.percentage}%`
+          : ""
         }`
       );
     }
@@ -2384,19 +2419,19 @@ class RealTimeAlertProcessor {
   // 🛡️ SAFE RSI CALCULATION - Queue System to Prevent 418 Ban
   async calculateRSI(symbol, timeframe, period = 14) {
     const key = `${symbol}_${timeframe}`;
-    
+
     // CRITICAL FIX: Circuit breaker - if we've failed too many times, skip
     const failureKey = `rsi_failures_${key}`;
     const failures = this.rsiFailures?.get(failureKey) || 0;
-    
+
     if (failures >= 5) {
       console.log(`⚠️ RSI circuit breaker active for ${key} (${failures} failures)`);
       return null;
     }
-    
+
     // 1. Check if we have history for local calculation
     let closes = this.rsiHistory.get(key);
-    
+
     if (!closes || closes.length < period + 1) {
       // Data missing -> Queue background fetch (but only if not already queued)
       const alreadyQueued = this.rsiQueue.some(item => item.key === key);
@@ -2404,84 +2439,84 @@ class RealTimeAlertProcessor {
         console.log(`⏳ Queueing RSI history fetch for ${key}`);
         this.queueRsiHistoryFetch(symbol, timeframe, period);
       }
-      
+
       // Track failure
       if (!this.rsiFailures) this.rsiFailures = new Map();
       this.rsiFailures.set(failureKey, failures + 1);
-      
+
       // Return null immediately (alert will miss this tick, but system stays safe)
       return null;
     }
-    
+
     // 2. Add current live price for real-time RSI
     const livePrice = this.livePrices[symbol]?.price;
     let calculationCloses = [...closes];
-    
+
     if (livePrice) {
       calculationCloses.push(livePrice);
     }
-    
+
     // 3. Calculate RSI locally (no API call)
     const rsi = this.computeRSILocally(calculationCloses, period);
-    
+
     // Reset failure count on success
     if (rsi !== null && this.rsiFailures) {
       this.rsiFailures.delete(failureKey);
     }
-    
+
     return rsi;
   }
-  
+
   // Queue RSI history fetch (prevents multiple simultaneous API calls)
   queueRsiHistoryFetch(symbol, timeframe, period) {
     const key = `${symbol}_${timeframe}`;
-    
+
     // Check if already queued
     const exists = this.rsiQueue.some(item => item.key === key);
     if (exists) {
       console.log(`⏳ RSI fetch already queued for ${key}`);
       return;
     }
-    
+
     // CRITICAL FIX: Limit queue size to prevent memory issues
     if (this.rsiQueue.length >= 100) {
       console.log(`⚠️ RSI queue full (${this.rsiQueue.length} items), skipping ${key}`);
       return;
     }
-    
+
     // Add to queue with timestamp for timeout tracking
-    this.rsiQueue.push({ 
-      symbol, 
-      timeframe, 
-      period, 
+    this.rsiQueue.push({
+      symbol,
+      timeframe,
+      period,
       key,
       queuedAt: Date.now()
     });
-    
+
     console.log(`⏳ Queued RSI fetch for ${key} (queue size: ${this.rsiQueue.length})`);
-    
+
     // Start processing if not already running
     this.processRsiQueue();
   }
-  
+
   // Process RSI queue with rate limiting
   async processRsiQueue() {
     if (this.isProcessingRsiQueue) return;
     this.isProcessingRsiQueue = true;
-    
+
     console.log(`🔄 RSI Queue Started: ${this.rsiQueue.length} items pending...`);
-    
+
     const maxProcessingTime = 5 * 60 * 1000; // 5 minutes max
     const startTime = Date.now();
     let processedCount = 0;
-    
+
     while (this.rsiQueue.length > 0) {
       // CRITICAL FIX: Add timeout to prevent infinite processing
       if (Date.now() - startTime > maxProcessingTime) {
         console.log(`⏰ RSI Queue timeout after 5 minutes, stopping processing`);
         break;
       }
-      
+
       // 1. Check for API ban
       if (Date.now() < this.apiBanUntil) {
         const waitTime = Math.ceil((this.apiBanUntil - Date.now()) / 1000);
@@ -2491,28 +2526,28 @@ class RealTimeAlertProcessor {
         await this.delay(2000);
         continue;
       }
-      
+
       // 2. Get next item and check if it's too old
       const task = this.rsiQueue[0];
       const taskAge = Date.now() - (task.queuedAt || 0);
-      
+
       // CRITICAL FIX: Remove tasks older than 10 minutes
       if (taskAge > 10 * 60 * 1000) {
-        console.log(`⏰ Removing stale RSI task for ${task.key} (age: ${Math.round(taskAge/1000)}s)`);
+        console.log(`⏰ Removing stale RSI task for ${task.key} (age: ${Math.round(taskAge / 1000)}s)`);
         this.rsiQueue.shift();
         continue;
       }
-      
+
       try {
         await this.fetchAndStoreRsiHistory(task.symbol, task.timeframe, task.period);
-        
+
         // Success: Remove from queue
         this.rsiQueue.shift();
         processedCount++;
-        
+
         // 🛑 SLOW DOWN: 500ms delay between requests (Safe Limit)
         await this.delay(500);
-        
+
       } catch (error) {
         if (error.status === 418 || error.status === 429) {
           console.error(`🚨 418/429 ERROR DETECTED! Pausing queue for 2 minutes.`);
@@ -2523,17 +2558,17 @@ class RealTimeAlertProcessor {
           this.rsiQueue.shift();
         }
       }
-      
+
       // CRITICAL FIX: Limit processing per session to prevent overload
       if (processedCount >= 50) {
         console.log(`🛑 RSI Queue processed 50 items, taking a break...`);
         break;
       }
     }
-    
+
     this.isProcessingRsiQueue = false;
     console.log(`✅ RSI Queue Processed: ${processedCount} items, ${this.rsiQueue.length} remaining`);
-    
+
     // CRITICAL FIX: If queue still has items, schedule next processing
     if (this.rsiQueue.length > 0) {
       setTimeout(() => {
@@ -2541,79 +2576,79 @@ class RealTimeAlertProcessor {
       }, 10000); // Resume in 10 seconds
     }
   }
-  
+
   // Fetch RSI history from Binance API (actual API call)
   async fetchAndStoreRsiHistory(symbol, timeframe, period) {
     const binanceInterval = this.getBinanceInterval(timeframe);
     const limit = period + 10; // Extra buffer
-    
+
     const response = await fetch(
       `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`
     );
-    
+
     if (response.status === 418 || response.status === 429) {
       const err = new Error("Rate Limit");
       err.status = response.status;
       throw err;
     }
-    
+
     if (!response.ok) {
       throw new Error(`API Error ${response.status}`);
     }
-    
+
     const klines = await response.json();
     const closes = klines.map(k => parseFloat(k[4]));
-    
+
     // Store in history cache
     const key = `${symbol}_${timeframe}`;
     this.rsiHistory.set(key, closes);
-    
+
     console.log(`📥 RSI History loaded for ${symbol} ${timeframe}: ${closes.length} candles`);
   }
-  
+
   // Local RSI calculation (no API calls)
   computeRSILocally(closes, period) {
     if (closes.length < period + 1) return null;
-    
+
     // Calculate price changes
     const changes = [];
     for (let i = 1; i < closes.length; i++) {
       changes.push(closes[i] - closes[i - 1]);
     }
-    
+
     // Separate gains and losses
     const gains = changes.map((change) => (change > 0 ? change : 0));
     const losses = changes.map((change) => (change < 0 ? Math.abs(change) : 0));
-    
+
     // Calculate initial average gain and loss
     let avgGain = 0;
     let avgLoss = 0;
-    
+
     for (let i = 0; i < period; i++) {
       avgGain += gains[i];
       avgLoss += losses[i];
     }
-    
+
     avgGain = avgGain / period;
     avgLoss = avgLoss / period;
-    
+
     // Calculate RSI using Wilder's smoothing method
     for (let i = period; i < changes.length; i++) {
       avgGain = (avgGain * (period - 1) + gains[i]) / period;
       avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
     }
-    
+
     // Avoid division by zero
     if (avgLoss === 0) {
       return avgGain > 0 ? 100 : 50;
     }
-    
+
     const rs = avgGain / avgLoss;
     const rsi = 100 - 100 / (1 + rs);
-    
+
     return rsi;
   }
-  
+
   // Helper: Delay function
   delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -2685,12 +2720,12 @@ class RealTimeAlertProcessor {
                     Math.floor(ttl / 1000),
                     JSON.stringify(updated)
                   )
-                  .catch(() => {}); // Silent fail
+                  .catch(() => { }); // Silent fail
               }
             });
           }
         })
-        .catch(() => {}); // Silent fail - non-critical
+        .catch(() => { }); // Silent fail - non-critical
 
       // Return stale data immediately (no delay)
       return staleData;
@@ -2717,10 +2752,10 @@ class RealTimeAlertProcessor {
             const redisKey = `rsi:${key}`;
             redis
               .setex(redisKey, Math.floor(ttl / 1000), JSON.stringify(updated))
-              .catch(() => {}); // Silent fail
+              .catch(() => { }); // Silent fail
           }
         })
-        .catch(() => {});
+        .catch(() => { });
 
       return updated;
     }
@@ -2746,10 +2781,10 @@ class RealTimeAlertProcessor {
         }
 
         console.log(`🔍 Checking ${timeframes.length} timeframes (AND condition - ALL must pass)`);
-        
+
         let allTimeframesPassed = true;
         const now = Date.now();
-        
+
         for (const timeframe of timeframes) {
           // 🔥 CHANGE: Use getCandleDataOrQueue instead of direct fetch
           let candle = this.getCandleDataOrQueue(symbol, timeframe);
@@ -2772,7 +2807,7 @@ class RealTimeAlertProcessor {
 
           // Apply epsilon: currentPrice must be > openPrice * 1.0001
           const priceAboveOpen = currentPrice > (openPrice * EPSILON);
-          
+
           console.log(`📊 [${timeframe}] Start: ${new Date(candleStartTime).toISOString()}, Open: ${openPrice}, Current: ${currentPrice}, Above: ${priceAboveOpen}`);
 
           if (!priceAboveOpen) {
@@ -2780,10 +2815,10 @@ class RealTimeAlertProcessor {
             allTimeframesPassed = false;
             break;
           }
-          
+
           console.log(`✅ [${timeframe}] PASSED: ${currentPrice} > ${openPrice * EPSILON}`);
         }
-        
+
         if (allTimeframesPassed) {
           console.log(`🎉 ALL ${timeframes.length} timeframes PASSED - Alert condition met`);
         }
@@ -3118,48 +3153,99 @@ class RealTimeAlertProcessor {
     const requiredPercentage = parseFloat(percentage) || 0;
 
     console.log(
-      `📉 Volume Evaluation: ${condition}${
-        percentage ? ` by ${percentage}%` : ""
-      }`
+      `📉 Volume Evaluation: ${condition}${percentage ? ` by ${percentage}%` : ""
+      } on timeframes: ${timeframes?.join(", ") || "N/A"}`
     );
 
-    // Timeframes only for baseline update (like changePercent)
-    // Condition check: current volume vs baseline volume
+    // If timeframes are specified, check using Candle Data (AND logic)
+    if (timeframes && timeframes.length > 0 && alert?.symbol) {
+      let allTimeframesPassed = true;
+
+      for (const timeframe of timeframes) {
+        // Fetch Candle Data
+        const candleData = await this.getCandleDataOrQueue(alert.symbol, timeframe);
+
+        if (!candleData) {
+          console.log(`   ⏳ Timeframe ${timeframe}: Candle data pending...`);
+          return false; // Fail safe if data pending
+        }
+
+        const isBullish = candleData.close >= candleData.open;
+        const isBearish = candleData.close < candleData.open;
+
+        // Use QUOTE VOLUME (USDT) if available (verified fix), else fallback to Base Volume
+        const candleVolume = candleData.quoteVolume || candleData.volume || 0;
+
+        let timeframePassed = false;
+
+        switch (condition) {
+          case "INCREASING":
+            // For single candle, "Increasing" usually implies Bullish (Buying Volume)
+            timeframePassed = isBullish;
+            console.log(`   [${timeframe}] INCREASING? Bullish=${isBullish} (Vol: ${candleVolume.toLocaleString()})`);
+            break;
+
+          case "DECREASING":
+            // For single candle, "Decreasing" usually implies Bearish (Selling Volume)
+            timeframePassed = isBearish;
+            console.log(`   [${timeframe}] DECREASING? Bearish=${isBearish} (Vol: ${candleVolume.toLocaleString()})`);
+            break;
+
+          case "ABOVE":
+            timeframePassed = candleVolume > requiredPercentage;
+            console.log(`   [${timeframe}] ABOVE ${requiredPercentage}? Vol=${candleVolume.toLocaleString()} -> ${timeframePassed}`);
+            break;
+
+          case "BELOW":
+            timeframePassed = candleVolume < requiredPercentage;
+            console.log(`   [${timeframe}] BELOW ${requiredPercentage}? Vol=${candleVolume.toLocaleString()} -> ${timeframePassed}`);
+            break;
+
+          default:
+            timeframePassed = true;
+        }
+
+        if (!timeframePassed) {
+          allTimeframesPassed = false;
+          break; // One failed, all fail
+        }
+      }
+
+      if (!allTimeframesPassed) return false;
+
+      // If passing ABOVE/BELOW conditions, we are done.
+      if ((condition === "ABOVE" || condition === "BELOW")) {
+        return true;
+      }
+    }
+
+    // Global / Baseline Logic (Fallback or Additional Check)
     const currentVolume = parseFloat(priceData.volume || priceData.volume24h) || 0;
     const baselineVolume = alert ? parseFloat(alert.baselineVolume) || 0 : 0;
 
     if (currentVolume === 0 || baselineVolume === 0) {
-      console.log("⚠️ Volume data missing, skipping condition");
-      return true;
+      return true; // Skip if no data
     }
 
-    console.log(`   Current: ${currentVolume.toLocaleString()}, Baseline: ${baselineVolume.toLocaleString()}`);
-
+    // If we have timeframes and loop passed, and it's INCREASING/DECREASING with %, check global change
     switch (condition) {
       case "INCREASING":
         const volumeChangeInc = ((currentVolume - baselineVolume) / baselineVolume) * 100;
-        const passedInc = volumeChangeInc >= requiredPercentage;
-        console.log(`   INCREASING: ${volumeChangeInc.toFixed(2)}% >= ${requiredPercentage}%? ${passedInc ? '✅' : '❌'}`);
-        return passedInc;
+        return volumeChangeInc >= requiredPercentage;
 
       case "DECREASING":
         const volumeChangeDec = ((currentVolume - baselineVolume) / baselineVolume) * 100;
-        const passedDec = volumeChangeDec <= -requiredPercentage;
-        console.log(`   DECREASING: ${volumeChangeDec.toFixed(2)}% <= -${requiredPercentage}%? ${passedDec ? '✅' : '❌'}`);
-        return passedDec;
+        return volumeChangeDec <= -requiredPercentage;
 
       case "ABOVE":
-        const passedAbove = currentVolume > requiredPercentage;
-        console.log(`   ABOVE: ${currentVolume.toLocaleString()} > ${requiredPercentage.toLocaleString()}? ${passedAbove ? '✅' : '❌'}`);
-        return passedAbove;
+        // Only reached if no timeframes set
+        return currentVolume > requiredPercentage;
 
       case "BELOW":
-        const passedBelow = currentVolume < requiredPercentage;
-        console.log(`   BELOW: ${currentVolume.toLocaleString()} < ${requiredPercentage.toLocaleString()}? ${passedBelow ? '✅' : '❌'}`);
-        return passedBelow;
+        // Only reached if no timeframes set
+        return currentVolume < requiredPercentage;
 
       default:
-        console.log(`   Unknown condition: ${condition}`);
         return true;
     }
   }
@@ -3262,8 +3348,7 @@ class RealTimeAlertProcessor {
     const requiredPercentage = parseFloat(percentage) || 0;
 
     console.log(
-      `📊 Open Interest Evaluation: ${direction}${
-        percentage ? ` by ${percentage}%` : ""
+      `📊 Open Interest Evaluation: ${direction}${percentage ? ` by ${percentage}%` : ""
       } on timeframes: ${timeframes?.join(", ") || "N/A"}`
     );
 
@@ -3889,8 +3974,7 @@ class RealTimeAlertProcessor {
       }
 
       console.log(
-        `✅ Alert ${alertId} removed from all caches${
-          removed ? "" : " (not found in cache)"
+        `✅ Alert ${alertId} removed from all caches${removed ? "" : " (not found in cache)"
         }`
       );
       return removed;
@@ -4019,7 +4103,7 @@ class RealTimeAlertProcessor {
   // 🛡️ SAFE CANDLE GETTER - Uses Queue System to Prevent 418 Ban
   getCandleDataOrQueue(symbol, timeframe) {
     const key = `${symbol}_${timeframe}`;
-    
+
     // 1. Check Cache
     if (this.candleCache.has(key)) {
       return this.candleCache.get(key);
@@ -4048,7 +4132,7 @@ class RealTimeAlertProcessor {
     this.isProcessingCandleQueue = true;
 
     console.log(`🔄 Candle Queue Started: ${this.candleQueue.length} items pending...`);
-    
+
     while (this.candleQueue.length > 0) {
       // 1. Check for API ban
       if (Date.now() < this.candleApiBanUntil) {
@@ -4059,20 +4143,20 @@ class RealTimeAlertProcessor {
         await this.delay(2000);
         continue;
       }
-      
+
       // 2. Get next item
       const task = this.candleQueue[0];
-      
+
       try {
         await this.fetchAndStoreCandleData(task.symbol, task.timeframe);
-        
+
         // Success: Remove from queue
         this.candleQueue.shift();
         this.pendingCandleRequests.delete(task.key);
-        
+
         // 🛑 SLOW DOWN: 200ms delay between requests (5 requests per second)
         await this.delay(200);
-        
+
       } catch (error) {
         if (error.status === 418 || error.status === 429) {
           console.error(`🚨 Candle 418/429 ERROR! Pausing queue for 2 minutes.`);
@@ -4085,7 +4169,7 @@ class RealTimeAlertProcessor {
         }
       }
     }
-    
+
     this.isProcessingCandleQueue = false;
     console.log("✅ Candle Queue Processed.");
   }
@@ -4113,7 +4197,7 @@ class RealTimeAlertProcessor {
       const candleStartTime = parseInt(kline[0]);
       const timeframeMs = this.getTimeframeMs(timeframe);
       const expectedStartTime = Math.floor(Date.now() / timeframeMs) * timeframeMs;
-      
+
       // Verify this is the CURRENT candle (not stale)
       if (Math.abs(candleStartTime - expectedStartTime) > 5000) {
         console.warn(`⚠️ Stale candle detected for ${symbol} ${timeframe}`);
@@ -4126,11 +4210,12 @@ class RealTimeAlertProcessor {
         low: parseFloat(kline[3]),
         close: parseFloat(kline[4]),
         volume: parseFloat(kline[5]),
+        quoteVolume: parseFloat(kline[7]), // Explicitly store Quote Volume (USDT)
         startTime: candleStartTime,
         endTime: parseInt(kline[6]),
         isComplete: false,
       };
-      
+
       // Store in Cache
       const key = `${symbol}_${timeframe}`;
       this.candleCache.set(key, candle);
@@ -4182,8 +4267,7 @@ class RealTimeAlertProcessor {
         // Previous candle is complete
         candle.isComplete = true;
         console.log(
-          `🕯️ Candle completed for ${symbol} (${timeframe}): Open=${
-            candle.open
+          `🕯️ Candle completed for ${symbol} (${timeframe}): Open=${candle.open
           }, Close=${candle.close}, Change=${this.calculateCandleChange(
             candle
           )}%`
@@ -4241,7 +4325,7 @@ class RealTimeAlertProcessor {
               }
             }
           })
-          .catch(() => {}); // Silent fail - non-critical
+          .catch(() => { }); // Silent fail - non-critical
         candle.endTime = candleStartTime + timeframeMs;
         candle.isComplete = false;
         console.log(
@@ -4273,10 +4357,8 @@ class RealTimeAlertProcessor {
       // Check if current candle meets change requirement (immediate check)
       const currentChange = this.calculateCandleChange(candle);
       console.log(
-        `🕯️ Candle updated for ${symbol} (${timeframe}): High=${
-          candle.high
-        }, Low=${candle.low}, Close=${
-          candle.close
+        `🕯️ Candle updated for ${symbol} (${timeframe}): High=${candle.high
+        }, Low=${candle.low}, Close=${candle.close
         }, Current Change=${currentChange.toFixed(3)}%`
       );
     }
@@ -4607,7 +4689,7 @@ class RealTimeAlertProcessor {
         console.log("📊 Sending processor stats...");
         await this.sendProcessorStats();
         break;
-        
+
       case "get_microbatch_stats":
         console.log("📊 Sending micro-batch stats...");
         await this.sendMicroBatchStats();
@@ -4619,7 +4701,7 @@ class RealTimeAlertProcessor {
           this.microBatchEngine.resetMetrics();
         }
         break;
-        
+
       case "clear_processing_locks":
         console.log("🧹 Clearing all processing locks...");
         if (this.safeProcessor) {
@@ -4631,7 +4713,7 @@ class RealTimeAlertProcessor {
         console.log("❓ Unknown system control command:", data.command);
     }
   }
-  
+
   // 🛡️ Get RSI Queue Status
   getRsiQueueStatus() {
     return {
@@ -4643,7 +4725,7 @@ class RealTimeAlertProcessor {
       nextBanReset: this.apiBanUntil > 0 ? new Date(this.apiBanUntil).toISOString() : null
     };
   }
-  
+
   // 🛡️ Get Candle Queue Status
   getCandleQueueStatus() {
     return {
@@ -4678,17 +4760,17 @@ class RealTimeAlertProcessor {
 
       // Clear old RSI data
       this.rsiData.clear();
-      
+
       // 🛡️ Clear RSI queue and history
       this.rsiQueue = [];
       this.rsiHistory.clear();
       this.apiBanUntil = 0; // Reset ban
-      
+
       // 🛡️ Reset circuit breaker failures
       if (this.rsiFailures) {
         this.rsiFailures.clear();
       }
-      
+
       // 🛡️ Clear Candle queue and cache
       this.candleQueue = [];
       this.candleCache.clear();

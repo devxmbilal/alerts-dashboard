@@ -101,8 +101,9 @@ export class MicroBatchExecutionEngine {
           change: parseFloat(ticker.P), // Price change percent
           priceChangePercent: parseFloat(ticker.P), // 24-hour price change percent from Binance
           priceChange: parseFloat(ticker.p), // 24-hour price change amount
-          volume: parseFloat(ticker.v), // Volume
-          volume24h: parseFloat(ticker.q), // Quote volume
+          // ✅ FIX: Use ticker.q (quote volume in USDT) instead of ticker.v (base volume)
+          volume: parseFloat(ticker.q),      // Quote volume (USDT) - CORRECT!
+          volume24h: parseFloat(ticker.q),   // Quote volume (USDT)
           high: parseFloat(ticker.h), // 24h high
           low: parseFloat(ticker.l), // 24h low
           open: parseFloat(ticker.o), // 24h open
@@ -340,8 +341,8 @@ export class MicroBatchExecutionEngine {
     const errorRate =
       this.metrics.batchesProcessed > 0
         ? (this.metrics.totalProcessed /
-            (this.metrics.batchesProcessed * this.metrics.avgBatchSize)) *
-          10
+          (this.metrics.batchesProcessed * this.metrics.avgBatchSize)) *
+        10
         : 10;
 
     score = Math.round(
