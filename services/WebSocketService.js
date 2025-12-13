@@ -59,7 +59,9 @@ class WebSocketService {
           price: parseFloat(ticker.c),
           priceChange: parseFloat(ticker.P),
           priceChangePercent: parseFloat(ticker.P),
-          volume: parseFloat(ticker.v),
+          // ✅ FIX: Use ticker.q (quote volume in USDT) instead of ticker.v (base volume)
+          volume: parseFloat(ticker.q),      // Quote volume (USDT) - CORRECT!
+          volume24h: parseFloat(ticker.q),   // Quote volume (USDT)
           high: parseFloat(ticker.h),
           low: parseFloat(ticker.l),
           open: parseFloat(ticker.o),

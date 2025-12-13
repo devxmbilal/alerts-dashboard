@@ -105,7 +105,7 @@ export class SafeAlertProcessor {
     const processed = this.processedAlerts.get(alertId);
     if (!processed) return false;
     
-    // CRITICAL FIX: Reduce to 10 seconds to allow faster re-processing
+    // Consider alert recently processed if within last 60 seconds
     const timeDiff = currentTimestamp - processed.timestamp;
     return timeDiff < 10000; // 10 seconds
   }

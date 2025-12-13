@@ -95,8 +95,8 @@ redis.on("message", async (channel, message) => {
                 ? "Increase"
                 : history.alertConditions?.changePercent?.direction ===
                   "decrease"
-                ? "Decrease"
-                : "Increase",
+                  ? "Decrease"
+                  : "Increase",
             timeframe:
               history.alertConditions?.changePercent?.timeframe || "5MIN",
             triggeredPrice: history.triggerData?.price,
@@ -189,8 +189,8 @@ redis.on("message", async (channel, message) => {
         history.alertConditions?.changePercent?.direction === "increase"
           ? "Increase"
           : history.alertConditions?.changePercent?.direction === "decrease"
-          ? "Decrease"
-          : "Increase",
+            ? "Decrease"
+            : "Increase",
       timeframe: history.alertConditions?.changePercent?.timeframe || "5MIN",
       triggeredPrice: history.triggerData?.price,
       baselinePrice: history.baselineData?.baselinePrice,
@@ -239,43 +239,53 @@ redis.on("message", async (channel, message) => {
       // ⚡ OPTIMIZED: Start screenshot capture immediately (parallel)
       const userPreferredTimeframe = user.preferredTimeframe || "5m";
       const timeframe = userPreferredTimeframe || alertData.timeframe?.toLowerCase() || "5m";
-      
-      console.log(`📸 Getting screenshot for ${alertData.symbol} (cache-enabled)...`);
-      
+
+      console.log(`📸 Getting screenshot for ${alertData.symbol} (timeframe: ${timeframe})...`);
+      const screenshotStartTime = Date.now();
+
       // Use cache service for faster delivery (cache hit = instant)
       const screenshotPromise = ScreenshotCacheService.getScreenshot(
         alertData.symbol,
         timeframe
-      ).catch(err => {
-        console.error(`❌ Screenshot failed for ${alertData.symbol}:`, err.message);
+      ).then(result => {
+        console.log(`✅ Screenshot received for ${alertData.symbol} in ${Date.now() - screenshotStartTime}ms`);
+        return result;
+      }).catch(err => {
+        console.error(`❌ Screenshot failed for ${alertData.symbol} after ${Date.now() - screenshotStartTime}ms:`, err.message);
         return null;
       });
 
-      // Wait max 5 seconds for screenshot (increased for slow coins)
-      const timeoutPromise = new Promise(resolve => 
-        setTimeout(() => resolve(null), 5000)
-      );
+      // Wait max 15 seconds for screenshot (increased for slow coins/QuickChart)
+      const timeoutPromise = new Promise(resolve => {
+        setTimeout(() => {
+          console.log(`⏰ Screenshot timeout (15s) for ${alertData.symbol}`);
+          resolve(null);
+        }, 15000);
+      });
 
-      // Race: screenshot vs 5s timeout
+      // Race: screenshot vs 15s timeout
       const chartScreenshot = await Promise.race([screenshotPromise, timeoutPromise]);
+
+      const screenshotDuration = Date.now() - screenshotStartTime;
+      console.log(`📊 Screenshot result for ${alertData.symbol}: ${chartScreenshot ? `✅ Got ${(chartScreenshot.length / 1024).toFixed(1)}KB in ${screenshotDuration}ms` : `❌ NULL after ${screenshotDuration}ms`}`);
 
       // Send alert (with or without screenshot)
       try {
         if (chartScreenshot && Buffer.isBuffer(chartScreenshot) && chartScreenshot.length > 0) {
-          console.log(`✅ Screenshot ready for ${alertData.symbol}, sending photo alert`);
+          console.log(`✅ Screenshot ready for ${alertData.symbol} (${(chartScreenshot.length / 1024).toFixed(1)}KB), sending photo alert`);
           await TelegramService.sendPhotoAlert(
             user.telegramChatId,
             chartScreenshot,
             alertData
           );
-          console.log(`✅ Telegram photo alert sent for ${alertData.symbol}`);
+          console.log(`✅ Telegram PHOTO alert sent for ${alertData.symbol}`);
         } else {
           console.log(`⚠️ Screenshot not ready for ${alertData.symbol}, sending text-only`);
           await TelegramService.sendAlertMessage(
             user.telegramChatId,
             alertData
           );
-          console.log(`✅ Telegram text alert sent for ${alertData.symbol}`);
+          console.log(`✅ Telegram TEXT alert sent for ${alertData.symbol}`);
         }
 
         // Mark as sent in database (atomic update)
