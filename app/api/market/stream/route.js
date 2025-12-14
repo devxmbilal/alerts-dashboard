@@ -208,31 +208,50 @@ async function sendInitialData(controller, symbols) {
     let validData = [];
 
     if (symbols.length === 0) {
-      // If no specific symbols requested, get all available data
-      console.log("📊 Fetching all market data for initial load...");
+      // If no specific symbols requested, get all available data using PIPELINE
+      console.log("📊 Fetching all market data using pipeline...");
       const allKeys = await redis.keys("crypto:*");
       const cryptoKeys = allKeys.filter(
         (key) => key !== "crypto:usdt_pairs" && !key.includes("undefined")
       );
 
-      const promises = cryptoKeys.map(async (key) => {
-        const cached = await redis.get(key);
-        return cached ? JSON.parse(cached) : null;
+      // Use Redis Pipeline for instant fetch
+      const pipeline = redis.pipeline();
+      cryptoKeys.forEach((key) => {
+        pipeline.get(key);
       });
 
-      const cachedData = await Promise.all(promises);
-      validData = cachedData.filter(Boolean);
-      console.log(`📊 Found ${validData.length} market data entries`);
+      const results = await pipeline.exec();
+      validData = results
+        .map(([err, data]) => {
+          if (err || !data) return null;
+          try {
+            return JSON.parse(data);
+          } catch (e) {
+            return null;
+          }
+        })
+        .filter(Boolean);
+
+      console.log(`📊 Found ${validData.length} market data entries instantly`);
     } else {
-      // Get specific symbols data
-      const promises = symbols.map(async (symbol) => {
-        const cacheKey = `crypto:${symbol.toLowerCase()}`;
-        const cached = await redis.get(cacheKey);
-        return cached ? JSON.parse(cached) : null;
+      // Get specific symbols data using PIPELINE
+      const pipeline = redis.pipeline();
+      symbols.forEach((symbol) => {
+        pipeline.get(`crypto:${symbol.toLowerCase()}`);
       });
 
-      const cachedData = await Promise.all(promises);
-      validData = cachedData.filter(Boolean);
+      const results = await pipeline.exec();
+      validData = results
+        .map(([err, data]) => {
+          if (err || !data) return null;
+          try {
+            return JSON.parse(data);
+          } catch (e) {
+            return null;
+          }
+        })
+        .filter(Boolean);
     }
 
     if (validData.length > 0) {

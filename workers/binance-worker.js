@@ -457,19 +457,20 @@ class BinanceWorker {
       try {
         console.log("🔄 Starting 24-hour scheduled refresh...");
 
+        const oldPairsCount = USDT_PAIRS.length;
+
         // 1. Refresh Pairs List
         await this.fetchAllUSDTSPairs();
 
         // 2. Refresh Initial Data (Full 24h ticker refresh)
-        // This ensures any drift is corrected and data is fresh
         await this.fetchInitialData();
 
-        // 3. Re-subscribe WebSockets if pairs changed significantly?
-        // For now, the existing WebSockets handle updates, but if we found new pairs in step 1,
-        // we might want to ensure they are covered. 
-        // fetchAllUSDTSPairs updates USDT_PAIRS. 
-        // If we want to be 100% sure we have streams for all, we could reconnect.
-        // But simply refreshing the Redis data is the main requirement.
+        // 3. Reconnect WebSockets if pairs changed
+        if (USDT_PAIRS.length !== oldPairsCount) {
+          console.log(`🔄 Pairs count changed (${oldPairsCount} → ${USDT_PAIRS.length}), reconnecting WebSockets...`);
+          this.wsConnections.forEach(ws => ws && ws.close());
+          this.connectWebSocket();
+        }
 
         console.log("✅ 24-hour refresh complete");
 
