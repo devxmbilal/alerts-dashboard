@@ -160,7 +160,7 @@ class BinanceWorker {
     await this.connectToRedis();
     await this.connectToBinance();
     this.startHeartbeat();
-    this.startPairCleanup(); // Start periodic pair cleanup
+    this.startScheduledRefresh(); // Start 24-hour scheduled refresh
   }
 
   async connectToRedis() {
@@ -198,6 +198,8 @@ class BinanceWorker {
       if (cachedPairs) {
         USDT_PAIRS = JSON.parse(cachedPairs);
         console.log(`💾 Using cached pairs: ${USDT_PAIRS.length} pairs`);
+        // Refresh TTL
+        await redis.expire("crypto:usdt_pairs", 86400);
         return;
       }
 
@@ -231,8 +233,8 @@ class BinanceWorker {
       USDT_PAIRS = usdtPairs;
       console.log(`✅ Found ${USDT_PAIRS.length} USDT spot pairs`);
 
-      // Cache the pairs list in Redis for longer
-      await redis.setex("crypto:usdt_pairs", 7200, JSON.stringify(USDT_PAIRS)); // 2 hours cache
+      // Cache the pairs list in Redis for longer - 24 hours
+      await redis.setex("crypto:usdt_pairs", 86400, JSON.stringify(USDT_PAIRS));
     } catch (error) {
       console.error("❌ Failed to fetch USDT pairs:", error);
       console.log("⚠️ Using fallback pairs list...");
@@ -265,15 +267,46 @@ class BinanceWorker {
       const response = await fetchWithFallback("/ticker/24hr");
       const tickers = await response.json();
 
-      // Process and cache data
+      console.log(`⚡ Processing initial data for pairs using pipeline...`);
+
+      const pipeline = redis.pipeline();
+      let count = 0;
+
+      // Process and cache data using pipeline for speed
       for (const ticker of tickers) {
         if (USDT_PAIRS.includes(ticker.symbol.toLowerCase())) {
           const processedData = this.processTickerData(ticker);
-          await this.cacheAndPublish(processedData);
+          const cacheKey = `crypto:${processedData.symbol}`;
+
+          // Cache with 24h TTL (86400s)
+          pipeline.setex(cacheKey, 86400, JSON.stringify(processedData));
+
+          // Also publish the update so subscribers get instant data
+          pipeline.publish(
+            "market:updates",
+            JSON.stringify({
+              type: "market_update",
+              symbol: processedData.symbol,
+              data: processedData,
+            })
+          );
+
+          pipeline.publish(
+            `market:${processedData.symbol}`,
+            JSON.stringify({
+              type: "symbol_update",
+              data: processedData,
+            })
+          );
+
+          count++;
         }
       }
 
-      console.log(`✅ Initial data loaded for ${tickers.length} pairs`);
+      // Execute all commands at once
+      await pipeline.exec();
+
+      console.log(`✅ Initial data loaded and cached for ${count} pairs instantly`);
     } catch (error) {
       console.error("❌ Failed to fetch initial data:", error);
     }
@@ -300,8 +333,7 @@ class BinanceWorker {
         const wsUrl = `${BINANCE_WS_BASE}/${streams}`;
 
         console.log(
-          `🔌 Connection ${i + 1}: Streaming pairs ${start + 1}-${end} (${
-            pairsToStream.length
+          `🔌 Connection ${i + 1}: Streaming pairs ${start + 1}-${end} (${pairsToStream.length
           } pairs)`
         );
 
@@ -370,9 +402,9 @@ class BinanceWorker {
 
   async cacheAndPublish(data) {
     try {
-      // Cache in Redis
+      // Cache in Redis (24 hours TTL)
       const cacheKey = `crypto:${data.symbol}`;
-      await redis.setex(cacheKey, 300, JSON.stringify(data)); // 5 min cache
+      await redis.setex(cacheKey, 86400, JSON.stringify(data));
 
       // Throttle publishing to prevent overwhelming Redis
       const now = Date.now();
@@ -419,85 +451,32 @@ class BinanceWorker {
     }, 30000); // Every 30 seconds
   }
 
-  startPairCleanup() {
-    // Clean up delisted pairs every 10 minutes (reduced frequency)
+  startScheduledRefresh() {
+    // Refresh everything every 24 hours
     setInterval(async () => {
       try {
-        console.log("🧹 Starting pair cleanup...");
+        console.log("🔄 Starting 24-hour scheduled refresh...");
 
-        // Get current valid pairs from Binance with fallback
-        const response = await fetchWithFallback("/exchangeInfo");
-        const exchangeInfo = await response.json();
+        // 1. Refresh Pairs List
+        await this.fetchAllUSDTSPairs();
 
-        const validSymbols = exchangeInfo.symbols
-          .filter(
-            (symbol) =>
-              symbol.status === "TRADING" &&
-              symbol.symbol.endsWith("USDT") &&
-              symbol.isSpotTradingAllowed === true
-          )
-          .map((symbol) => symbol.symbol.toLowerCase());
+        // 2. Refresh Initial Data (Full 24h ticker refresh)
+        // This ensures any drift is corrected and data is fresh
+        await this.fetchInitialData();
 
-        // Get all cached pairs from Redis
-        const allKeys = await redis.keys("crypto:*");
-        const cryptoKeys = allKeys.filter(
-          (key) => key !== "crypto:usdt_pairs" && !key.includes("undefined")
-        );
+        // 3. Re-subscribe WebSockets if pairs changed significantly?
+        // For now, the existing WebSockets handle updates, but if we found new pairs in step 1,
+        // we might want to ensure they are covered. 
+        // fetchAllUSDTSPairs updates USDT_PAIRS. 
+        // If we want to be 100% sure we have streams for all, we could reconnect.
+        // But simply refreshing the Redis data is the main requirement.
 
-        let removedCount = 0;
-        for (const key of cryptoKeys) {
-          const symbol = key.replace("crypto:", "").toUpperCase();
-          if (!validSymbols.includes(symbol.toLowerCase())) {
-            await redis.del(key);
-            removedCount++;
-            console.log(`🗑️ Removed delisted pair: ${symbol}`);
-          }
-        }
+        console.log("✅ 24-hour refresh complete");
 
-        if (removedCount > 0) {
-          console.log(
-            `🧹 Cleanup complete: Removed ${removedCount} delisted pairs`
-          );
-        }
-
-        // Update USDT_PAIRS with current valid pairs
-        const newUSDT_PAIRS = exchangeInfo.symbols
-          .filter((symbol) => {
-            return (
-              symbol.status === "TRADING" &&
-              symbol.symbol.endsWith("USDT") &&
-              symbol.isSpotTradingAllowed === true &&
-              !symbol.symbol.includes("_") &&
-              !symbol.symbol.includes("BULL") &&
-              !symbol.symbol.includes("BEAR") &&
-              !symbol.symbol.includes("UP") &&
-              !symbol.symbol.includes("DOWN") &&
-              !symbol.symbol.includes("3L") &&
-              !symbol.symbol.includes("3S") &&
-              !symbol.symbol.includes("5L") &&
-              !symbol.symbol.includes("5S") &&
-              symbol.baseAsset !== "BUSD" &&
-              symbol.quoteAsset === "USDT"
-            );
-          })
-          .map((symbol) => symbol.symbol.toLowerCase())
-          .sort();
-
-        if (newUSDT_PAIRS.length !== USDT_PAIRS.length) {
-          USDT_PAIRS = newUSDT_PAIRS;
-          await redis.setex(
-            "crypto:usdt_pairs",
-            3600,
-            JSON.stringify(USDT_PAIRS)
-          );
-          console.log(`📊 Updated USDT pairs: ${USDT_PAIRS.length} pairs`);
-        }
       } catch (error) {
-        console.error("❌ Error during pair cleanup:", error);
-        console.log("⚠️ Pair cleanup failed, will retry in next cycle");
-        // Don't throw error to prevent interval from stopping
+        console.error("❌ Error during scheduled refresh:", error);
       }
-    }, 600000); // Every 10 minutes (reduced frequency)
+    }, 86400000); // Every 24 hours
   }
 
   reconnect() {
