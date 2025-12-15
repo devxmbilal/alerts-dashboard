@@ -57,6 +57,9 @@ const FETCH_CONFIG = {
 let lastRequestTime = 0;
 const MIN_REQUEST_INTERVAL = 2000; // 2 seconds between requests
 
+// IP ban tracking (global for robustFetch)
+let ipBannedUntil = 0;
+
 // Track active connections
 const activeConnections = new Map();
 const subscribedPairs = new Set();
@@ -66,6 +69,13 @@ let USDT_PAIRS = [];
 
 // Robust fetch function with retry logic and rate limiting
 async function robustFetch(url, options = {}) {
+  // Check if IP is still banned (10-minute cooldown)
+  if (Date.now() < ipBannedUntil) {
+    const waitMs = ipBannedUntil - Date.now();
+    console.log(`🚫 IP still banned. Wait ${Math.ceil(waitMs / 60000)} more minutes...`);
+    throw new Error("BINANCE_IP_BANNED");
+  }
+
   // Rate limiting - wait if needed
   const now = Date.now();
   const timeSinceLastRequest = now - lastRequestTime;
@@ -97,11 +107,13 @@ async function robustFetch(url, options = {}) {
 
       clearTimeout(timeoutId);
 
-      // Handle 418 specifically
+      // Handle 418 - HARD STOP for 10 minutes
       if (response.status === 418) {
-        console.log(`⚠️ HTTP 418: IP banned/rate limited. Waiting 60 seconds...`);
-        await new Promise((resolve) => setTimeout(resolve, 60000));
-        throw new Error(`HTTP 418: Rate limited by Binance`);
+        const cooldownMs = 600000; // 10 minutes
+        ipBannedUntil = Date.now() + cooldownMs;
+        console.error(`🚫 HTTP 418: IP BANNED! Stopping REST calls for 10 minutes`);
+        console.error(`🚫 Resume at: ${new Date(ipBannedUntil).toLocaleTimeString()}`);
+        throw new Error("BINANCE_IP_BANNED");
       }
 
       if (!response.ok) {
@@ -153,6 +165,7 @@ class BinanceWorker {
     this.heartbeatInterval = null;
     this.lastPublishTime = 0;
     this.publishThrottle = 500; // Throttle to max 2 publishes per second
+    this.initialDataLoaded = false; // FIX: Prevent duplicate REST calls
   }
 
   async start() {
@@ -178,8 +191,12 @@ class BinanceWorker {
       // First, fetch all available USDT spot pairs
       await this.fetchAllUSDTSPairs();
 
-      // Get 24hr ticker data for all pairs
-      await this.fetchInitialData();
+      // FIX: Only fetch initial data on COLD START (not on reconnect)
+      if (!this.initialDataLoaded) {
+        await this.fetchInitialData();
+      } else {
+        console.log("⚠️ Skipping REST call on reconnect - WebSocket will handle updates");
+      }
 
       // Connect to WebSocket for real-time updates
       this.connectWebSocket();
@@ -260,8 +277,15 @@ class BinanceWorker {
   }
 
   async fetchInitialData() {
+    // FIX: Guard against duplicate REST calls
+    if (this.initialDataLoaded) {
+      console.log("⚠️ Initial data already loaded, skipping REST call...");
+      return;
+    }
+
     try {
-      console.log("📊 Fetching initial market data...");
+      console.log("📊 Fetching initial market data (ONE TIME ONLY)...");
+      this.initialDataLoaded = true; // Mark as loaded immediately
 
       // Fetch 24hr ticker data for all pairs
       const response = await fetchWithFallback("/ticker/24hr");
@@ -315,7 +339,7 @@ class BinanceWorker {
   connectWebSocket() {
     try {
       // Create multiple WebSocket connections to cover all pairs
-      const maxStreams = 200;
+      const maxStreams = 100; // FIX: Binance recommended safe limit (was 200)
       const totalPairs = USDT_PAIRS.length;
       const numConnections = Math.ceil(totalPairs / maxStreams);
 
@@ -452,27 +476,25 @@ class BinanceWorker {
   }
 
   startScheduledRefresh() {
-    // Refresh everything every 24 hours
+    // Refresh pairs list every 24 hours (NOT ticker data - WebSocket handles that)
     setInterval(async () => {
       try {
-        console.log("🔄 Starting 24-hour scheduled refresh...");
+        console.log("🔄 Starting 24-hour scheduled refresh (pairs list only)...");
 
         const oldPairsCount = USDT_PAIRS.length;
 
-        // 1. Refresh Pairs List
+        // FIX: Only refresh pairs list, NOT /ticker/24hr
+        // WebSocket already handles real-time price updates
         await this.fetchAllUSDTSPairs();
 
-        // 2. Refresh Initial Data (Full 24h ticker refresh)
-        await this.fetchInitialData();
-
-        // 3. Reconnect WebSockets if pairs changed
+        // Reconnect WebSockets if pairs changed
         if (USDT_PAIRS.length !== oldPairsCount) {
           console.log(`🔄 Pairs count changed (${oldPairsCount} → ${USDT_PAIRS.length}), reconnecting WebSockets...`);
           this.wsConnections.forEach(ws => ws && ws.close());
           this.connectWebSocket();
         }
 
-        console.log("✅ 24-hour refresh complete");
+        console.log("✅ 24-hour refresh complete (WebSocket handles price updates)");
 
       } catch (error) {
         console.error("❌ Error during scheduled refresh:", error);

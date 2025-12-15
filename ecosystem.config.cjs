@@ -1,3 +1,13 @@
+/**
+ * PM2 Ecosystem Configuration
+ * 
+ * LOG ROTATION SETUP (Run on server):
+ * pm2 install pm2-logrotate
+ * pm2 set pm2-logrotate:max_size 10M
+ * pm2 set pm2-logrotate:retain 5
+ * pm2 set pm2-logrotate:compress true
+ * pm2 set pm2-logrotate:rotateInterval '0 0 * * *'
+ */
 module.exports = {
   apps: [
     {
@@ -14,9 +24,10 @@ module.exports = {
         NODE_ENV: "production",
         PORT: 3000,
       },
+      // Minimal logging - only errors
       error_file: "./logs/alerts-dashboard-error.log",
-      out_file: "./logs/alerts-dashboard-out.log",
-      log_file: "./logs/alerts-dashboard-combined.log",
+      out_file: "/dev/null",  // Disable stdout logs to save space
+      log_file: "/dev/null",
       time: true,
       merge_logs: true,
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
@@ -36,9 +47,10 @@ module.exports = {
         REDIS_PORT: 6379,
         MONGODB_URI: "mongodb://localhost:27017/crypto-alerts",
       },
+      // Minimal logging - only errors
       error_file: "./logs/binance-worker-error.log",
-      out_file: "./logs/binance-worker-out.log",
-      log_file: "./logs/binance-worker-combined.log",
+      out_file: "/dev/null",
+      log_file: "/dev/null",
       time: true,
     },
     {
@@ -56,9 +68,10 @@ module.exports = {
         REDIS_PORT: 6379,
         MONGODB_URI: "mongodb://localhost:27017/crypto-alerts",
       },
+      // Minimal logging - only errors
       error_file: "./logs/alert-worker-error.log",
-      out_file: "./logs/alert-worker-out.log",
-      log_file: "./logs/alert-worker-combined.log",
+      out_file: "/dev/null",
+      log_file: "/dev/null",
       time: true,
     },
     {
@@ -73,9 +86,10 @@ module.exports = {
         NODE_ENV: "production",
         CLEANUP_WORKER_AUTOSTART: "true",
       },
+      // Minimal logging - only errors
       error_file: "./logs/cleanup-worker-error.log",
-      out_file: "./logs/cleanup-worker-out.log",
-      log_file: "./logs/cleanup-worker-combined.log",
+      out_file: "/dev/null",
+      log_file: "/dev/null",
       time: true,
     },
     {
@@ -93,9 +107,10 @@ module.exports = {
         REDIS_PORT: 6379,
         MONGODB_URI: "mongodb://localhost:27017/crypto-alerts",
       },
+      // Minimal logging - only errors
       error_file: "./logs/notify-worker-error.log",
-      out_file: "./logs/notify-worker-out.log",
-      log_file: "./logs/notify-worker-combined.log",
+      out_file: "/dev/null",
+      log_file: "/dev/null",
       time: true,
     },
     {
@@ -113,9 +128,10 @@ module.exports = {
         REDIS_PORT: 6379,
         MONGODB_URI: "mongodb://localhost:27017/crypto-alerts",
       },
+      // Minimal logging - only errors
       error_file: "./logs/db-queue-worker-error.log",
-      out_file: "./logs/db-queue-worker-out.log",
-      log_file: "./logs/db-queue-worker-combined.log",
+      out_file: "/dev/null",
+      log_file: "/dev/null",
       time: true,
     },
   ],
