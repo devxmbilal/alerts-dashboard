@@ -1,9 +1,11 @@
-import Redis from "ioredis";
+import {
+  createRedisClient,
+  setupGracefulShutdown,
+} from "../utils/workerHelpers.js";
 import { connectToMongoDB } from "../utils/mongodb.js";
 import TelegramService from "../services/TelegramService.js";
 import EmailService from "../services/EmailService.js";
 import ChartScreenshotService from "../utils/chartScreenshot.js";
-import ScreenshotCacheService from "../services/ScreenshotCacheService.js";
 import User from "../models/User.js";
 import AlertHistory from "../models/AlertHistory.js";
 import mongoose from "mongoose";
@@ -21,13 +23,8 @@ connectToMongoDB()
     process.exit(1);
   });
 
-const redis = new Redis({
-  host: process.env.REDIS_HOST || "localhost",
-  port: process.env.REDIS_PORT || 6379,
-  retryDelayOnFailover: 100,
-  enableReadyCheck: false,
-  maxRetriesPerRequest: null,
-});
+// Create Redis client using centralized utility
+const redis = createRedisClient();
 
 redis.subscribe("notifications:queue", (err) => {
   if (err) {
@@ -133,13 +130,14 @@ redis.on("message", async (channel, message) => {
                 timeframe
               );
               const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error("Screenshot timeout")), 3000)
+                setTimeout(() => reject(new Error("Screenshot timeout")), 10000)
               );
               chartScreenshot = await Promise.race([
                 screenshotPromise,
                 timeoutPromise,
               ]);
             } catch (e) {
+              console.warn(`⚠️ Screenshot failed for ${history.symbol}: ${e.message}`);
               // Screenshot failed, continue with text-only
             }
 
@@ -150,11 +148,13 @@ redis.on("message", async (channel, message) => {
                   chartScreenshot,
                   alertData
                 );
+                console.log(`✅ Telegram PHOTO alert sent for ${alertData.symbol}`);
               } else {
                 await TelegramService.sendAlertMessage(
                   userByString.telegramChatId,
                   alertData
                 );
+                console.log(`✅ Telegram TEXT alert sent for ${alertData.symbol}`);
               }
               await AlertHistory.findOneAndUpdate(
                 { _id: historyId, "notificationSent.telegram": { $ne: true } },
@@ -219,7 +219,7 @@ redis.on("message", async (channel, message) => {
         });
     }
 
-    // Telegram (OPTIMIZED: Parallel screenshot + send)
+    // Telegram (queued inside service)
     if (user.notificationPreferences?.telegram && user.telegramChatId) {
       console.log(`📱 Sending Telegram message to ${user.telegramChatId}...`);
 
@@ -236,71 +236,117 @@ redis.on("message", async (channel, message) => {
         return;
       }
 
-      // ⚡ OPTIMIZED: Start screenshot capture immediately (parallel)
-      const userPreferredTimeframe = user.preferredTimeframe || "5m";
-      const timeframe = userPreferredTimeframe || alertData.timeframe?.toLowerCase() || "5m";
-
-      console.log(`📸 Getting screenshot for ${alertData.symbol} (timeframe: ${timeframe})...`);
-      const screenshotStartTime = Date.now();
-
-      // Use cache service for faster delivery (cache hit = instant)
-      const screenshotPromise = ScreenshotCacheService.getScreenshot(
-        alertData.symbol,
-        timeframe
-      ).then(result => {
-        console.log(`✅ Screenshot received for ${alertData.symbol} in ${Date.now() - screenshotStartTime}ms`);
-        return result;
-      }).catch(err => {
-        console.error(`❌ Screenshot failed for ${alertData.symbol} after ${Date.now() - screenshotStartTime}ms:`, err.message);
-        return null;
-      });
-
-      // Wait max 15 seconds for screenshot (increased for slow coins/QuickChart)
-      const timeoutPromise = new Promise(resolve => {
-        setTimeout(() => {
-          console.log(`⏰ Screenshot timeout (15s) for ${alertData.symbol}`);
-          resolve(null);
-        }, 15000);
-      });
-
-      // Race: screenshot vs 15s timeout
-      const chartScreenshot = await Promise.race([screenshotPromise, timeoutPromise]);
-
-      const screenshotDuration = Date.now() - screenshotStartTime;
-      console.log(`📊 Screenshot result for ${alertData.symbol}: ${chartScreenshot ? `✅ Got ${(chartScreenshot.length / 1024).toFixed(1)}KB in ${screenshotDuration}ms` : `❌ NULL after ${screenshotDuration}ms`}`);
-
-      // Send alert (with or without screenshot)
+      // Capture chart screenshot using user's preferred timeframe (with timeout)
+      let chartScreenshot = null;
       try {
-        if (chartScreenshot && Buffer.isBuffer(chartScreenshot) && chartScreenshot.length > 0) {
-          console.log(`✅ Screenshot ready for ${alertData.symbol} (${(chartScreenshot.length / 1024).toFixed(1)}KB), sending photo alert`);
-          await TelegramService.sendPhotoAlert(
+        const userPreferredTimeframe = user.preferredTimeframe || "5m";
+        const timeframe =
+          userPreferredTimeframe || alertData.timeframe?.toLowerCase() || "5m";
+
+        console.log(
+          `📸 Capturing chart screenshot for ${alertData.symbol} (timeframe: ${timeframe})...`
+        );
+
+        // Add timeout to prevent long delays (max 10 seconds for screenshot)
+        const screenshotPromise = ChartScreenshotService.captureChart(
+          alertData.symbol,
+          timeframe
+        );
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Screenshot timeout")), 10000)
+        );
+
+        chartScreenshot = await Promise.race([
+          screenshotPromise,
+          timeoutPromise,
+        ]);
+        console.log(`✅ Screenshot captured successfully for ${alertData.symbol}`);
+      } catch (screenshotError) {
+        console.error(
+          `❌ Failed to capture chart screenshot:`,
+          screenshotError.message
+        );
+        console.log(`📱 Will send text-only alert (no delay)`);
+      }
+
+      // Send Telegram message (queued - TelegramService handles rate limiting and retries)
+      try {
+        // Check if already sent BEFORE queuing (prevent duplicates)
+        const alreadySent = await AlertHistory.findOne({
+          _id: historyId,
+          "notificationSent.telegram": true,
+        }).lean();
+
+        if (alreadySent) {
+          console.log(
+            `⚠️ Telegram notification already sent for history ${historyId}, skipping`
+          );
+          return;
+        }
+
+        let telegramQueued = false;
+        if (chartScreenshot) {
+          telegramQueued = await TelegramService.sendPhotoAlert(
             user.telegramChatId,
             chartScreenshot,
             alertData
           );
-          console.log(`✅ Telegram PHOTO alert sent for ${alertData.symbol}`);
+          if (telegramQueued) {
+            console.log(
+              `✅ Telegram PHOTO alert ${alertData.symbol} queued successfully`
+            );
+          } else {
+            console.error(
+              `❌ Failed to queue Telegram photo alert for ${alertData.symbol}`
+            );
+          }
         } else {
-          console.log(`⚠️ Screenshot not ready for ${alertData.symbol}, sending text-only`);
-          await TelegramService.sendAlertMessage(
+          telegramQueued = await TelegramService.sendAlertMessage(
             user.telegramChatId,
             alertData
           );
-          console.log(`✅ Telegram TEXT alert sent for ${alertData.symbol}`);
+          if (telegramQueued) {
+            console.log(
+              `✅ Telegram TEXT alert ${alertData.symbol} queued successfully`
+            );
+          } else {
+            console.error(
+              `❌ Failed to queue Telegram text alert for ${alertData.symbol}`
+            );
+          }
         }
 
-        // Mark as sent in database (atomic update)
-        await AlertHistory.findOneAndUpdate(
-          {
-            _id: historyId,
-            "notificationSent.telegram": { $ne: true },
-          },
-          {
-            $set: { "notificationSent.telegram": true },
-          }
-        );
-        console.log(`✅ Alert history ${historyId} marked as Telegram sent`);
+        // Only mark as sent if successfully queued
+        if (telegramQueued) {
+          AlertHistory.findOneAndUpdate(
+            {
+              _id: historyId,
+              "notificationSent.telegram": { $ne: true },
+            },
+            {
+              $set: { "notificationSent.telegram": true },
+            }
+          )
+            .then(() => {
+              console.log(
+                `✅ Alert history ${historyId} marked as Telegram queued`
+              );
+            })
+            .catch((err) => {
+              console.error(
+                `❌ Error marking alert history as queued:`,
+                err.message
+              );
+            });
+        } else {
+          console.error(
+            `❌ Telegram message not queued for history ${historyId}, will not mark as sent`
+          );
+        }
       } catch (error) {
-        console.error(`❌ Error sending Telegram alert:`, error.message);
+        console.error(`❌ Error queuing Telegram message:`, error.message);
+        console.error(`❌ Error stack:`, error.stack);
+        // Don't mark as sent if queueing failed
       }
     }
   } catch (err) {
@@ -318,31 +364,13 @@ redis.on("connect", () => {
   console.log("✅ Redis connected for notify-worker");
 });
 
-// Graceful shutdown
-process.on("SIGINT", () => {
-  console.log("🛑 Shutting down notify-worker...");
-  redis.disconnect();
-  process.exit(0);
-});
+// Setup graceful shutdown using centralized utility
+class NotifyWorker {
+  stop() {
+    redis.disconnect();
+  }
+}
+const notifyWorker = new NotifyWorker();
+setupGracefulShutdown(notifyWorker, "Notify Worker");
 
-process.on("SIGTERM", () => {
-  console.log("🛑 Shutting down notify-worker...");
-  redis.disconnect();
-  process.exit(0);
-});
-
-// Start screenshot cache auto-refresh
-ScreenshotCacheService.startAutoRefresh(4000); // Refresh every 4 seconds
-console.log("✅ Screenshot cache auto-refresh started (4s interval)");
-
-// Initial cache warm-up
-ScreenshotCacheService.prewarmCache()
-  .then(() => console.log("✅ Initial cache warm-up completed"))
-  .catch(err => console.error("❌ Initial cache warm-up failed:", err.message));
-
-// Cleanup old cache entries every 30 seconds
-setInterval(() => {
-  ScreenshotCacheService.cleanup();
-}, 30000);
-
-console.log("🚀 Notify worker started with ultra-fast screenshot cache");
+console.log("🚀 Notify worker started (on-demand chart screenshots)");

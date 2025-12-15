@@ -26,6 +26,9 @@ class ChartScreenshotService {
     this.quickChartBaseUrl = "https://quickchart.io/chart";
     this.useQuickChart = true; // Use QuickChart by default (fast)
     this.quickChartTimeout = 15000; // 15 seconds timeout for QuickChart
+    // Binance IP ban tracking (FIX for 418 errors)
+    this.binanceIpBannedUntil = 0; // Track when IP ban expires
+    this.binanceBanCooldown = 600000; // 10 minutes cooldown on 418
   }
 
   /**
@@ -236,14 +239,13 @@ class ChartScreenshotService {
         this.isDisabled = true;
         console.error(
           `❌ Browser initialization disabled after ${this.consecutiveFailures} consecutive failures. ` +
-            `Screenshots will be disabled until service restart.`
+          `Screenshots will be disabled until service restart.`
         );
       }
 
       this.initializationInProgress = false;
       throw new Error(
-        `Failed to initialize browser after ${maxRetries} attempts: ${
-          lastError?.message || "Unknown error"
+        `Failed to initialize browser after ${maxRetries} attempts: ${lastError?.message || "Unknown error"
         }`
       );
     } catch (error) {
@@ -262,13 +264,20 @@ class ChartScreenshotService {
   }
 
   /**
-   * Fetch Binance Kline data (FREE)
+   * Fetch Binance Kline data (FREE) with 418 IP ban handling
    * @param {string} symbol - Trading pair symbol
    * @param {string} interval - Timeframe (1m, 5m, 15m, 1h, 4h, 1d, 1w)
    * @param {number} limit - Number of candles (default: 50)
    * @returns {Promise<Array>} - Array of candle objects
    */
   async getBinanceCandles(symbol, interval = "5m", limit = 50) {
+    // Check if IP is banned (10-minute cooldown)
+    if (Date.now() < this.binanceIpBannedUntil) {
+      const waitMs = this.binanceIpBannedUntil - Date.now();
+      console.log(`🚫 Binance IP banned, skipping candles for ${symbol}. Wait ${Math.ceil(waitMs / 60000)} more minutes...`);
+      throw new Error("BINANCE_IP_BANNED");
+    }
+
     try {
       // Map timeframe to Binance interval
       const intervalMap = {
@@ -283,18 +292,12 @@ class ChartScreenshotService {
       const binanceInterval = intervalMap[interval.toLowerCase()] || "5m";
 
       const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`;
-      
-      // Increased timeout to 30 seconds for slow/new coins
-      const res = await axios.get(url, { 
-        timeout: 30000,
+      const res = await axios.get(url, {
+        timeout: 15000,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
       });
-
-      if (!res.data || res.data.length === 0) {
-        throw new Error(`No candle data available for ${symbol}`);
-      }
 
       return res.data.map((c) => ({
         openTime: c[0],
@@ -305,6 +308,14 @@ class ChartScreenshotService {
         volume: parseFloat(c[5]),
       }));
     } catch (error) {
+      // Check for 418 IP ban
+      if (error.response && error.response.status === 418) {
+        this.binanceIpBannedUntil = Date.now() + this.binanceBanCooldown;
+        console.error(`🚫 HTTP 418: Binance IP BANNED! Stopping candle requests for 10 minutes`);
+        console.error(`🚫 Resume at: ${new Date(this.binanceIpBannedUntil).toLocaleTimeString()}`);
+        throw new Error("BINANCE_IP_BANNED");
+      }
+
       console.error(
         `❌ Error fetching Binance candles for ${symbol}:`,
         error.message
@@ -412,9 +423,8 @@ class ChartScreenshotService {
             },
             title: {
               display: true,
-              text: `${symbol} Price Chart (${
-                priceChange >= 0 ? "+" : ""
-              }${priceChange.toFixed(2)}%)`,
+              text: `${symbol} Price Chart (${priceChange >= 0 ? "+" : ""
+                }${priceChange.toFixed(2)}%)`,
               color: "white",
               font: { size: 16, weight: "bold" },
             },
@@ -461,11 +471,10 @@ class ChartScreenshotService {
         },
       };
 
-      const url = `${
-        this.quickChartBaseUrl
-      }?width=800&height=500&format=png&backgroundColor=rgb(20,20,20)&c=${encodeURIComponent(
-        JSON.stringify(chartConfig)
-      )}`;
+      const url = `${this.quickChartBaseUrl
+        }?width=800&height=500&format=png&backgroundColor=rgb(20,20,20)&c=${encodeURIComponent(
+          JSON.stringify(chartConfig)
+        )}`;
 
       console.log(`📊 Generating QuickChart for ${symbol}...`);
 
@@ -474,14 +483,11 @@ class ChartScreenshotService {
       try {
         res = await axios.get(url, {
           responseType: "arraybuffer",
-          timeout: 30000, // Increased to 30s
+          timeout: this.quickChartTimeout,
           validateStatus: (status) => {
             // Accept 200-299 and also check if response is valid PNG
             return status >= 200 && status < 300;
           },
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-          }
         });
       } catch (getError) {
         // If GET fails, try POST method (for large configs)
@@ -508,10 +514,9 @@ class ChartScreenshotService {
             { config: chartConfig },
             {
               responseType: "arraybuffer",
-              timeout: 30000, // Increased to 30s
+              timeout: this.quickChartTimeout,
               headers: {
                 "Content-Type": "application/json",
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
               },
             }
           );
@@ -753,6 +758,12 @@ class ChartScreenshotService {
         // Generate chart using QuickChart
         return await this.captureCandlestickChart(symbol, candles);
       } catch (quickChartError) {
+        // If IP banned or other error, skip Puppeteer fallback for IP ban
+        if (quickChartError.message === "BINANCE_IP_BANNED") {
+          console.warn(`⚠️ Skipping Puppeteer fallback due to IP ban`);
+          throw quickChartError;
+        }
+
         console.warn(
           `⚠️ QuickChart failed for ${symbol}, falling back to Puppeteer:`,
           quickChartError.message
@@ -924,7 +935,8 @@ class ChartScreenshotService {
     this.consecutiveFailures = 0;
     this.isDisabled = false;
     this.lastFailureTime = 0;
-    console.log("✅ Browser failure tracking reset. Screenshots re-enabled.");
+    this.binanceIpBannedUntil = 0; // Also reset IP ban
+    console.log("✅ Browser and Binance failure tracking reset. Screenshots re-enabled.");
   }
 
   /**
@@ -940,6 +952,8 @@ class ChartScreenshotService {
         ? Date.now() - this.lastFailureTime
         : 0,
       initializationInProgress: this.initializationInProgress,
+      binanceIpBanned: Date.now() < this.binanceIpBannedUntil,
+      binanceIpBanRemaining: Math.max(0, this.binanceIpBannedUntil - Date.now()),
     };
   }
 }
