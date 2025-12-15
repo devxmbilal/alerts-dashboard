@@ -188,17 +188,27 @@ class BinanceWorker {
 
   async connectToBinance() {
     try {
-      // First, fetch all available USDT spot pairs
-      await this.fetchAllUSDTSPairs();
+      // Try to fetch USDT pairs - but don't block if it fails
+      try {
+        await this.fetchAllUSDTSPairs();
+      } catch (error) {
+        console.warn("⚠️ REST call failed (possibly IP banned), using cached/fallback pairs");
+      }
 
       // FIX: Only fetch initial data on COLD START (not on reconnect)
       if (!this.initialDataLoaded) {
-        await this.fetchInitialData();
+        try {
+          await this.fetchInitialData();
+        } catch (error) {
+          console.warn("⚠️ Initial data fetch failed, WebSocket will handle updates");
+          this.initialDataLoaded = true; // Don't retry if banned
+        }
       } else {
         console.log("⚠️ Skipping REST call on reconnect - WebSocket will handle updates");
       }
 
-      // Connect to WebSocket for real-time updates
+      // ALWAYS connect to WebSocket (even if REST failed)
+      // WebSocket has no rate limit issues
       this.connectWebSocket();
     } catch (error) {
       console.error("❌ Binance connection failed:", error);
