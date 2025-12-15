@@ -219,71 +219,13 @@ export async function POST(request) {
       }
     }
 
-    // ✅ CRITICAL FIX: Filter symbols by minimum volume BEFORE creating alerts
-    // This prevents creating alerts for low-volume coins that will never trigger
-    const minVolumeRequired = parseFloat(conditions.minDaily);
-    let filteredSymbols = favoriteSymbols;
-    let volumeFilterStats = {
-      total: favoriteSymbols.length,
-      passed: 0,
-      failed: 0,
-      noData: 0
-    };
+    // ✅ NO VOLUME FILTER: Create alerts for ALL favorites
+    // minDaily is checked at RUNTIME by worker, not during creation
+    console.log(`\n� Creating alerts for ALL ${favoriteSymbols.length} favorite symbols...`);
+    console.log(`   minDaily (${conditions.minDaily}) will be checked at runtime by worker\n`);
 
-    if (!isNaN(minVolumeRequired) && minVolumeRequired > 0) {
-      console.log(`\n🔍 VOLUME FILTER: Minimum required = ${minVolumeRequired.toLocaleString()} USDT`);
-      console.log(`📊 Checking ${favoriteSymbols.length} favorite symbols...\n`);
-
-      filteredSymbols = favoriteSymbols.filter((symbol) => {
-        const currentVolume = currentPrices[symbol]?.volume || 0;
-
-        if (currentVolume === 0) {
-          console.log(`⚠️ ${symbol}: No volume data available - SKIPPED`);
-          volumeFilterStats.noData++;
-          return false;
-        }
-
-        if (currentVolume >= minVolumeRequired) {
-          console.log(
-            `✅ ${symbol}: Volume ${currentVolume.toLocaleString()} USDT >= ${minVolumeRequired.toLocaleString()} USDT - PASSED`
-          );
-          volumeFilterStats.passed++;
-          return true;
-        } else {
-          console.log(
-            `❌ ${symbol}: Volume ${currentVolume.toLocaleString()} USDT < ${minVolumeRequired.toLocaleString()} USDT - FILTERED OUT`
-          );
-          volumeFilterStats.failed++;
-          return false;
-        }
-      });
-
-      console.log(`\n📊 VOLUME FILTER RESULTS:`);
-      console.log(`   Total symbols: ${volumeFilterStats.total}`);
-      console.log(`   ✅ Passed (>= ${minVolumeRequired.toLocaleString()} USDT): ${volumeFilterStats.passed}`);
-      console.log(`   ❌ Filtered out (< ${minVolumeRequired.toLocaleString()} USDT): ${volumeFilterStats.failed}`);
-      console.log(`   ⚠️ No data: ${volumeFilterStats.noData}`);
-      console.log(`   🎯 Alerts will be created for: ${filteredSymbols.length} symbols\n`);
-    }
-
-    // If no symbols pass the volume filter, return error
-    if (filteredSymbols.length === 0) {
-      return NextResponse.json(
-        {
-          error: "No symbols meet the minimum volume requirement",
-          details: {
-            minVolumeRequired: minVolumeRequired,
-            totalSymbols: favoriteSymbols.length,
-            passedFilter: 0,
-            suggestion: "Try lowering the minimum volume requirement or add more high-volume coins to favorites"
-          }
-        },
-        { status: 400 }
-      );
-    }
-
-    // Prepare alert documents for bulk insert (ONLY for filtered symbols)
-    const alertDocuments = filteredSymbols.map((symbol) => {
+    // Prepare alert documents for bulk insert (ALL favorites)
+    const alertDocuments = favoriteSymbols.map((symbol) => {
       let alertConditions = { ...conditions };
 
       // Don't apply initial lock - lock should only be set after first trigger
@@ -429,17 +371,10 @@ export async function POST(request) {
 
     return NextResponse.json({
       success: true,
-      message: `Alerts created for ${createdAlerts.length} symbols (${volumeFilterStats.failed} low-volume symbols filtered out)`,
+      message: `Alerts created for ${createdAlerts.length} symbols`,
       data: {
         count: createdAlerts.length,
-        symbols: filteredSymbols,
-        volumeFilter: {
-          totalSymbols: volumeFilterStats.total,
-          passed: volumeFilterStats.passed,
-          failed: volumeFilterStats.failed,
-          noData: volumeFilterStats.noData,
-          minVolumeRequired: minVolumeRequired
-        },
+        symbols: favoriteSymbols,
         alerts: createdAlerts.map((alert) => ({
           id: alert._id,
           symbol: alert.symbol,

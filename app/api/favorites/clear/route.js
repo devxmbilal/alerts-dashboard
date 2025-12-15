@@ -5,7 +5,6 @@ import { FavoritesCache, AlertsCache } from "../../../../utils/redis.js";
 import { initializeRedis } from "../../../../utils/init-redis.js";
 import User from "../../../../models/User.js";
 import Alert from "../../../../models/Alert.js";
-import RealTimeAlertProcessor from "../../../../services/RealTimeAlertProcessor.js";
 
 // POST /api/favorites/clear - Remove ALL favorites and their alerts
 export async function POST(request) {
@@ -100,14 +99,16 @@ export async function POST(request) {
       console.warn("⚠️ Error clearing alerts cache:", cacheError.message);
     }
 
-    // Notify RealTimeAlertProcessor to stop processing all alerts for this user
+    // 🔥 CRITICAL: Publish Redis event so WORKER receives the message
+    // This notifies alert-worker to stop processing all alerts for this user
     try {
-      await RealTimeAlertProcessor.removeAlertsForUser(decoded.userId);
-      // Force refresh alerts to ensure worker has latest data
-      await RealTimeAlertProcessor.forceRefreshAlerts();
+      const AlertRedisService = (await import("../../../../services/AlertRedisService.js")).default;
+      console.log(`📢 Publishing alerts_cleared event for user ${decoded.userId}`);
+      await AlertRedisService.publishAlertsCleared(decoded.userId);
+      console.log(`✅ alerts_cleared event published`);
     } catch (processorError) {
       console.warn(
-        "⚠️ Error notifying RealTimeAlertProcessor:",
+        "⚠️ Error publishing alerts_cleared event:",
         processorError.message
       );
     }

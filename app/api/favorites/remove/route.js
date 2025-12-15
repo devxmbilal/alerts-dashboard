@@ -5,7 +5,7 @@ import { FavoritesCache, AlertsCache } from "../../../../utils/redis.js";
 import { initializeRedis } from "../../../../utils/init-redis.js";
 import User from "../../../../models/User.js";
 import Alert from "../../../../models/Alert.js";
-import RealTimeAlertProcessor from "../../../../services/RealTimeAlertProcessor.js";
+import AlertRedisService from "../../../../services/AlertRedisService.js";
 
 // POST /api/favorites/remove - Remove symbol from favorites
 export async function POST(request) {
@@ -53,7 +53,13 @@ export async function POST(request) {
     // Update Redis cache
     await FavoritesCache.setUserFavorites(decoded.userId, user.favorites);
 
-    // Remove alerts for this symbol
+    // Get alerts before deleting (for Redis event)
+    const alertsToDelete = await Alert.find({
+      userId: decoded.userId,
+      symbol: symbol,
+    }).select("_id");
+
+    // Remove alerts for this symbol from MongoDB
     const deleteResult = await Alert.deleteMany({
       userId: decoded.userId,
       symbol: symbol,
@@ -62,11 +68,21 @@ export async function POST(request) {
     // Remove from Redis alerts cache
     await AlertsCache.removeAlert(decoded.userId, symbol);
 
-    // Notify RealTimeAlertProcessor to stop processing alerts for this symbol (only for this user)
-    await RealTimeAlertProcessor.removeAlertsForSymbol(symbol, decoded.userId);
+    // 🔥 CRITICAL: Publish Redis event so WORKER receives the message
+    // This notifies alert-worker to stop processing these alerts
+    console.log(`📢 Publishing alerts_removed_for_symbol event for ${symbol}`);
+    await AlertRedisService.publishAlertsRemovedForSymbol(decoded.userId, symbol);
 
-    // Force refresh alerts to ensure worker has latest data
-    await RealTimeAlertProcessor.forceRefreshAlerts();
+    // Also publish individual alert removed events for each deleted alert
+    for (const alert of alertsToDelete) {
+      await AlertRedisService.publishAlertRemoved(
+        alert._id.toString(),
+        decoded.userId,
+        symbol
+      );
+    }
+
+    console.log(`✅ ${symbol} removed from favorites, ${deleteResult.deletedCount} alerts deleted, events published`);
 
     return NextResponse.json({
       success: true,
