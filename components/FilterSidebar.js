@@ -387,6 +387,25 @@ const FilterSidebar = forwardRef(
           onCreateAlert?.(data.data.alerts);
           setSuccessMessage(data.message);
 
+          // Save condition to Condition model (replaces old condition)
+          try {
+            const user = JSON.parse(localStorage.getItem("user") || "{}");
+            await fetch("/api/conditions", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                userId: user._id,
+                conditions: alertConditions,
+              }),
+            });
+            console.log("✅ Condition saved for display");
+          } catch (conditionError) {
+            console.error("⚠️ Failed to save condition:", conditionError);
+          }
+
           // Clear success message after 5 seconds
           setTimeout(
             () => setSuccessMessage("alerts are created successfully"),
