@@ -109,6 +109,11 @@ const alertSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    // Separate timestamp for volume baseline (independent of price baseline)
+    volumeBaselineTimestamp: {
+      type: Date,
+      default: Date.now,
+    },
     // New fields for tracking last trigger (without marking as permanently triggered)
     lastTriggeredAt: {
       type: Date,

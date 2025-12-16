@@ -944,6 +944,57 @@ class RealTimeAlertProcessor {
         }
       }
 
+      // ✅ INDEPENDENT VOLUME BASELINE UPDATE
+      // Volume baseline updates on smallest volume timeframe interval
+      // This runs SEPARATELY from price baseline update
+      if (alert.conditions?.volume?.timeframes?.length > 0) {
+        const volumeTimeframes = alert.conditions.volume.timeframes;
+        const smallestVolumeTimeframe = volumeTimeframes.reduce((min, tf) => {
+          const minMs = this.getTimeframeMs(min);
+          const tfMs = this.getTimeframeMs(tf);
+          return tfMs < minMs ? tf : min;
+        });
+        const smallestVolumeTimeframeMs = this.getTimeframeMs(smallestVolumeTimeframe);
+
+        // Get volume baseline timestamp (separate from price baseline)
+        const volumeBaselineTimestamp = alert.volumeBaselineTimestamp
+          ? new Date(alert.volumeBaselineTimestamp).getTime()
+          : (alert.baselineTimestamp ? new Date(alert.baselineTimestamp).getTime() : Date.now());
+
+        const timeSinceVolumeBaseline = Date.now() - volumeBaselineTimestamp;
+
+        // Update volume baseline if smallest timeframe interval has passed
+        if (timeSinceVolumeBaseline >= smallestVolumeTimeframeMs) {
+          const newVolumeBaseline = liveData.quoteVolume || liveData.volume24h || liveData.volume;
+
+          console.log(`📊 Volume baseline UPDATE (${smallestVolumeTimeframe}): ${alert.baselineVolume?.toLocaleString()} → ${newVolumeBaseline?.toLocaleString()} USDT`);
+
+          // Update in-memory
+          alert.baselineVolume = newVolumeBaseline;
+          alert.volumeBaselineTimestamp = new Date();
+
+          // Update in-memory cache
+          const alertsForSymbol = this.activeAlerts.get(alert.symbol);
+          if (alertsForSymbol) {
+            const alertIndex = alertsForSymbol.findIndex(
+              (a) => a._id.toString() === alert._id.toString()
+            );
+            if (alertIndex !== -1) {
+              alertsForSymbol[alertIndex].baselineVolume = newVolumeBaseline;
+              alertsForSymbol[alertIndex].volumeBaselineTimestamp = new Date();
+            }
+          }
+
+          // Update in database (non-blocking)
+          Alert.findByIdAndUpdate(alert._id, {
+            baselineVolume: newVolumeBaseline,
+            volumeBaselineTimestamp: new Date(),
+          }).catch((error) => {
+            console.error(`❌ Error updating volume baseline for ${alert.symbol}:`, error.message);
+          });
+        }
+      }
+
       // CRITICAL: Check if alert is locked FIRST (prevent duplicate triggers)
       if (isAlertLocked(alert)) {
         const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
@@ -3135,101 +3186,80 @@ class RealTimeAlertProcessor {
     const requiredPercentage = parseFloat(percentage) || 0;
 
     console.log(
-      `📉 Volume Evaluation: ${condition}${percentage ? ` by ${percentage}%` : ""
-      } on timeframes: ${timeframes?.join(", ") || "N/A"}`
+      `📉 Volume Evaluation: ${condition} by ${requiredPercentage}% | Timeframes: ${timeframes?.join(", ") || "N/A"}`
     );
 
-    // If timeframes are specified, check using Candle Data (AND logic)
-    if (timeframes && timeframes.length > 0 && alert?.symbol) {
-      let allTimeframesPassed = true;
-
-      for (const timeframe of timeframes) {
-        // Fetch Candle Data
-        const candleData = await this.getCandleDataOrQueue(alert.symbol, timeframe);
-
-        if (!candleData) {
-          console.log(`   ⏳ Timeframe ${timeframe}: Candle data pending...`);
-          return false; // Fail safe if data pending
-        }
-
-        const isBullish = candleData.close >= candleData.open;
-        const isBearish = candleData.close < candleData.open;
-
-        // Use QUOTE VOLUME (USDT) if available (verified fix), else fallback to Base Volume
-        const candleVolume = candleData.quoteVolume || candleData.volume || 0;
-
-        let timeframePassed = false;
-
-        switch (condition) {
-          case "INCREASING":
-            // For single candle, "Increasing" usually implies Bullish (Buying Volume)
-            timeframePassed = isBullish;
-            console.log(`   [${timeframe}] INCREASING? Bullish=${isBullish} (Vol: ${candleVolume.toLocaleString()})`);
-            break;
-
-          case "DECREASING":
-            // For single candle, "Decreasing" usually implies Bearish (Selling Volume)
-            timeframePassed = isBearish;
-            console.log(`   [${timeframe}] DECREASING? Bearish=${isBearish} (Vol: ${candleVolume.toLocaleString()})`);
-            break;
-
-          case "ABOVE":
-            timeframePassed = candleVolume > requiredPercentage;
-            console.log(`   [${timeframe}] ABOVE ${requiredPercentage}? Vol=${candleVolume.toLocaleString()} -> ${timeframePassed}`);
-            break;
-
-          case "BELOW":
-            timeframePassed = candleVolume < requiredPercentage;
-            console.log(`   [${timeframe}] BELOW ${requiredPercentage}? Vol=${candleVolume.toLocaleString()} -> ${timeframePassed}`);
-            break;
-
-          default:
-            timeframePassed = true;
-        }
-
-        if (!timeframePassed) {
-          allTimeframesPassed = false;
-          break; // One failed, all fail
-        }
-      }
-
-      if (!allTimeframesPassed) return false;
-
-      // If passing ABOVE/BELOW conditions, we are done.
-      if ((condition === "ABOVE" || condition === "BELOW")) {
-        return true;
-      }
+    if (!alert) {
+      console.log(`   ⚠️ No alert object, skipping volume check`);
+      return false;
     }
 
-    // Global / Baseline Logic (Fallback or Additional Check)
-    const currentVolume = parseFloat(priceData.volume || priceData.volume24h) || 0;
-    const baselineVolume = alert ? parseFloat(alert.baselineVolume) || 0 : 0;
+    // Get current 24h volume from live data
+    const currentVolume = parseFloat(priceData.quoteVolume || priceData.volume24h || priceData.volume) || 0;
 
-    if (currentVolume === 0 || baselineVolume === 0) {
-      return true; // Skip if no data
+    // Get baseline volume from alert (saved when alert created or last triggered)
+    const baselineVolume = parseFloat(alert.baselineVolume) || 0;
+
+    console.log(`   📊 Current Volume: ${currentVolume.toLocaleString()} USDT`);
+    console.log(`   📏 Baseline Volume: ${baselineVolume.toLocaleString()} USDT`);
+
+    // If no baseline, cannot check - need to initialize
+    if (baselineVolume === 0) {
+      console.log(`   ⚠️ No baseline volume set, skipping (will be set on first trigger)`);
+      return false;
     }
 
-    // If we have timeframes and loop passed, and it's INCREASING/DECREASING with %, check global change
+    if (currentVolume === 0) {
+      console.log(`   ⚠️ Current volume is 0, skipping`);
+      return false;
+    }
+
+    // ✅ Calculate volume change percentage from baseline
+    const volumeChangePercent = ((currentVolume - baselineVolume) / baselineVolume) * 100;
+    console.log(`   📈 Volume Change: ${volumeChangePercent.toFixed(2)}% (Required: ${condition} ${requiredPercentage}%)`);
+
+    // ✅ Check condition based on type
+    let conditionMet = false;
+
     switch (condition) {
       case "INCREASING":
-        const volumeChangeInc = ((currentVolume - baselineVolume) / baselineVolume) * 100;
-        return volumeChangeInc >= requiredPercentage;
+        // Volume increased by X% or more from baseline
+        conditionMet = volumeChangePercent >= requiredPercentage;
+        console.log(`   ${conditionMet ? '✅' : '❌'} INCREASING: ${volumeChangePercent.toFixed(2)}% >= ${requiredPercentage}%? ${conditionMet}`);
+        break;
 
       case "DECREASING":
-        const volumeChangeDec = ((currentVolume - baselineVolume) / baselineVolume) * 100;
-        return volumeChangeDec <= -requiredPercentage;
+        // Volume decreased by X% or more from baseline (negative change)
+        conditionMet = volumeChangePercent <= -requiredPercentage;
+        console.log(`   ${conditionMet ? '✅' : '❌'} DECREASING: ${volumeChangePercent.toFixed(2)}% <= -${requiredPercentage}%? ${conditionMet}`);
+        break;
 
       case "ABOVE":
-        // Only reached if no timeframes set
-        return currentVolume > requiredPercentage;
+        // Current volume above absolute threshold
+        conditionMet = currentVolume > requiredPercentage;
+        console.log(`   ${conditionMet ? '✅' : '❌'} ABOVE: ${currentVolume.toLocaleString()} > ${requiredPercentage.toLocaleString()}? ${conditionMet}`);
+        break;
 
       case "BELOW":
-        // Only reached if no timeframes set
-        return currentVolume < requiredPercentage;
+        // Current volume below absolute threshold
+        conditionMet = currentVolume < requiredPercentage;
+        console.log(`   ${conditionMet ? '✅' : '❌'} BELOW: ${currentVolume.toLocaleString()} < ${requiredPercentage.toLocaleString()}? ${conditionMet}`);
+        break;
 
       default:
-        return true;
+        console.log(`   ❌ Unknown volume condition: ${condition}`);
+        conditionMet = false;
     }
+
+    // ✅ NOTE: Baseline update happens in processAlert when alert triggers
+    // Timeframes determine the baseline update interval (smallest timeframe used)
+    // This is handled by the Alert Count lock mechanism based on selected timeframes
+
+    if (conditionMet) {
+      console.log(`   🎉 Volume condition MET - Alert will trigger`);
+    }
+
+    return conditionMet;
   }
 
 
