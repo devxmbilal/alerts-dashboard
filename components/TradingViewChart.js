@@ -43,6 +43,7 @@ const TradingViewChart = ({
         "1h": "60",
         "4h": "240",
         "1d": "D",
+        "1w": "W",
       };
 
       // Dynamically calculate height to fill available space
