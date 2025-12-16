@@ -32,6 +32,7 @@ import MarketPanel from "../../components/MarketPanel";
 import FilterSidebar from "../../components/FilterSidebar";
 import RealTimeNotifications from "../../components/RealTimeNotifications";
 import UserSettingsModal from "../../components/UserSettingsModal";
+import ConditionPanel from "../../components/ConditionPanel";
 import { SocketProvider } from "../../contexts/SocketContext";
 import { AlertProvider } from "../../contexts/AlertContext";
 import { FavoritesProvider } from "../../contexts/FavoritesContext";
@@ -444,6 +445,8 @@ export default function Dashboard() {
                 timeframe={selectedTimeframe}
                 onTimeframeChange={handleTimeframeChange}
               />
+              {/* Condition Panel - Show active conditions */}
+              <ConditionPanel userId={user?._id} />
             </Box>
           );
         case "filters":
@@ -549,6 +552,8 @@ export default function Dashboard() {
                 timeframe={selectedTimeframe}
                 onTimeframeChange={handleTimeframeChange}
               />
+              {/* Condition Panel - Show active conditions */}
+              <ConditionPanel userId={user?._id} />
             </Paper>
           </Box>
         </Grid>
@@ -675,12 +680,12 @@ export default function Dashboard() {
                 <Typography variant="body2" sx={{ color: "text.secondary" }}>
                   {selectedCoin} - {selectedTimeframe}
                 </Typography>
-                
+
                 {/* Theme Toggle Button */}
                 <IconButton
                   onClick={toggleTheme}
                   color="inherit"
-                  sx={{ 
+                  sx={{
                     color: "text.secondary",
                     transition: "all 0.3s ease",
                     "&:hover": {
