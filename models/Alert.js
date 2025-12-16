@@ -102,9 +102,6 @@ const alertSchema = new mongoose.Schema(
     baselineVolume: {
       type: Number,
     },
-    baselineOpenInterest: {
-      type: Number,
-    },
     baselineTimestamp: {
       type: Date,
       default: Date.now,

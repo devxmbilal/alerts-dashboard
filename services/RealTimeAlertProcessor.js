@@ -1433,13 +1433,8 @@ class RealTimeAlertProcessor {
       // Safely get baseline values with proper defaults
       const baselinePrice = parseFloat(alert.baselinePrice) || 0;
       const baselineVolume = parseFloat(alert.baselineVolume) || 0;
-      const baselineOpenInterest = parseFloat(alert.baselineOpenInterest) || 0;
       const baselineTimestamp = alert.baselineTimestamp || new Date();
       const livePrice = parseFloat(liveData.price) || 0;
-
-      // Get current openInterest from liveData
-      const currentOpenInterest =
-        parseFloat(liveData.openInterest || liveData.openInterest24h) || 0;
 
       // Calculate change from baseline with proper NaN handling
       let changeFromBaseline = 0;
@@ -1481,7 +1476,6 @@ class RealTimeAlertProcessor {
           priceChange: parseFloat(liveData.priceChange) || 0,
           priceChangePercent: parseFloat(liveData.priceChangePercent) || 0,
           volume24h: parseFloat(liveData.volume || liveData.volume24h) || 0,
-          openInterest: currentOpenInterest,
           high: parseFloat(liveData.high || liveData.price) || 0,
           low: parseFloat(liveData.low || liveData.price) || 0,
           open: parseFloat(liveData.open || liveData.price) || 0,
@@ -1491,7 +1485,6 @@ class RealTimeAlertProcessor {
         baselineData: {
           baselinePrice: baselinePrice,
           baselineVolume: baselineVolume,
-          baselineOpenInterest: baselineOpenInterest,
           baselineTimestamp: baselineTimestamp,
           changeFromBaseline: changeFromBaseline,
           changeFromBaselinePercent: changeFromBaselinePercent,
@@ -2161,13 +2154,8 @@ class RealTimeAlertProcessor {
       // Safely get baseline values with proper defaults
       const baselinePrice = parseFloat(alert.baselinePrice) || 0;
       const baselineVolume = parseFloat(alert.baselineVolume) || 0;
-      const baselineOpenInterest = parseFloat(alert.baselineOpenInterest) || 0;
       const baselineTimestamp = alert.baselineTimestamp || new Date();
       const livePrice = parseFloat(priceData.price) || 0;
-
-      // Get current openInterest from priceData
-      const currentOpenInterest =
-        parseFloat(priceData.openInterest || priceData.openInterest24h) || 0;
 
       // Calculate change from baseline with proper NaN handling
       let changeFromBaseline = 0;
@@ -2207,7 +2195,6 @@ class RealTimeAlertProcessor {
           priceChange: parseFloat(priceData.priceChange) || 0,
           priceChangePercent: parseFloat(priceData.priceChangePercent) || 0,
           volume24h: parseFloat(priceData.volume || priceData.volume24h) || 0,
-          openInterest: currentOpenInterest,
           high: parseFloat(priceData.high) || 0,
           low: parseFloat(priceData.low) || 0,
           open: parseFloat(priceData.open) || 0,
@@ -2217,7 +2204,6 @@ class RealTimeAlertProcessor {
         baselineData: {
           baselinePrice: baselinePrice,
           baselineVolume: baselineVolume,
-          baselineOpenInterest: baselineOpenInterest,
           baselineTimestamp: baselineTimestamp,
           changeFromBaseline: changeFromBaseline,
           changeFromBaselinePercent: changeFromBaselinePercent,
@@ -3265,275 +3251,7 @@ class RealTimeAlertProcessor {
 
 
 
-  // Fetch Open Interest from Binance Futures API
-  async fetchOpenInterest(symbol) {
-    try {
-      const futuresSymbol = symbol.toUpperCase();
-      const response = await fetch(
-        `https://fapi.binance.com/fapi/v1/openInterest?symbol=${futuresSymbol}`
-      );
 
-      if (!response.ok) {
-        console.warn(
-          `⚠️ Failed to fetch Open Interest for ${symbol}: ${response.status}`
-        );
-        return null;
-      }
-
-      const data = await response.json();
-      const openInterest = parseFloat(data.openInterest || 0);
-
-      console.log(
-        `✅ Fetched Open Interest for ${symbol}: ${openInterest.toLocaleString()}`
-      );
-
-      return openInterest;
-    } catch (error) {
-      console.warn(
-        `⚠️ Error fetching Open Interest for ${symbol}:`,
-        error.message
-      );
-      return null;
-    }
-  }
-
-  // Get or initialize Open Interest data for a symbol and timeframe (cached)
-  async getOpenInterestData(symbol, timeframe, alert = null) {
-    const key = `${symbol}_${timeframe}`;
-    const now = Date.now();
-    const timeframeMs = this.getTimeframeMs(timeframe);
-
-    const existing = this.openInterestData.get(key);
-
-    // TTL: full timeframe (e.g. 5m, 15m) — OI fast change nahi chahiye
-    const ttl = timeframeMs || 60_000;
-
-    if (existing && now - existing.lastUpdateTime < ttl) {
-      return existing;
-    }
-
-    // Fetch current Open Interest (only when needed)
-    let currentOI = await this.fetchOpenInterest(symbol);
-
-    if (currentOI === null) {
-      // fallback: if we have old data, keep it
-      return existing || null;
-    }
-
-    if (!existing) {
-      const baseline = alert?.baselineOpenInterest || currentOI;
-      const data = {
-        current: currentOI,
-        baseline,
-        timestamp: now,
-        lastUpdateTime: now,
-      };
-      this.openInterestData.set(key, data);
-      console.log(
-        `📊 Init OI for ${symbol} (${timeframe}): current=${currentOI.toLocaleString()}, baseline=${baseline.toLocaleString()}`
-      );
-      return data;
-    } else {
-      // maybe shift baseline if timeframe passed
-      const timeSinceLastBaseline = now - existing.timestamp;
-
-      if (timeSinceLastBaseline >= timeframeMs) {
-        existing.baseline = existing.current;
-        existing.timestamp = existing.lastUpdateTime;
-        console.log(
-          `📊 OI baseline updated for ${symbol} (${timeframe}): ${existing.baseline.toLocaleString()}`
-        );
-      }
-
-      existing.current = currentOI;
-      existing.lastUpdateTime = now;
-      return existing;
-    }
-  }
-
-  async evaluateOpenInterestConditions(
-    openInterestConditions,
-    alert,
-    priceData
-  ) {
-    const { direction, timeframes, percentage } = openInterestConditions;
-    const requiredPercentage = parseFloat(percentage) || 0;
-
-    console.log(
-      `📊 Open Interest Evaluation: ${direction}${percentage ? ` by ${percentage}%` : ""
-      } on timeframes: ${timeframes?.join(", ") || "N/A"}`
-    );
-
-    // If timeframes are specified, check ALL timeframes
-    if (timeframes && timeframes.length > 0 && alert?.symbol) {
-      let allTimeframesPassed = true;
-      let verifiedTimeframes = 0;
-
-      for (const timeframe of timeframes) {
-        console.log(`   Checking timeframe: ${timeframe}`);
-
-        // Get Open Interest data for this timeframe
-        const oiData = await this.getOpenInterestData(
-          alert.symbol,
-          timeframe,
-          alert
-        );
-
-        if (!oiData || oiData.current === null) {
-          console.log(
-            `   ⚠️ Timeframe ${timeframe}: Open Interest data not available, cannot verify`
-          );
-          allTimeframesPassed = false;
-          break;
-        }
-
-        const currentOI = oiData.current;
-        const baselineOI = oiData.baseline || currentOI;
-        verifiedTimeframes++;
-
-        const oiChange = ((currentOI - baselineOI) / baselineOI) * 100;
-
-        console.log(
-          `   Timeframe ${timeframe}: Current OI=${currentOI.toLocaleString()}, Baseline OI=${baselineOI.toLocaleString()}, Change=${oiChange.toFixed(
-            2
-          )}%`
-        );
-
-        let timeframePassed = false;
-
-        switch (direction) {
-          case "INCREASING":
-            if (percentage) {
-              timeframePassed = oiChange >= requiredPercentage;
-              console.log(
-                `   Timeframe ${timeframe}: Open Interest INCREASING check - Change ${oiChange.toFixed(
-                  2
-                )}% >= ${requiredPercentage}%? ${timeframePassed}`
-              );
-            } else {
-              timeframePassed = oiChange > 0;
-              console.log(
-                `   Timeframe ${timeframe}: Open Interest INCREASING check - Change ${oiChange.toFixed(
-                  2
-                )}% > 0? ${timeframePassed}`
-              );
-            }
-            break;
-
-          case "DECREASING":
-            if (percentage) {
-              timeframePassed = oiChange <= -requiredPercentage;
-              console.log(
-                `   Timeframe ${timeframe}: Open Interest DECREASING check - Change ${oiChange.toFixed(
-                  2
-                )}% <= -${requiredPercentage}%? ${timeframePassed}`
-              );
-            } else {
-              timeframePassed = oiChange < 0;
-              console.log(
-                `   Timeframe ${timeframe}: Open Interest DECREASING check - Change ${oiChange.toFixed(
-                  2
-                )}% < 0? ${timeframePassed}`
-              );
-            }
-            break;
-
-          case "ABOVE":
-            if (percentage) {
-              timeframePassed = oiChange >= requiredPercentage;
-              console.log(
-                `   Timeframe ${timeframe}: Open Interest ABOVE check - Change ${oiChange.toFixed(
-                  2
-                )}% >= ${requiredPercentage}%? ${timeframePassed}`
-              );
-            } else {
-              timeframePassed = currentOI > baselineOI;
-              console.log(
-                `   Timeframe ${timeframe}: Open Interest ABOVE check - ${currentOI.toLocaleString()} > ${baselineOI.toLocaleString()}? ${timeframePassed}`
-              );
-            }
-            break;
-
-          case "BELOW":
-            if (percentage) {
-              timeframePassed = oiChange <= -requiredPercentage;
-              console.log(
-                `   Timeframe ${timeframe}: Open Interest BELOW check - Change ${oiChange.toFixed(
-                  2
-                )}% <= -${requiredPercentage}%? ${timeframePassed}`
-              );
-            } else {
-              timeframePassed = currentOI < baselineOI;
-              console.log(
-                `   Timeframe ${timeframe}: Open Interest BELOW check - ${currentOI.toLocaleString()} < ${baselineOI.toLocaleString()}? ${timeframePassed}`
-              );
-            }
-            break;
-
-          default:
-            console.log(`   Unknown Open Interest direction: ${direction}`);
-            timeframePassed = false;
-        }
-
-        if (!timeframePassed) {
-          allTimeframesPassed = false;
-          console.log(
-            `   ❌ Timeframe ${timeframe} FAILED: Open Interest condition ${direction} not met`
-          );
-          break; // One timeframe failed, condition invalid
-        } else {
-          console.log(
-            `   ✅ Timeframe ${timeframe} PASSED: Open Interest condition ${direction} met`
-          );
-        }
-      }
-
-      console.log(
-        `   Open Interest check (multi-timeframe): ${allTimeframesPassed} (${verifiedTimeframes}/${timeframes.length} timeframes verified, ALL must pass)`
-      );
-      return allTimeframesPassed;
-    } else {
-      // Fallback: use single Open Interest check if no timeframes specified
-      let currentOpenInterest = priceData.openInterest || null;
-
-      if (!currentOpenInterest) {
-        currentOpenInterest = await this.fetchOpenInterest(alert?.symbol || "");
-      }
-
-      if (!currentOpenInterest) {
-        console.log("⚠️ Open Interest data missing, skipping condition");
-        return true;
-      }
-
-      const baselineOpenInterest =
-        alert?.baselineOpenInterest || currentOpenInterest;
-      const oiChange =
-        ((currentOpenInterest - baselineOpenInterest) / baselineOpenInterest) *
-        100;
-
-      console.log(
-        `   Current OI: ${currentOpenInterest.toLocaleString()}, Baseline OI: ${baselineOpenInterest.toLocaleString()}`
-      );
-      console.log(`   OI Change: ${oiChange.toFixed(2)}%`);
-
-      switch (direction) {
-        case "INCREASING":
-          return percentage ? oiChange >= requiredPercentage : oiChange > 0;
-        case "DECREASING":
-          return percentage ? oiChange <= -requiredPercentage : oiChange < 0;
-        case "ABOVE":
-          return percentage
-            ? oiChange >= requiredPercentage
-            : currentOpenInterest > baselineOpenInterest;
-        case "BELOW":
-          return percentage
-            ? oiChange <= -requiredPercentage
-            : currentOpenInterest < baselineOpenInterest;
-        default:
-          return true;
-      }
-    }
-  }
 
   async getUserFavorites(userId) {
     try {

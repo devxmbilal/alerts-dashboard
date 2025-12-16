@@ -9,8 +9,7 @@ class AlertService {
     conditions,
     notificationSettings = {},
     baselinePrice = null,
-    baselineVolume = null,
-    baselineOpenInterest = null
+    baselineVolume = null
   ) {
     try {
       const alertData = {
@@ -27,15 +26,11 @@ class AlertService {
       if (baselineVolume !== null && baselineVolume !== undefined) {
         alertData.baselineVolume = parseFloat(baselineVolume) || 0;
       }
-      if (baselineOpenInterest !== null && baselineOpenInterest !== undefined) {
-        alertData.baselineOpenInterest = parseFloat(baselineOpenInterest) || 0;
-      }
 
       // Set baselineTimestamp if any baseline value is set
       if (
         alertData.baselinePrice ||
-        alertData.baselineVolume ||
-        alertData.baselineOpenInterest
+        alertData.baselineVolume
       ) {
         alertData.baselineTimestamp = new Date();
       }
@@ -44,9 +39,6 @@ class AlertService {
 
       await alert.save();
       console.log(`✅ Alert created for ${symbol} by user ${userId}`);
-      if (baselineOpenInterest) {
-        console.log(`   Baseline Open Interest: ${baselineOpenInterest}`);
-      }
       return alert;
     } catch (error) {
       console.error("❌ Error creating alert:", error);

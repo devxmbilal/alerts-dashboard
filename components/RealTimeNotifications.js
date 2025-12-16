@@ -436,16 +436,6 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
         parts.push(`Volume: ${conditions.volume.condition}`);
       }
 
-      if (conditions.openInterest) {
-        parts.push(
-          `Open Interest: ${conditions.openInterest.direction}${
-            conditions.openInterest.percentage
-              ? ` ${conditions.openInterest.percentage}%`
-              : ""
-          }`
-        );
-      }
-
       return parts.join(" • ");
     }
 
@@ -714,8 +704,8 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                             <strong>24h Volume:</strong>{" "}
                             {alert.volume
                               ? new Intl.NumberFormat("en-US", {
-                                  maximumFractionDigits: 1,
-                                }).format(alert.volume)
+                                maximumFractionDigits: 1,
+                              }).format(alert.volume)
                               : "N/A"}
                           </Typography>
 

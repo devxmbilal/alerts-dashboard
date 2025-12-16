@@ -45,7 +45,6 @@ export async function POST(request) {
       notificationSettings,
       baselinePrice,
       baselineVolume,
-      baselineOpenInterest,
     } = body;
 
     if (!userId || !symbol || !conditions) {
@@ -58,7 +57,6 @@ export async function POST(request) {
     // Fetch current market data if baseline values not provided
     let currentPrice = baselinePrice;
     let currentVolume = baselineVolume;
-    let currentOpenInterest = baselineOpenInterest;
 
     if (!currentPrice || !currentVolume) {
       try {
@@ -80,124 +78,94 @@ export async function POST(request) {
         );
       }
     }
+      // Create alert with baseline values
+      const alert = await AlertService.createAlert(
+        userId,
+        symbol,
+        conditions,
+        notificationSettings,
+        currentPrice,
+        currentVolume
+      );
 
-    // Fetch Open Interest if openInterest condition is present and not provided
-    if (
-      conditions.openInterest &&
-      conditions.openInterest.timeframes?.length > 0 &&
-      !currentOpenInterest
-    ) {
-      try {
-        // Convert spot symbol to futures symbol (e.g., BTCUSDT -> BTCUSDT)
-        const futuresSymbol = symbol;
-        const oiResponse = await fetch(
-          `https://fapi.binance.com/fapi/v1/openInterest?symbol=${futuresSymbol}`
-        );
-        if (oiResponse.ok) {
-          const oiData = await oiResponse.json();
-          currentOpenInterest = parseFloat(oiData.openInterest || 0);
-          console.log(
-            `✅ Fetched Open Interest for ${symbol}: ${currentOpenInterest}`
-          );
-        }
-      } catch (error) {
-        console.warn(
-          `⚠️ Failed to fetch Open Interest for ${symbol}:`,
-          error.message
-        );
-        currentOpenInterest = null;
-      }
+      return NextResponse.json({
+        success: true,
+        data: alert,
+      });
+    } catch (error) {
+      console.error("Error creating alert:", error);
+      return NextResponse.json(
+        { error: "Failed to create alert" },
+        { status: 500 }
+      );
     }
-
-    // Create alert with baseline values
-    const alert = await AlertService.createAlert(
-      userId,
-      symbol,
-      conditions,
-      notificationSettings,
-      currentPrice,
-      currentVolume,
-      currentOpenInterest
-    );
-
-    return NextResponse.json({
-      success: true,
-      data: alert,
-    });
-  } catch (error) {
-    console.error("Error creating alert:", error);
-    return NextResponse.json(
-      { error: "Failed to create alert" },
-      { status: 500 }
-    );
   }
-}
 
 // PUT /api/alerts - Update alert
 export async function PUT(request) {
-  try {
-    await connectToMongoDB();
+    try {
+      await connectToMongoDB();
 
-    const body = await request.json();
-    const { alertId, userId, status } = body;
+      const body = await request.json();
+      const { alertId, userId, status } = body;
 
-    if (!alertId || !userId) {
+      if (!alertId || !userId) {
+        return NextResponse.json(
+          { error: "Missing required fields" },
+          { status: 400 }
+        );
+      }
+
+      const alert = await AlertService.updateAlertStatus(alertId, status);
+
+      if (!alert) {
+        return NextResponse.json({ error: "Alert not found" }, { status: 404 });
+      }
+
+      return NextResponse.json({
+        success: true,
+        data: alert,
+      });
+    } catch (error) {
+      console.error("Error updating alert:", error);
       return NextResponse.json(
-        { error: "Missing required fields" },
-        { status: 400 }
+        { error: "Failed to update alert" },
+        { status: 500 }
       );
     }
-
-    const alert = await AlertService.updateAlertStatus(alertId, status);
-
-    if (!alert) {
-      return NextResponse.json({ error: "Alert not found" }, { status: 404 });
-    }
-
-    return NextResponse.json({
-      success: true,
-      data: alert,
-    });
-  } catch (error) {
-    console.error("Error updating alert:", error);
-    return NextResponse.json(
-      { error: "Failed to update alert" },
-      { status: 500 }
-    );
   }
-}
 
-// DELETE /api/alerts - Delete alert
-export async function DELETE(request) {
-  try {
-    await connectToMongoDB();
+  // DELETE /api/alerts - Delete alert
+  export async function DELETE(request) {
+    try {
+      await connectToMongoDB();
 
-    const { searchParams } = new URL(request.url);
-    const alertId = searchParams.get("alertId");
-    const userId = searchParams.get("userId");
+      const { searchParams } = new URL(request.url);
+      const alertId = searchParams.get("alertId");
+      const userId = searchParams.get("userId");
 
-    if (!alertId || !userId) {
+      if (!alertId || !userId) {
+        return NextResponse.json(
+          { error: "Missing required fields" },
+          { status: 400 }
+        );
+      }
+
+      const alert = await AlertService.deleteAlert(alertId, userId);
+
+      if (!alert) {
+        return NextResponse.json({ error: "Alert not found" }, { status: 404 });
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: "Alert deleted successfully",
+      });
+    } catch (error) {
+      console.error("Error deleting alert:", error);
       return NextResponse.json(
-        { error: "Missing required fields" },
-        { status: 400 }
+        { error: "Failed to delete alert" },
+        { status: 500 }
       );
     }
-
-    const alert = await AlertService.deleteAlert(alertId, userId);
-
-    if (!alert) {
-      return NextResponse.json({ error: "Alert not found" }, { status: 404 });
-    }
-
-    return NextResponse.json({
-      success: true,
-      message: "Alert deleted successfully",
-    });
-  } catch (error) {
-    console.error("Error deleting alert:", error);
-    return NextResponse.json(
-      { error: "Failed to delete alert" },
-      { status: 500 }
-    );
   }
-}

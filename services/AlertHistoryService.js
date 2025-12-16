@@ -9,7 +9,7 @@ class AlertHistoryService {
       console.log(
         `📝 Creating alert history for ${alertHistoryData.symbol}...`
       );
-    
+
 
       const alertHistory = new AlertHistory({
         alertId: alertHistoryData.alertId,
@@ -25,11 +25,8 @@ class AlertHistoryService {
           ),
           volume24h: parseFloat(
             alertHistoryData.triggerData.volume24h ||
-              alertHistoryData.triggerData.volume ||
-              0
-          ),
-          openInterest: parseFloat(
-            alertHistoryData.triggerData.openInterest || 0
+            alertHistoryData.triggerData.volume ||
+            0
           ),
           high: parseFloat(alertHistoryData.triggerData.high),
           low: parseFloat(alertHistoryData.triggerData.low),
@@ -43,9 +40,6 @@ class AlertHistoryService {
           ),
           baselineVolume: parseFloat(
             alertHistoryData.baselineData.baselineVolume || 0
-          ),
-          baselineOpenInterest: parseFloat(
-            alertHistoryData.baselineData.baselineOpenInterest || 0
           ),
           baselineTimestamp: alertHistoryData.baselineData.baselineTimestamp,
           changeFromBaseline: parseFloat(
