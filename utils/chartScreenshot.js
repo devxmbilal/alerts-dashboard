@@ -472,7 +472,7 @@ class ChartScreenshotService {
       };
 
       const url = `${this.quickChartBaseUrl
-        }?width=800&height=500&format=png&backgroundColor=rgb(20,20,20)&c=${encodeURIComponent(
+        }?width=1200&height=600&format=png&backgroundColor=rgb(20,20,20)&c=${encodeURIComponent(
           JSON.stringify(chartConfig)
         )}`;
 
@@ -508,7 +508,7 @@ class ChartScreenshotService {
         // Try POST method for large configs
         try {
           console.log(`📊 Trying POST method for QuickChart (large config)...`);
-          const postUrl = `${this.quickChartBaseUrl}?width=800&height=500&format=png&backgroundColor=rgb(20,20,20)`;
+          const postUrl = `${this.quickChartBaseUrl}?width=1200&height=600&format=png&backgroundColor=rgb(20,20,20)`;
           res = await axios.post(
             postUrl,
             { config: chartConfig },

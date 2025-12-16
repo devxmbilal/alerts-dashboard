@@ -104,11 +104,11 @@ class TelegramService {
 
     const changeEmoji =
       changeFromBaselinePercent === undefined ||
-      changeFromBaselinePercent === null
+        changeFromBaselinePercent === null
         ? "📊"
         : changeFromBaselinePercent >= 0
-        ? "📈"
-        : "📉";
+          ? "📈"
+          : "📉";
 
     const safeNumber = (val, digits = 3) =>
       typeof val === "number" && !isNaN(val) ? val.toFixed(digits) : "N/A";
@@ -258,6 +258,16 @@ ${changeEmoji} Change: \`${safeNumber(changeFromBaselinePercent)}%\`
           )}MB (max 10MB)`
         );
         throw new Error("Photo too large");
+      }
+
+      // Check minimum file size (prevent corrupt/placeholder images)
+      // Telegram requires minimum 100x100 pixels, which is typically >10KB for PNG/JPEG
+      if (photo.length < 10 * 1024) {
+        console.error(
+          `❌ Photo too small: ${(photo.length / 1024).toFixed(2)}KB (min ~10KB for valid chart)`
+        );
+        console.error("⚠️ Image likely corrupted or placeholder, sending text-only");
+        throw new Error("Photo too small - likely corrupted");
       }
 
       console.log(
