@@ -4169,17 +4169,26 @@ class RealTimeAlertProcessor {
       const timeframeMs = this.getTimeframeMs(timeframe);
       const expectedStartTime = Math.floor(Date.now() / timeframeMs) * timeframeMs;
 
-      // Dynamic stale threshold based on timeframe
-      // For D/W candles, allow up to 1 hour difference (timezone alignment)
-      // For smaller timeframes, use 5 seconds
-      const staleThreshold = timeframeMs >= 24 * 60 * 60 * 1000
-        ? 60 * 60 * 1000  // 1 hour for D/W/M
-        : 5000;           // 5 seconds for smaller timeframes
+      // Skip stale detection for W/M timeframes
+      // Binance uses Monday alignment for weekly candles which differs from our calculation
+      const isLargeTimeframe = ['W', 'WEEK', 'WEEKLY', '1W', 'M', 'MONTH', 'MONTHLY', '1MONTH'].includes(timeframe.toUpperCase());
 
-      // Verify this is the CURRENT candle (not stale)
-      if (Math.abs(candleStartTime - expectedStartTime) > staleThreshold) {
-        console.warn(`⚠️ Stale candle detected for ${symbol} ${timeframe} (diff: ${Math.abs(candleStartTime - expectedStartTime)}ms, threshold: ${staleThreshold}ms)`);
-        return null;
+      if (!isLargeTimeframe) {
+        // Dynamic stale threshold based on timeframe
+        // For D candles, allow up to 1 hour difference (timezone alignment)
+        // For smaller timeframes, use 5 seconds
+        const staleThreshold = timeframeMs >= 24 * 60 * 60 * 1000
+          ? 60 * 60 * 1000  // 1 hour for D
+          : 5000;           // 5 seconds for smaller timeframes
+
+        // Verify this is the CURRENT candle (not stale)
+        if (Math.abs(candleStartTime - expectedStartTime) > staleThreshold) {
+          console.warn(`⚠️ Stale candle detected for ${symbol} ${timeframe} (diff: ${Math.abs(candleStartTime - expectedStartTime)}ms, threshold: ${staleThreshold}ms)`);
+          return null;
+        }
+      } else {
+        // For W/M, just log that we're accepting the candle without stale check
+        console.log(`📅 ${timeframe} candle accepted (large timeframe, skipping stale check)`);
       }
 
       const candle = {
