@@ -32,6 +32,12 @@ import {
   Slider,
   Grid,
   IconButton,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
+  Snackbar,
 } from "@mui/material";
 import { styled } from "@mui/material/styles";
 import {
@@ -71,8 +77,8 @@ const DarkAccordion = styled(Accordion)(({ theme }) => ({
     padding: "0 8px",
     borderRadius: "3px",
     "&:hover": {
-      backgroundColor: theme.palette.mode === 'dark' 
-        ? "rgba(255, 255, 255, 0.04)" 
+      backgroundColor: theme.palette.mode === 'dark'
+        ? "rgba(255, 255, 255, 0.04)"
         : "rgba(0, 0, 0, 0.04)",
     },
   },
@@ -136,6 +142,10 @@ const FilterSidebar = forwardRef(
     const [createdAlerts, setCreatedAlerts] = useState([]);
     const [errorMessage, setErrorMessage] = useState("");
     const [successMessage, setSuccessMessage] = useState("");
+    const [resetDialogOpen, setResetDialogOpen] = useState(false);
+    const [isResetting, setIsResetting] = useState(false);
+    const [toastOpen, setToastOpen] = useState(false);
+    const [toastMessage, setToastMessage] = useState("");
 
     // Expose methods to parent
     useImperativeHandle(ref, () => ({
@@ -394,6 +404,63 @@ const FilterSidebar = forwardRef(
         setIsCreating(false);
       }
     }, [getFavoriteSymbols, filters, onCreateAlert]);
+
+    // Handle reset filters with confirmation
+    const handleResetFilters = useCallback(async () => {
+      setIsResetting(true);
+      try {
+        const token = localStorage.getItem("token");
+        if (!token) {
+          setToastMessage("Authentication required");
+          setToastOpen(true);
+          return;
+        }
+
+        // Call API to remove all alerts
+        const response = await fetch("/api/alerts/remove-all", {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          console.log("✅ All alerts removed:", data);
+
+          // Reset filter state
+          setFilters({
+            minDaily: {},
+            changePercent: { direction: "increase" },
+            alertCount: {},
+            candle: {},
+            rsiRange: {},
+            volume: {},
+          });
+
+          // Clear created alerts
+          setCreatedAlerts([]);
+          setSuccessMessage("");
+          setErrorMessage("");
+
+          // Show toast
+          setToastMessage(`Conditions reset & ${data.deletedCount || 0} alerts removed`);
+          setToastOpen(true);
+        } else {
+          const errorData = await response.json();
+          setToastMessage(errorData.error || "Failed to remove alerts");
+          setToastOpen(true);
+        }
+      } catch (error) {
+        console.error("Error resetting filters:", error);
+        setToastMessage("Failed to reset filters");
+        setToastOpen(true);
+      } finally {
+        setIsResetting(false);
+        setResetDialogOpen(false);
+      }
+    }, []);
 
     // Get active filters count
     const activeFiltersCount = useMemo(() => {
@@ -821,11 +888,11 @@ const FilterSidebar = forwardRef(
                     size="small"
                     type="number"
                     label="RSI Period"
-                    value={filters.rsiRange.period }
+                    value={filters.rsiRange.period}
                     onChange={(e) =>
                       handleInputChange("rsiRange", "period", e.target.value)
                     }
-                    inputProps={{ min: 7, max: 14}}
+                    inputProps={{ min: 7, max: 14 }}
                   />
                 </Grid>
                 <Grid item xs={6}>
@@ -962,20 +1029,44 @@ const FilterSidebar = forwardRef(
           <Button
             fullWidth
             variant="outlined"
-            onClick={() => {
-              setFilters({
-                minDaily: {},
-                changePercent: { direction: "increase" },
-                alertCount: {},
-                candle: {},
-                rsiRange: {},
-                volume: {},
-              });
-            }}
+            color="error"
+            onClick={() => setResetDialogOpen(true)}
+            disabled={isResetting}
             sx={{ mb: 1 }}
           >
-            Reset Filters
+            {isResetting ? "Resetting..." : "Reset Filters & Remove Alerts"}
           </Button>
+
+          {/* Confirmation Dialog */}
+          <Dialog
+            open={resetDialogOpen}
+            onClose={() => setResetDialogOpen(false)}
+          >
+            <DialogTitle>⚠️ Reset Filters & Remove Alerts</DialogTitle>
+            <DialogContent>
+              <DialogContentText>
+                Are you sure? This will:
+                <br />• Reset all filter conditions
+                <br />• Remove ALL your alerts from database
+                <br />• Worker will stop monitoring all pairs
+              </DialogContentText>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setResetDialogOpen(false)}>Cancel</Button>
+              <Button onClick={handleResetFilters} color="error" variant="contained" disabled={isResetting}>
+                {isResetting ? "Removing..." : "Yes, Reset & Remove"}
+              </Button>
+            </DialogActions>
+          </Dialog>
+
+          {/* Toast Notification */}
+          <Snackbar
+            open={toastOpen}
+            autoHideDuration={4000}
+            onClose={() => setToastOpen(false)}
+            message={toastMessage}
+            anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+          />
 
           {/* Messages */}
           {errorMessage && (
