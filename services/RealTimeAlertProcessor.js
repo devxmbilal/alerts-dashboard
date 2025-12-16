@@ -3046,36 +3046,43 @@ class RealTimeAlertProcessor {
       `📈 RSI Evaluation: ${condition} ${targetLevel} (Period: ${rsiPeriod})`
     );
 
-    // Validate timeframes
+    // ✅ FIX: Return false if no timeframes (condition cannot be checked)
     if (!timeframes || timeframes.length === 0 || !symbol) {
       console.log(`   ⚠️ No timeframes specified or symbol missing`);
-      return true; // Skip if no timeframes
+      return false;
     }
 
-    console.log(`   🔍 Checking ${timeframes.length} timeframes (ALL must have data AND satisfy condition)`);
+    console.log(`   🔍 Checking ${timeframes.length} timeframes (ALL must pass)`);
 
-    // Loop through all selected timeframes
+    // ✅ PHASE 1: Pre-fetch ALL timeframes first (like Candle strategy)
+    let allDataReady = true;
+    let pendingTimeframes = [];
+    const rsiValues = new Map();
+
     for (const timeframe of timeframes) {
-      console.log(`   📊 Checking timeframe: ${timeframe}`);
-
-      // Fetch RSI value for this timeframe
       const rsiData = await this.getRSI(symbol, timeframe, rsiPeriod);
-
       if (!rsiData || rsiData.current === null) {
-        console.log(
-          `   ❌ Timeframe ${timeframe}: RSI data not available, FAILING condition (data required for ALL timeframes)`
-        );
-        return false; // STRICT: All timeframes must have data
+        allDataReady = false;
+        pendingTimeframes.push(timeframe);
+      } else {
+        rsiValues.set(timeframe, rsiData);
       }
+    }
 
+    // ✅ PHASE 2: Wait until ALL data is ready
+    if (!allDataReady) {
+      console.log(`   ⏳ RSI: Waiting for ${pendingTimeframes.length}/${timeframes.length} timeframes: [${pendingTimeframes.join(', ')}]`);
+      console.log(`   Data will be fetched by queue system, will recheck on next price update...`);
+      return false;
+    }
+
+    // ✅ PHASE 3: All data ready - NOW check conditions
+    console.log(`   ✅ RSI: All ${timeframes.length} timeframes data ready, checking conditions...`);
+
+    for (const timeframe of timeframes) {
+      const rsiData = rsiValues.get(timeframe);
       const currentRSI = rsiData.current;
       const previousRSI = rsiData.previous || currentRSI;
-
-      console.log(
-        `   📈 Timeframe ${timeframe}: Current RSI=${currentRSI.toFixed(
-          2
-        )}, Previous RSI=${previousRSI.toFixed(2)}`
-      );
 
       // Apply condition based on type
       let conditionMet = false;
@@ -3083,44 +3090,22 @@ class RealTimeAlertProcessor {
       switch (condition) {
         case "ABOVE":
           conditionMet = currentRSI > targetLevel;
-          console.log(
-            `   ${conditionMet ? '✅' : '❌'} Timeframe ${timeframe}: RSI ${currentRSI.toFixed(
-              2
-            )} > ${targetLevel}? ${conditionMet}`
-          );
+          console.log(`   📊 [${timeframe}] RSI=${currentRSI.toFixed(2)} > ${targetLevel}? ${conditionMet ? '✅' : '❌'}`);
           break;
 
         case "BELOW":
           conditionMet = currentRSI < targetLevel;
-          console.log(
-            `   ${conditionMet ? '✅' : '❌'} Timeframe ${timeframe}: RSI ${currentRSI.toFixed(
-              2
-            )} < ${targetLevel}? ${conditionMet}`
-          );
+          console.log(`   📊 [${timeframe}] RSI=${currentRSI.toFixed(2)} < ${targetLevel}? ${conditionMet ? '✅' : '❌'}`);
           break;
 
         case "CROSSING_UP":
-          // Previous RSI was below or equal, now above
           conditionMet = previousRSI <= targetLevel && currentRSI > targetLevel;
-          console.log(
-            `   ${conditionMet ? '✅' : '❌'} Timeframe ${timeframe}: Crossing Up - Previous ${previousRSI.toFixed(
-              2
-            )} <= ${targetLevel} AND Current ${currentRSI.toFixed(
-              2
-            )} > ${targetLevel}? ${conditionMet}`
-          );
+          console.log(`   📊 [${timeframe}] RSI Crossing Up: ${previousRSI.toFixed(2)} → ${currentRSI.toFixed(2)} (level: ${targetLevel})? ${conditionMet ? '✅' : '❌'}`);
           break;
 
         case "CROSSING_DOWN":
-          // Previous RSI was above or equal, now below
           conditionMet = previousRSI >= targetLevel && currentRSI < targetLevel;
-          console.log(
-            `   ${conditionMet ? '✅' : '❌'} Timeframe ${timeframe}: Crossing Down - Previous ${previousRSI.toFixed(
-              2
-            )} >= ${targetLevel} AND Current ${currentRSI.toFixed(
-              2
-            )} < ${targetLevel}? ${conditionMet}`
-          );
+          console.log(`   📊 [${timeframe}] RSI Crossing Down: ${previousRSI.toFixed(2)} → ${currentRSI.toFixed(2)} (level: ${targetLevel})? ${conditionMet ? '✅' : '❌'}`);
           break;
 
         default:
@@ -3130,24 +3115,13 @@ class RealTimeAlertProcessor {
 
       // CRITICAL: If even one timeframe fails, return false immediately
       if (!conditionMet) {
-        console.log(
-          `   ❌ ALERT BLOCKED: Timeframe ${timeframe} failed condition ${condition}`
-        );
-        console.log(
-          `   ⚠️ All ${timeframes.length} timeframes must pass, but ${timeframe} failed`
-        );
-        return false; // Exit immediately - no need to check remaining timeframes
+        console.log(`   ❌ RSI FAILED: ${timeframe} did not meet condition ${condition}`);
+        return false;
       }
-
-      console.log(
-        `   ✅ Timeframe ${timeframe} PASSED: Condition ${condition} met`
-      );
     }
 
     // All timeframes passed
-    console.log(
-      `   🎉 SUCCESS: All ${timeframes.length} timeframes satisfied RSI condition ${condition}`
-    );
+    console.log(`   🎉 RSI: All ${timeframes.length} timeframes PASSED ${condition} ${targetLevel}`);
     return true;
   }
 
