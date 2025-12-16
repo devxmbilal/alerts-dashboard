@@ -9,6 +9,7 @@ export class SafeAlertProcessor {
     this.alertQueue = new Map(); // Queue alerts per symbol to prevent parallel processing
     this.processedAlerts = new Map(); // Track processed alerts with timestamps
     this.cleanupInterval = null;
+    this.isRedisConnected = false;
 
     this.initRedis();
     this.startCleanupInterval();
@@ -20,21 +21,89 @@ export class SafeAlertProcessor {
         host: process.env.REDIS_HOST || "localhost",
         port: process.env.REDIS_PORT || 6379,
         lazyConnect: false,
-        retryDelayOnClusterDown: 300,
+        retryStrategy: (times) => {
+          // Reconnect after delay: first few attempts quick, then slow down
+          const delay = Math.min(times * 200, 5000);
+          console.log(`🔄 Redis reconnecting in ${delay}ms (attempt ${times})...`);
+          return delay;
+        },
         maxRetriesPerRequest: 3,
+        enableReadyCheck: true,
+        reconnectOnError: (err) => {
+          // Reconnect on specific errors
+          const targetErrors = ['READONLY', 'ECONNRESET', 'ECONNABORTED'];
+          if (targetErrors.some(e => err.message.includes(e))) {
+            console.log(`🔄 Redis reconnecting due to: ${err.message}`);
+            return true;
+          }
+          return false;
+        },
       });
-      console.log("✅ SafeAlertProcessor Redis initialized");
+
+      // Event handlers for connection stability
+      this.redis.on('connect', () => {
+        console.log('🔌 Redis connecting...');
+      });
+
+      this.redis.on('ready', () => {
+        this.isRedisConnected = true;
+        console.log('✅ SafeAlertProcessor Redis ready');
+      });
+
+      this.redis.on('error', (err) => {
+        console.error('❌ SafeAlertProcessor Redis error:', err.message);
+        this.isRedisConnected = false;
+      });
+
+      this.redis.on('close', () => {
+        console.warn('⚠️ SafeAlertProcessor Redis connection closed');
+        this.isRedisConnected = false;
+      });
+
+      this.redis.on('reconnecting', () => {
+        console.log('🔄 SafeAlertProcessor Redis reconnecting...');
+      });
+
+      this.redis.on('end', () => {
+        console.warn('⚠️ SafeAlertProcessor Redis connection ended');
+        this.isRedisConnected = false;
+      });
+
     } catch (error) {
       console.error("❌ Error initializing SafeAlertProcessor Redis:", error);
+      this.isRedisConnected = false;
     }
+  }
+
+  // Check if Redis is available before operations
+  isRedisAvailable() {
+    return this.redis && this.isRedisConnected && this.redis.status === 'ready';
   }
 
   // Prevent race conditions by using distributed locks
   async acquireProcessingLock(alertId, symbol) {
     const lockKey = `alert:processing:${alertId}`;
     const lockValue = `${Date.now()}_${Math.random()}`;
-    const lockTTL = 5; // CRITICAL FIX: Reduce to 5 seconds to prevent stuck locks
-    
+    const lockTTL = 5; // 5 seconds to prevent stuck locks
+
+    // Check if Redis is available
+    if (!this.isRedisAvailable()) {
+      console.warn(`⚠️ Redis unavailable, using in-memory lock for ${alertId}`);
+      // Fallback to in-memory lock only
+      if (this.processingLocks.has(alertId)) {
+        const existingLock = this.processingLocks.get(alertId);
+        if (Date.now() - existingLock.timestamp < lockTTL * 1000) {
+          return { acquired: false, lockValue: null };
+        }
+      }
+      this.processingLocks.set(alertId, {
+        timestamp: Date.now(),
+        lockValue: lockValue,
+        symbol: symbol,
+      });
+      return { acquired: true, lockValue: lockValue };
+    }
+
     try {
       // Try to acquire Redis lock first (distributed lock across multiple instances)
       const acquired = await this.redis.set(
@@ -60,13 +129,28 @@ export class SafeAlertProcessor {
       console.log(`⏸️ Processing lock already exists for alert ${alertId}`);
       return { acquired: false, lockValue: null };
     } catch (error) {
-      console.error(`❌ Error acquiring lock for alert ${alertId}:`, error);
-      return { acquired: false, lockValue: null };
+      console.error(`❌ Error acquiring lock for alert ${alertId}:`, error.message);
+      // Fallback to in-memory lock on Redis error
+      this.processingLocks.set(alertId, {
+        timestamp: Date.now(),
+        lockValue: lockValue,
+        symbol: symbol,
+      });
+      return { acquired: true, lockValue: lockValue };
     }
   }
 
   async releaseProcessingLock(alertId, lockValue) {
     const lockKey = `alert:processing:${alertId}`;
+
+    // Always remove from in-memory locks first
+    this.processingLocks.delete(alertId);
+
+    // Skip Redis if not available
+    if (!this.isRedisAvailable()) {
+      console.warn(`⚠️ Redis unavailable, skipping Redis lock release for ${alertId}`);
+      return true;
+    }
 
     try {
       // Use Lua script to ensure we only delete our own lock
@@ -80,9 +164,6 @@ export class SafeAlertProcessor {
 
       const result = await this.redis.eval(script, 1, lockKey, lockValue);
 
-      // Remove from in-memory locks
-      this.processingLocks.delete(alertId);
-
       if (result === 1) {
         console.log(`🔓 Released processing lock for alert ${alertId}`);
         return true;
@@ -93,8 +174,8 @@ export class SafeAlertProcessor {
         return false;
       }
     } catch (error) {
-      console.error(`❌ Error releasing lock for alert ${alertId}:`, error);
-      return false;
+      console.error(`❌ Error releasing lock for alert ${alertId}:`, error.message);
+      return true; // Return true since in-memory lock was already removed
     }
   }
 
@@ -104,7 +185,7 @@ export class SafeAlertProcessor {
   isRecentlyProcessed(alertId, currentTimestamp) {
     const processed = this.processedAlerts.get(alertId);
     if (!processed) return false;
-    
+
     // Consider alert recently processed if within last 60 seconds
     const timeDiff = currentTimestamp - processed.timestamp;
     return timeDiff < 10000; // 10 seconds
@@ -272,13 +353,13 @@ export class SafeAlertProcessor {
   // CRITICAL FIX: Force clear all processing locks
   async clearAllProcessingLocks() {
     console.log(`🧹 Force clearing ${this.processingLocks.size} processing locks...`);
-    
+
     // Clear Redis locks
     const lockKeys = [];
     for (const alertId of this.processingLocks.keys()) {
       lockKeys.push(`alert:processing:${alertId}`);
     }
-    
+
     if (lockKeys.length > 0 && this.redis) {
       try {
         await this.redis.del(...lockKeys);
@@ -287,11 +368,11 @@ export class SafeAlertProcessor {
         console.error(`❌ Error clearing Redis locks:`, error.message);
       }
     }
-    
+
     // Clear in-memory locks
     this.processingLocks.clear();
     this.processedAlerts.clear();
-    
+
     console.log(`✅ All processing locks cleared`);
   }
 

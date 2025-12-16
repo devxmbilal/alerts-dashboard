@@ -4013,6 +4013,17 @@ class RealTimeAlertProcessor {
       "12HR": 12 * 60 * 60 * 1000, // 12 hours
       "1D": 24 * 60 * 60 * 1000, // 1 day
       "1DAY": 24 * 60 * 60 * 1000, // 1 day
+      "D": 24 * 60 * 60 * 1000, // 1 day (short format)
+      "DAY": 24 * 60 * 60 * 1000, // 1 day
+      "DAILY": 24 * 60 * 60 * 1000, // 1 day
+      "1W": 7 * 24 * 60 * 60 * 1000, // 1 week
+      "W": 7 * 24 * 60 * 60 * 1000, // 1 week (short format)
+      "WEEK": 7 * 24 * 60 * 60 * 1000, // 1 week
+      "WEEKLY": 7 * 24 * 60 * 60 * 1000, // 1 week
+      "1MONTH": 30 * 24 * 60 * 60 * 1000, // 1 month (approx)
+      "M": 30 * 24 * 60 * 60 * 1000, // 1 month (short - be careful, conflicts with minute)
+      "MONTH": 30 * 24 * 60 * 60 * 1000, // 1 month
+      "MONTHLY": 30 * 24 * 60 * 60 * 1000, // 1 month
     };
 
     return timeframes[normalized] || timeframes["5MIN"]; // Default to 5 minutes
@@ -4158,9 +4169,16 @@ class RealTimeAlertProcessor {
       const timeframeMs = this.getTimeframeMs(timeframe);
       const expectedStartTime = Math.floor(Date.now() / timeframeMs) * timeframeMs;
 
+      // Dynamic stale threshold based on timeframe
+      // For D/W candles, allow up to 1 hour difference (timezone alignment)
+      // For smaller timeframes, use 5 seconds
+      const staleThreshold = timeframeMs >= 24 * 60 * 60 * 1000
+        ? 60 * 60 * 1000  // 1 hour for D/W/M
+        : 5000;           // 5 seconds for smaller timeframes
+
       // Verify this is the CURRENT candle (not stale)
-      if (Math.abs(candleStartTime - expectedStartTime) > 5000) {
-        console.warn(`⚠️ Stale candle detected for ${symbol} ${timeframe}`);
+      if (Math.abs(candleStartTime - expectedStartTime) > staleThreshold) {
+        console.warn(`⚠️ Stale candle detected for ${symbol} ${timeframe} (diff: ${Math.abs(candleStartTime - expectedStartTime)}ms, threshold: ${staleThreshold}ms)`);
         return null;
       }
 
