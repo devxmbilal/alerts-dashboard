@@ -463,7 +463,7 @@ class RealTimeAlertProcessor {
   async loadAllActiveAlerts() {
     try {
       console.log("🔄 Loading all active alerts from database...");
-      
+
       // Get all active alerts from MongoDB (including previously triggered ones)
       const alerts = await Alert.find({
         status: "active",
@@ -506,9 +506,9 @@ class RealTimeAlertProcessor {
         }
         this.activeAlerts.get(alert.symbol).push(alert);
       });
-      
+
       console.log(`📊 Active symbols: ${this.activeAlerts.size}`);
-      
+
       // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
       // This ensures the engine only processes symbols with valid alerts
       await this.updateMicroBatchActiveSymbols();
@@ -957,7 +957,7 @@ class RealTimeAlertProcessor {
         );
         return { triggered: false, reason: "alert_locked" };
       }
-      
+
       console.log(`✅ Alert ${alert._id} for ${alert.symbol} is NOT locked, proceeding...`);
 
       // Check price direction based on alert settings
@@ -1362,7 +1362,7 @@ class RealTimeAlertProcessor {
     if (isAlertLocked(alert)) {
       const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
       const timeRemaining = Math.max(0, lockUntil.getTime() - Date.now());
-      console.log(`🔒 Alert ${alert._id} LOCKED by Alert Count until ${lockUntil.toISOString()} (${Math.ceil(timeRemaining/60000)}min remaining)`);
+      console.log(`🔒 Alert ${alert._id} LOCKED by Alert Count until ${lockUntil.toISOString()} (${Math.ceil(timeRemaining / 60000)}min remaining)`);
       return false;
     }
 
@@ -1492,7 +1492,7 @@ class RealTimeAlertProcessor {
         console.log(
           `🔒 Alert ${alert._id} LOCKED for ${alert.conditions.alertCount.timeframe} until ${updatedConditions.alertCount.lockUntil}`
         );
-        
+
         // CRITICAL FIX: Update in-memory alert IMMEDIATELY with lock
         alert.conditions = updatedConditions;
       }
@@ -2451,13 +2451,13 @@ class RealTimeAlertProcessor {
   // 🛡️ SAFE RSI CALCULATION - Queue System to Prevent 418 Ban
   async calculateRSI(symbol, timeframe, period = 14) {
     const key = `${symbol}_${timeframe}`;
-    
+
     // Circuit breaker - check if we've had actual API failures
     const failureKey = `rsi_failures_${key}`;
     const failures = this.rsiFailures?.get(failureKey) || 0;
     const lastFailureTime = this.rsiFailures?.get(`${failureKey}_time`) || 0;
     const timeSinceLastFailure = Date.now() - lastFailureTime;
-    
+
     // Only block if we have real failures AND within 10 minute window
     if (failures >= 5 && timeSinceLastFailure < 10 * 60 * 1000) {
       return null;
@@ -2476,7 +2476,7 @@ class RealTimeAlertProcessor {
       if (!alreadyQueued && this.rsiQueue.length < 500) {
         this.queueRsiHistoryFetch(symbol, timeframe, period);
       }
-      
+
       // ✅ FIX: Don't count as failure - data is just loading
       // Return null immediately (alert will retry next tick)
       return null;
@@ -2574,7 +2574,7 @@ class RealTimeAlertProcessor {
 
       try {
         await this.fetchAndStoreRsiHistory(task.symbol, task.timeframe, task.period);
-        
+
         // Success: Remove from queue and reset failures
         this.rsiQueue.shift();
         const failureKey = `rsi_failures_${task.key}`;
@@ -2583,10 +2583,10 @@ class RealTimeAlertProcessor {
           this.rsiFailures.delete(`${failureKey}_time`);
         }
         processedCount++;
-        
+
         // 🛑 SLOW DOWN: 300ms delay between requests
         await this.delay(300);
-        
+
       } catch (error) {
         if (error.status === 418 || error.status === 429) {
           console.error(`🚨 418/429 ERROR! Pausing queue for 2 minutes.`);
@@ -2598,7 +2598,7 @@ class RealTimeAlertProcessor {
           const failures = this.rsiFailures.get(failureKey) || 0;
           this.rsiFailures.set(failureKey, failures + 1);
           this.rsiFailures.set(`${failureKey}_time`, Date.now());
-          
+
           console.error(`❌ RSI fetch failed for ${task.key}: ${error.message} (failure #${failures + 1})`);
           this.rsiQueue.shift();
         }
@@ -2827,18 +2827,33 @@ class RealTimeAlertProcessor {
 
         console.log(`🔍 Checking ${timeframes.length} timeframes (AND condition - ALL must pass)`);
 
+        // ✅ PHASE 1: Pre-fetch ALL timeframes first (queue them for background fetch)
+        let allDataReady = true;
+        let pendingTimeframes = [];
+
+        for (const timeframe of timeframes) {
+          const candle = this.getCandleDataOrQueue(symbol, timeframe);
+          if (!candle || candle.open === null) {
+            allDataReady = false;
+            pendingTimeframes.push(timeframe);
+          }
+        }
+
+        // ✅ PHASE 2: If ANY data is pending, wait for next tick (don't check partial)
+        if (!allDataReady) {
+          console.log(`⏳ Waiting for ${pendingTimeframes.length}/${timeframes.length} timeframes: [${pendingTimeframes.join(', ')}]`);
+          console.log(`   Data will be fetched by queue system, will recheck on next price update...`);
+          return false; // Wait until ALL data is ready
+        }
+
+        // ✅ PHASE 3: All data ready - NOW check conditions
+        console.log(`✅ All ${timeframes.length} timeframes data ready, checking conditions...`);
+
         let allTimeframesPassed = true;
         const now = Date.now();
 
         for (const timeframe of timeframes) {
-          // 🔥 CHANGE: Use getCandleDataOrQueue instead of direct fetch
-          let candle = this.getCandleDataOrQueue(symbol, timeframe);
-
-          // Agar data abhi tak fetch nahi hua (Queue mein hai)
-          if (!candle || candle.open === null) {
-            console.log(`⏳ [${timeframe}] Data pending, skipping check...`);
-            return false; // Safe exit: Alert next tick pe check hoga jab data ajayega
-          }
+          const candle = this.candleCache.get(`${symbol}_${timeframe}`);
 
           const candleStartTime = candle.startTime;
           const openPrice = parseFloat(candle.open);
@@ -2846,14 +2861,14 @@ class RealTimeAlertProcessor {
 
           // Safety: Skip if we're too close to candle boundary (avoid stale data)
           if (timeSinceCandleStart < CANDLE_START_BUFFER_MS) {
-            console.log(`⏳ [${timeframe}] Too close to candle start (${timeSinceCandleStart}ms), skipping`);
-            return false;
+            console.log(`⏳ [${timeframe}] Too close to candle start (${timeSinceCandleStart}ms), waiting...`);
+            return false; // Wait for candle to stabilize
           }
 
           // Apply epsilon: currentPrice must be > openPrice * 1.0001
           const priceAboveOpen = currentPrice > (openPrice * EPSILON);
 
-          console.log(`📊 [${timeframe}] Start: ${new Date(candleStartTime).toISOString()}, Open: ${openPrice}, Current: ${currentPrice}, Above: ${priceAboveOpen}`);
+          console.log(`📊 [${timeframe}] Open: ${openPrice}, Current: ${currentPrice}, Above: ${priceAboveOpen}`);
 
           if (!priceAboveOpen) {
             console.log(`❌ [${timeframe}] FAILED: ${currentPrice} <= ${openPrice * EPSILON}`);
@@ -2861,7 +2876,7 @@ class RealTimeAlertProcessor {
             break;
           }
 
-          console.log(`✅ [${timeframe}] PASSED: ${currentPrice} > ${openPrice * EPSILON}`);
+          console.log(`✅ [${timeframe}] PASSED`);
         }
 
         if (allTimeframesPassed) {
@@ -2873,200 +2888,148 @@ class RealTimeAlertProcessor {
         // Hammer: Bullish reversal pattern
         // Conditions:
         // 1. Open AND Close both in upper 30% of range (both >= 70% from low)
-        // 2. Current price (close) should be above open for confirmation
-        // Example: High=100, Low=80, Range=20, Upper 30% = 6, Top zone = 94
-        // Open=98 and Close=96 both >= 94 → Hammer ✅
-        if (range === 0) {
-          console.log(`   Hammer check: Range is 0, skipping`);
+        // 2. Current price should be above open for confirmation
+        if (timeframes.length === 0 || !symbol) {
+          console.log(`⚠️ No timeframes selected for HAMMER condition`);
           return false;
         }
 
-        // Calculate positions from low
-        const openPositionFromLow = (open - low) / range;
-        const closePositionFromLow = (close - low) / range;
+        console.log(`🔍 Checking HAMMER pattern for ${timeframes.length} timeframes (ALL must pass)`);
 
-        // Upper 30% zone: 70% and above (100% - 30% = 70%)
-        const upper30PercentThreshold = 0.7;
+        // ✅ PHASE 1: Pre-fetch ALL timeframes first
+        let hammerDataReady = true;
+        let hammerPendingTFs = [];
 
-        // Check: Both open and close in upper 30%
-        const bothInUpper30 =
-          openPositionFromLow >= upper30PercentThreshold &&
-          closePositionFromLow >= upper30PercentThreshold;
-
-        // Confirmation: Current live price above candle open (timeframe confirmation)
-        // For multiple timeframes: check if current price > open for ALL selected timeframes
-        let timeframeConfirmation = true;
-
-        if (timeframes.length > 0 && symbol) {
-          // Check confirmation for each selected timeframe
-          for (const timeframe of timeframes) {
-            let candle = this.getCandleData(symbol, timeframe);
-
-            // If candle data is missing or null, fetch from Binance API
-            if (!candle || candle.open === null) {
-              console.log(
-                `   ⚠️ Timeframe ${timeframe}: Local candle data missing, fetching from Binance...`
-              );
-              const binanceCandle = await this.fetchCandleFromBinance(
-                symbol,
-                timeframe
-              );
-              if (binanceCandle) {
-                // Update local candle data with Binance data
-                candle = this.getCandleData(symbol, timeframe);
-                candle.open = binanceCandle.open;
-                candle.high = binanceCandle.high;
-                candle.low = binanceCandle.low;
-                candle.close = binanceCandle.close;
-                candle.volume = binanceCandle.volume;
-                candle.startTime = binanceCandle.startTime;
-                candle.endTime = binanceCandle.endTime;
-                candle.isComplete = binanceCandle.isComplete;
-                console.log(
-                  `   ✅ Fetched candle from Binance for ${timeframe}: O=${candle.open}, C=${candle.close}`
-                );
-              }
-            }
-
-            if (candle && candle.open) {
-              const tfConfirmed = currentPrice > candle.open;
-              console.log(
-                `   Timeframe ${timeframe} confirmation: ${tfConfirmed} (Current ${currentPrice} > Open ${candle.open})`
-              );
-              if (!tfConfirmed) {
-                timeframeConfirmation = false;
-                break; // One timeframe failed, pattern invalid
-              }
-            }
+        for (const timeframe of timeframes) {
+          const candle = this.getCandleDataOrQueue(symbol, timeframe);
+          if (!candle || candle.open === null || candle.high === null || candle.low === null) {
+            hammerDataReady = false;
+            hammerPendingTFs.push(timeframe);
           }
-        } else {
-          // Fallback: use current priceData open for confirmation
-          timeframeConfirmation = currentPrice > open;
         }
 
-        const isHammer = bothInUpper30 && timeframeConfirmation;
+        // ✅ PHASE 2: Wait until ALL data is ready
+        if (!hammerDataReady) {
+          console.log(`⏳ HAMMER: Waiting for ${hammerPendingTFs.length}/${timeframes.length} timeframes: [${hammerPendingTFs.join(', ')}]`);
+          return false;
+        }
 
-        console.log(`   Hammer check: ${isHammer}`);
-        console.log(
-          `   Open position: ${(openPositionFromLow * 100).toFixed(
-            2
-          )}% (${open}), Close position: ${(closePositionFromLow * 100).toFixed(
-            2
-          )}% (${close})`
-        );
-        console.log(
-          `   Both in upper 30%: ${bothInUpper30} (Open >= 70%, Close >= 70%)`
-        );
-        console.log(
-          `   Timeframe confirmation: ${timeframeConfirmation} (Current Price ${currentPrice} > Open for all selected timeframes)`
-        );
-        console.log(
-          `   Range: ${range}, Upper 30% zone starts at: ${(
-            low +
-            range * 0.7
-          ).toFixed(2)}`
-        );
+        // ✅ PHASE 3: All data ready - check conditions
+        console.log(`✅ HAMMER: All ${timeframes.length} timeframes data ready, checking pattern...`);
 
-        return isHammer;
+        let allHammersPassed = true;
+
+        for (const timeframe of timeframes) {
+          const candle = this.candleCache.get(`${symbol}_${timeframe}`);
+
+          const open = parseFloat(candle.open);
+          const high = parseFloat(candle.high);
+          const low = parseFloat(candle.low);
+          const close = parseFloat(candle.close || currentPrice);
+          const range = high - low;
+
+          if (range === 0) {
+            console.log(`   [${timeframe}] Hammer: Range is 0, FAIL`);
+            allHammersPassed = false;
+            break;
+          }
+
+          const openPositionFromLow = (open - low) / range;
+          const closePositionFromLow = (close - low) / range;
+          const upper30PercentThreshold = 0.7;
+
+          const bothInUpper30 =
+            openPositionFromLow >= upper30PercentThreshold &&
+            closePositionFromLow >= upper30PercentThreshold;
+
+          const priceConfirmed = currentPrice > open;
+          const isHammer = bothInUpper30 && priceConfirmed;
+
+          console.log(`📊 [${timeframe}] HAMMER: O=${open}, H=${high}, L=${low}, C=${close}, Pattern: ${isHammer ? '✅' : '❌'}`);
+
+          if (!isHammer) {
+            allHammersPassed = false;
+            break;
+          }
+        }
+
+        if (allHammersPassed) {
+          console.log(`🎉 HAMMER pattern PASSED for all ${timeframes.length} timeframes`);
+        }
+        return allHammersPassed;
 
       case "INVERTED_HAMMER":
         // Inverted Hammer: Bearish reversal pattern
         // Conditions:
         // 1. Open AND Close both in lower 30% of range (both <= 30% from low)
-        // Example: High=120, Low=100, Range=20, Lower 30% = 6, Bottom zone = 106
-        // Open=102 and Close=104 both <= 106 → Inverted Hammer ✅
-        if (range === 0) {
-          console.log(`   Inverted Hammer check: Range is 0, skipping`);
+        if (timeframes.length === 0 || !symbol) {
+          console.log(`⚠️ No timeframes selected for INVERTED_HAMMER condition`);
           return false;
         }
 
-        // Calculate positions from low
-        const openPositionFromLowInv = (open - low) / range;
-        const closePositionFromLowInv = (close - low) / range;
+        console.log(`🔍 Checking INVERTED_HAMMER pattern for ${timeframes.length} timeframes (ALL must pass)`);
 
-        // Lower 30% zone: 30% and below
-        const lower30PercentThreshold = 0.3;
+        // ✅ PHASE 1: Pre-fetch ALL timeframes first
+        let invHammerDataReady = true;
+        let invHammerPendingTFs = [];
 
-        // Check: Both open and close in lower 30%
-        const bothInLower30 =
-          openPositionFromLowInv <= lower30PercentThreshold &&
-          closePositionFromLowInv <= lower30PercentThreshold;
-
-        // Confirmation: Current live price above candle open (timeframe confirmation)
-        // For multiple timeframes: check if current price > open for ALL selected timeframes
-        let timeframeConfirmationInv = true;
-
-        if (timeframes.length > 0 && symbol) {
-          // Check confirmation for each selected timeframe
-          for (const timeframe of timeframes) {
-            let candle = this.getCandleData(symbol, timeframe);
-
-            // If candle data is missing or null, fetch from Binance API
-            if (!candle || candle.open === null) {
-              console.log(
-                `   ⚠️ Timeframe ${timeframe}: Local candle data missing, fetching from Binance...`
-              );
-              const binanceCandle = await this.fetchCandleFromBinance(
-                symbol,
-                timeframe
-              );
-              if (binanceCandle) {
-                // Update local candle data with Binance data
-                candle = this.getCandleData(symbol, timeframe);
-                candle.open = binanceCandle.open;
-                candle.high = binanceCandle.high;
-                candle.low = binanceCandle.low;
-                candle.close = binanceCandle.close;
-                candle.volume = binanceCandle.volume;
-                candle.startTime = binanceCandle.startTime;
-                candle.endTime = binanceCandle.endTime;
-                candle.isComplete = binanceCandle.isComplete;
-                console.log(
-                  `   ✅ Fetched candle from Binance for ${timeframe}: O=${candle.open}, C=${candle.close}`
-                );
-              }
-            }
-
-            if (candle && candle.open) {
-              const tfConfirmed = currentPrice > candle.open;
-              console.log(
-                `   Timeframe ${timeframe} confirmation: ${tfConfirmed} (Current ${currentPrice} > Open ${candle.open})`
-              );
-              if (!tfConfirmed) {
-                timeframeConfirmationInv = false;
-                break; // One timeframe failed, pattern invalid
-              }
-            }
+        for (const timeframe of timeframes) {
+          const candle = this.getCandleDataOrQueue(symbol, timeframe);
+          if (!candle || candle.open === null || candle.high === null || candle.low === null) {
+            invHammerDataReady = false;
+            invHammerPendingTFs.push(timeframe);
           }
-        } else {
-          // Fallback: use current priceData open for confirmation
-          timeframeConfirmationInv = currentPrice > open;
         }
 
-        const isInvertedHammer = bothInLower30 && timeframeConfirmationInv;
+        // ✅ PHASE 2: Wait until ALL data is ready
+        if (!invHammerDataReady) {
+          console.log(`⏳ INVERTED_HAMMER: Waiting for ${invHammerPendingTFs.length}/${timeframes.length} timeframes: [${invHammerPendingTFs.join(', ')}]`);
+          return false;
+        }
 
-        console.log(`   Inverted Hammer check: ${isInvertedHammer}`);
-        console.log(
-          `   Open position: ${(openPositionFromLowInv * 100).toFixed(
-            2
-          )}% (${open}), Close position: ${(
-            closePositionFromLowInv * 100
-          ).toFixed(2)}% (${close})`
-        );
-        console.log(
-          `   Both in lower 30%: ${bothInLower30} (Open <= 30%, Close <= 30%)`
-        );
-        console.log(
-          `   Timeframe confirmation: ${timeframeConfirmationInv} (Current Price ${currentPrice} > Open for all selected timeframes)`
-        );
-        console.log(
-          `   Range: ${range}, Lower 30% zone ends at: ${(
-            low +
-            range * 0.3
-          ).toFixed(2)}`
-        );
+        // ✅ PHASE 3: All data ready - check conditions
+        console.log(`✅ INVERTED_HAMMER: All ${timeframes.length} timeframes data ready, checking pattern...`);
 
-        return isInvertedHammer;
+        let allInvertedHammersPassed = true;
+
+        for (const timeframe of timeframes) {
+          const candle = this.candleCache.get(`${symbol}_${timeframe}`);
+
+          const openInv = parseFloat(candle.open);
+          const highInv = parseFloat(candle.high);
+          const lowInv = parseFloat(candle.low);
+          const closeInv = parseFloat(candle.close || currentPrice);
+          const rangeInv = highInv - lowInv;
+
+          if (rangeInv === 0) {
+            console.log(`   [${timeframe}] Inverted Hammer: Range is 0, FAIL`);
+            allInvertedHammersPassed = false;
+            break;
+          }
+
+          const openPositionFromLowInv = (openInv - lowInv) / rangeInv;
+          const closePositionFromLowInv = (closeInv - lowInv) / rangeInv;
+          const lower30PercentThreshold = 0.3;
+
+          const bothInLower30 =
+            openPositionFromLowInv <= lower30PercentThreshold &&
+            closePositionFromLowInv <= lower30PercentThreshold;
+
+          const priceConfirmedInv = currentPrice < openInv;
+          const isInvertedHammer = bothInLower30 && priceConfirmedInv;
+
+          console.log(`📊 [${timeframe}] INV_HAMMER: O=${openInv}, H=${highInv}, L=${lowInv}, C=${closeInv}, Pattern: ${isInvertedHammer ? '✅' : '❌'}`);
+
+          if (!isInvertedHammer) {
+            allInvertedHammersPassed = false;
+            break;
+          }
+        }
+
+        if (allInvertedHammersPassed) {
+          console.log(`🎉 INVERTED_HAMMER pattern PASSED for all ${timeframes.length} timeframes`);
+        }
+        return allInvertedHammersPassed;
 
       default:
         console.log(`   Unknown candle condition: ${condition}`);
@@ -3612,24 +3575,24 @@ class RealTimeAlertProcessor {
   async removeAlertsForSymbol(symbol, userId) {
     try {
       console.log(`🗑️ Removing alerts for symbol: ${symbol}, user: ${userId}`);
-      
+
       // Get current alerts for this symbol
       const symbolAlerts = this.activeAlerts.get(symbol) || [];
-      
+
       // Filter out alerts for this specific user
       const remainingAlerts = symbolAlerts.filter(
         (alert) => alert.userId.toString() !== userId.toString()
       );
-      
+
       const removedCount = symbolAlerts.length - remainingAlerts.length;
       console.log(`📊 Removed ${removedCount} alerts for ${symbol} (user: ${userId})`);
-      
+
       // Update in-memory cache
       if (remainingAlerts.length === 0) {
         // No alerts left for this symbol - remove completely
         this.activeAlerts.delete(symbol);
         console.log(`✅ Removed symbol ${symbol} from activeAlerts (no alerts left)`);
-        
+
         // Clean up candle data for this symbol
         for (const [key, candle] of this.candleData.entries()) {
           if (key.startsWith(`${symbol}_`)) {
@@ -3646,7 +3609,7 @@ class RealTimeAlertProcessor {
       const redis = await this.initRedisClient();
       if (redis) {
         const cacheKey = `alerts:cache:${symbol}`;
-        
+
         if (remainingAlerts.length === 0) {
           await redis.del(cacheKey);
           console.log(`✅ Deleted Redis cache for ${symbol}`);
@@ -3655,7 +3618,7 @@ class RealTimeAlertProcessor {
           console.log(`✅ Updated Redis cache for ${symbol}`);
         }
       }
-      
+
       // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
       // This ensures the engine stops processing if no alerts remain
       await this.updateMicroBatchActiveSymbols();
@@ -3720,7 +3683,7 @@ class RealTimeAlertProcessor {
           }
         }
       }
-      
+
       // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
       // This ensures the engine stops processing removed symbols
       await this.updateMicroBatchActiveSymbols();
@@ -3794,7 +3757,7 @@ class RealTimeAlertProcessor {
         // Reset baseline for this alert (new conditions = new baseline)
         const alertKey = `${alertId}_${symbol}`;
         this.alertBaselines.delete(alertKey);
-        
+
         // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
         // This ensures the engine starts processing this new symbol
         await this.updateMicroBatchActiveSymbols();
@@ -3833,7 +3796,7 @@ class RealTimeAlertProcessor {
           break;
         }
       }
-      
+
       console.log(`🔍 Removing alert ${alertId}, found symbol: ${removedSymbol}`);
 
       if (!removed || !removedSymbol) {
@@ -3958,7 +3921,7 @@ class RealTimeAlertProcessor {
             }
           }
         }
-        
+
         // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
         // This ensures the engine stops processing removed symbols
         await this.updateMicroBatchActiveSymbols();
@@ -4464,7 +4427,7 @@ class RealTimeAlertProcessor {
   async reloadAlertsCache() {
     console.log("🔄 Reloading alerts cache...");
     await this.loadAlertsToRedisCache();
-    
+
     // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
     // This ensures the engine stays in sync with database changes
     await this.updateMicroBatchActiveSymbols();
@@ -4698,7 +4661,7 @@ class RealTimeAlertProcessor {
         console.log("📊 Sending processor stats...");
         await this.sendProcessorStats();
         break;
-        
+
       case "reset_rsi_ban":
         console.log("🛡️ Resetting RSI API ban...");
         this.apiBanUntil = 0;
@@ -4709,7 +4672,7 @@ class RealTimeAlertProcessor {
         }
         console.log("✅ RSI ban reset, queue cleared, circuit breaker reset");
         break;
-        
+
       case "reset_rsi_circuit_breaker":
         console.log("🛡️ Resetting RSI circuit breaker...");
         if (this.rsiFailures) {
@@ -4718,7 +4681,7 @@ class RealTimeAlertProcessor {
           console.log(`✅ Reset ${count} RSI circuit breaker failures`);
         }
         break;
-        
+
       case "reset_candle_ban":
         console.log("🛡️ Resetting Candle API ban...");
         this.candleApiBanUntil = 0;
@@ -4726,7 +4689,7 @@ class RealTimeAlertProcessor {
         this.pendingCandleRequests.clear();
         console.log("✅ Candle ban reset, queue cleared");
         break;
-        
+
       case "get_microbatch_stats":
         console.log("📊 Sending micro-batch stats...");
         await this.sendMicroBatchStats();
