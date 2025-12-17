@@ -49,8 +49,8 @@ module.exports = {
       },
       // Minimal logging - only errors
       error_file: "./logs/binance-worker-error.log",
-      out_file: "/dev/null",
-      log_file: "/dev/null",
+      out_file: "./logs/binance-worker.log",
+      log_file: "./logs/binance-worker.log",
       time: true,
     },
     {
