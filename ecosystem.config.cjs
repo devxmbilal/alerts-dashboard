@@ -26,8 +26,8 @@ module.exports = {
       },
       // Minimal logging - only errors
       error_file: "./logs/alerts-dashboard-error.log",
-      out_file: "./logs/alerts-dashboard.log",
-      log_file: "./logs/alerts-dashboard.log",
+      out_file: "/dev/null",
+      log_file: "/dev/null",
       time: true,
       merge_logs: true,
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
