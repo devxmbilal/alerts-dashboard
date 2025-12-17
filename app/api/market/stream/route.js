@@ -237,8 +237,8 @@ async function sendInitialData(controller, symbols) {
         console.log(`📊 Found ${validData.length} market data entries from Redis`);
       }
 
-      // FALLBACK: If Redis data is sparse (<100 pairs), fetch from Binance bulk API
-      if (validData.length < 100) {
+      // FALLBACK: If Redis data is sparse (<300 pairs), fetch from Binance bulk API for fresh data
+      if (validData.length < 300) {
         console.log("⚡ Redis sparse, fetching from Binance bulk API...");
         try {
           const response = await fetch("https://api.binance.com/api/v3/ticker/24hr", {
