@@ -248,9 +248,23 @@ async function sendInitialData(controller, symbols) {
           });
           const tickers = await response.json();
 
-          // Filter USDT pairs only
+          // Filter USDT pairs only (active, no leveraged tokens)
+          const leveragedTokens = ['BULL', 'BEAR', 'UP', 'DOWN', '3L', '3S', '5L', '5S', '2L', '2S'];
+
           validData = tickers
-            .filter(t => t.symbol.endsWith("USDT") && !t.symbol.includes("_"))
+            .filter(t => {
+              // Only USDT pairs
+              if (!t.symbol.endsWith("USDT")) return false;
+              // Exclude premium pairs
+              if (t.symbol.includes("_")) return false;
+              // Exclude leveraged tokens
+              if (leveragedTokens.some(token => t.symbol.includes(token))) return false;
+              // Exclude BUSD base pairs
+              if (t.symbol.startsWith("BUSD")) return false;
+              // Must have valid price (active trading)
+              if (!t.lastPrice || parseFloat(t.lastPrice) === 0) return false;
+              return true;
+            })
             .map(t => ({
               symbol: t.symbol,
               price: parseFloat(t.lastPrice),
