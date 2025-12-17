@@ -26,8 +26,8 @@ module.exports = {
       },
       // Minimal logging - only errors
       error_file: "./logs/alerts-dashboard-error.log",
-      out_file: "/dev/null",  // Disable stdout logs to save space
-      log_file: "/dev/null",
+      out_file: "./logs/alerts-dashboard.log",
+      log_file: "./logs/alerts-dashboard.log",
       time: true,
       merge_logs: true,
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
