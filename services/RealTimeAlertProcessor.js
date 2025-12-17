@@ -3983,64 +3983,49 @@ class RealTimeAlertProcessor {
         );
       }
 
-      // OPTIMIZATION: Use WebSocket data first (instant, no API delay)
-      // WebSocket ticker data has OHLC values from Binance
-      if (
-        priceData.open &&
-        priceData.high &&
-        priceData.low &&
-        priceData.close
-      ) {
-        // Use WebSocket OHLC data (fastest - no API call)
-        candle.open = parseFloat(priceData.open);
-        candle.high = parseFloat(priceData.high);
-        candle.low = parseFloat(priceData.low);
-        candle.close = parseFloat(priceData.close);
-        candle.volume = parseFloat(priceData.volume) || 0;
-        candle.startTime = candleStartTime;
-        candle.endTime = candleStartTime + timeframeMs;
-        candle.isComplete = false; // Current candle is still forming
-        console.log(
-          `🕯️ New candle started for ${symbol} (${timeframe}) from WebSocket: Open=${candle.open}, Close=${candle.close}`
-        );
-      } else {
-        // Fallback: use current price data if WebSocket OHLC not available
-        candle.open = parseFloat(priceData.price);
-        candle.high = parseFloat(priceData.price);
-        candle.low = parseFloat(priceData.price);
-        candle.close = parseFloat(priceData.price);
-        candle.volume = parseFloat(priceData.volume) || 0;
-        candle.startTime = candleStartTime;
+      // CRITICAL FIX: WebSocket ticker OHLC is 24-hour data, NOT current candle data!
+      // DO NOT use priceData.open - it's the 24h opening price, not the candle's open!
+      // Always fetch from Binance klines API for accurate candle open price.
 
-        // OPTIMIZATION: Fetch from Binance API in background (non-blocking)
-        // Only if we need more accurate data
-        this.fetchCandleFromBinance(symbol, timeframe)
-          .then((binanceCandle) => {
-            if (binanceCandle && binanceCandle.startTime === candleStartTime) {
-              // Update with more accurate Binance data
-              const currentCandle = this.getCandleData(symbol, timeframe);
-              if (currentCandle.startTime === candleStartTime) {
-                currentCandle.open = binanceCandle.open;
-                currentCandle.high = Math.max(
-                  currentCandle.high,
-                  binanceCandle.high
-                );
-                currentCandle.low = Math.min(
-                  currentCandle.low,
-                  binanceCandle.low
-                );
-                currentCandle.close = binanceCandle.close;
-                currentCandle.volume = binanceCandle.volume;
-              }
+      // Temporarily use live price until Binance API returns actual candle data
+      candle.open = parseFloat(priceData.price);
+      candle.high = parseFloat(priceData.price);
+      candle.low = parseFloat(priceData.price);
+      candle.close = parseFloat(priceData.price);
+      candle.volume = parseFloat(priceData.volume) || 0;
+      candle.startTime = candleStartTime;
+      candle.endTime = candleStartTime + timeframeMs;
+      candle.isComplete = false;
+
+      console.log(
+        `🕯️ New candle started for ${symbol} (${timeframe}): Open=${candle.open} (temporary - fetching from Binance API)`
+      );
+
+      // CRITICAL: Fetch actual candle open from Binance klines API (this is the correct open)
+      this.fetchCandleFromBinance(symbol, timeframe)
+        .then((binanceCandle) => {
+          if (binanceCandle && binanceCandle.startTime === candleStartTime) {
+            // Update with accurate Binance data
+            const currentCandle = this.getCandleData(symbol, timeframe);
+            if (currentCandle.startTime === candleStartTime) {
+              currentCandle.open = binanceCandle.open; // This is the REAL candle open!
+              currentCandle.high = Math.max(
+                currentCandle.high,
+                binanceCandle.high
+              );
+              currentCandle.low = Math.min(
+                currentCandle.low,
+                binanceCandle.low
+              );
+              currentCandle.close = binanceCandle.close;
+              currentCandle.volume = binanceCandle.volume;
+              console.log(
+                `✅ Updated ${symbol} (${timeframe}) with Binance candle open: ${binanceCandle.open}`
+              );
             }
-          })
-          .catch(() => { }); // Silent fail - non-critical
-        candle.endTime = candleStartTime + timeframeMs;
-        candle.isComplete = false;
-        console.log(
-          `🕯️ New candle started for ${symbol} (${timeframe}): Open=${candle.open} (using live price)`
-        );
-      }
+          }
+        })
+        .catch(() => { }); // Silent fail - non-critical
     } else {
       // OPTIMIZATION: Update existing candle with WebSocket OHLC data (if available)
       // This ensures we have accurate high/low values from Binance
