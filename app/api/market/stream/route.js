@@ -208,32 +208,76 @@ async function sendInitialData(controller, symbols) {
     let validData = [];
 
     if (symbols.length === 0) {
-      // If no specific symbols requested, get all available data using PIPELINE
+      // FAST LOAD: First try Redis pipeline
       console.log("📊 Fetching all market data using pipeline...");
       const allKeys = await redis.keys("crypto:*");
       const cryptoKeys = allKeys.filter(
         (key) => key !== "crypto:usdt_pairs" && !key.includes("undefined")
       );
 
-      // Use Redis Pipeline for instant fetch
-      const pipeline = redis.pipeline();
-      cryptoKeys.forEach((key) => {
-        pipeline.get(key);
-      });
+      if (cryptoKeys.length > 0) {
+        // Use Redis Pipeline for instant fetch
+        const pipeline = redis.pipeline();
+        cryptoKeys.forEach((key) => {
+          pipeline.get(key);
+        });
 
-      const results = await pipeline.exec();
-      validData = results
-        .map(([err, data]) => {
-          if (err || !data) return null;
-          try {
-            return JSON.parse(data);
-          } catch (e) {
-            return null;
-          }
-        })
-        .filter(Boolean);
+        const results = await pipeline.exec();
+        validData = results
+          .map(([err, data]) => {
+            if (err || !data) return null;
+            try {
+              return JSON.parse(data);
+            } catch (e) {
+              return null;
+            }
+          })
+          .filter(Boolean);
 
-      console.log(`📊 Found ${validData.length} market data entries instantly`);
+        console.log(`📊 Found ${validData.length} market data entries from Redis`);
+      }
+
+      // FALLBACK: If Redis data is sparse (<100 pairs), fetch from Binance bulk API
+      if (validData.length < 100) {
+        console.log("⚡ Redis sparse, fetching from Binance bulk API...");
+        try {
+          const response = await fetch("https://api.binance.com/api/v3/ticker/24hr", {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+          });
+          const tickers = await response.json();
+
+          // Filter USDT pairs only
+          validData = tickers
+            .filter(t => t.symbol.endsWith("USDT") && !t.symbol.includes("_"))
+            .map(t => ({
+              symbol: t.symbol,
+              price: parseFloat(t.lastPrice),
+              change: parseFloat(t.priceChangePercent),
+              volume: parseFloat(t.quoteVolume),
+              high24h: parseFloat(t.highPrice),
+              low24h: parseFloat(t.lowPrice),
+              lastUpdate: Date.now(),
+            }));
+
+          console.log(`⚡ Loaded ${validData.length} pairs from Binance in ONE request!`);
+
+          // Cache in Redis for future (non-blocking)
+          const cachePipeline = redis.pipeline();
+          validData.forEach(item => {
+            cachePipeline.setex(
+              `crypto:${item.symbol.toLowerCase()}`,
+              60, // 1 minute cache
+              JSON.stringify(item)
+            );
+          });
+          cachePipeline.exec().catch(err => console.warn("Redis cache error:", err.message));
+
+        } catch (binanceError) {
+          console.error("❌ Binance bulk API error:", binanceError.message);
+        }
+      }
     } else {
       // Get specific symbols data using PIPELINE
       const pipeline = redis.pipeline();

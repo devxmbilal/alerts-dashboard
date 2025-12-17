@@ -509,7 +509,7 @@ class BinanceWorker {
       } catch (error) {
         console.error("❌ Error during scheduled refresh:", error);
       }
-    }, 86400000); // Every 24 hours
+    }, 28800000); // Every 8 hours (faster detection of new/removed pairs)
   }
 
   reconnect() {
