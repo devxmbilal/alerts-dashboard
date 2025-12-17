@@ -36,9 +36,10 @@ class CandlestickChartGenerator {
      * Generate candlestick chart from OHLCV data
      * @param {string} symbol - Trading pair symbol
      * @param {Array} candles - Array of {open, high, low, close, volume, timestamp}
+     * @param {string} timeframe - Chart timeframe (1m, 5m, 15m, 1h, 4h, 1d, 1w)
      * @returns {Buffer} - PNG image buffer
      */
-    generate(symbol, candles) {
+    generate(symbol, candles, timeframe = "5m") {
         if (!candles || candles.length === 0) {
             throw new Error("No candle data provided");
         }
@@ -107,8 +108,8 @@ class CandlestickChartGenerator {
         // Draw time labels on X-axis (optional)
         this.drawTimeLabels(ctx, candles, candleSpacing, chartHeight);
 
-        // Draw title
-        this.drawTitle(ctx, symbol, candles);
+        // Draw title with timeframe
+        this.drawTitle(ctx, symbol, candles, timeframe);
 
         // Draw current price indicator
         this.drawCurrentPrice(ctx, candles[candles.length - 1].close, minPrice - pricePadding, maxPrice + pricePadding, priceHeight, chartWidth);
@@ -225,17 +226,17 @@ class CandlestickChartGenerator {
         });
     }
 
-    drawTitle(ctx, symbol, candles) {
+    drawTitle(ctx, symbol, candles, timeframe = "5m") {
         const firstPrice = candles[0].close;
         const lastPrice = candles[candles.length - 1].close;
         const change = ((lastPrice - firstPrice) / firstPrice) * 100;
         const isPositive = change >= 0;
 
-        // Symbol
+        // Symbol + Timeframe
         ctx.fillStyle = "#ffffff";
         ctx.font = "bold 18px Arial";
         ctx.textAlign = "left";
-        ctx.fillText(symbol, this.padding.left, 30);
+        ctx.fillText(`${symbol} · ${timeframe.toUpperCase()}`, this.padding.left, 30);
 
         // Price
         const priceStr = lastPrice >= 1

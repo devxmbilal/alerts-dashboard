@@ -760,7 +760,7 @@ class ChartScreenshotService {
       }
 
       // Use canvas-based candlestick generator (TradingView style)
-      const chartBuffer = candlestickCanvas.generate(symbol, candles);
+      const chartBuffer = candlestickCanvas.generate(symbol, candles, timeframe);
       console.log(`✅ Canvas candlestick chart generated (${(chartBuffer.length / 1024).toFixed(1)}KB)`);
       return chartBuffer;
 
