@@ -48,11 +48,20 @@ export async function POST(request) {
         }
 
         // Build condition document from alert conditions
+        // IMPORTANT: Reset ALL fields first to ensure old conditions are removed
         const conditionData = {
             userId,
             lastUpdatedAt: new Date(),
+            // Reset all condition fields to disabled/empty
+            changePercent: { enabled: false },
+            alertCount: { enabled: false },
+            candle: { enabled: false, timeframes: [] },
+            rsiRange: { enabled: false, timeframes: [] },
+            volume: { enabled: false, timeframes: [] },
+            minDaily: { enabled: false },
         };
 
+        // Now apply only the NEW conditions (overwriting the reset values)
         if (conditions.changePercent) {
             conditionData.changePercent = {
                 enabled: true,
