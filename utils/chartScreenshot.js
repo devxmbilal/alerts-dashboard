@@ -3,6 +3,7 @@ import axios from "axios";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import candlestickCanvas from "./candlestickCanvas.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -300,6 +301,7 @@ class ChartScreenshotService {
       });
 
       return res.data.map((c) => ({
+        timestamp: c[0], // Open time in milliseconds
         openTime: c[0],
         open: parseFloat(c[1]),
         high: parseFloat(c[2]),
@@ -326,6 +328,7 @@ class ChartScreenshotService {
 
   /**
    * Generate Candlestick chart using QuickChart (FAST - PRIMARY METHOD)
+   * Uses OHLC chart type for proper candlestick display like TradingView
    * @param {string} symbol - Trading pair symbol
    * @param {Array} candles - Array of candle objects
    * @returns {Promise<Buffer>} - Chart image buffer
@@ -336,76 +339,81 @@ class ChartScreenshotService {
     }
 
     try {
-      // Calculate price change for color
+      // Calculate price change for title
       const firstPrice = candles[0].close;
       const lastPrice = candles[candles.length - 1].close;
+      const priceChange = ((lastPrice - firstPrice) / firstPrice) * 100;
       const isPositive = lastPrice >= firstPrice;
 
-      // Extract prices and volumes for line chart (QuickChart doesn't support candlestick)
-      const closePrices = candles.map((c) => c.close);
-      const highPrices = candles.map((c) => c.high);
-      const lowPrices = candles.map((c) => c.low);
-      const volumes = candles.map((c) => c.volume);
+      // Format OHLC data for candlestick chart
+      // QuickChart uses boxplot-like format: [open, high, low, close]
+      const ohlcData = candles.map((c) => ({
+        o: c.open,
+        h: c.high,
+        l: c.low,
+        c: c.close,
+      }));
 
-      // Calculate price change percentage
-      const priceChange = ((lastPrice - firstPrice) / firstPrice) * 100;
+      // Volume data with colors based on candle direction
+      const volumeData = candles.map((c, i) => ({
+        x: i,
+        y: c.volume,
+      }));
 
-      // Color scheme based on price direction
-      const lineColor = isPositive ? "rgb(0, 255, 127)" : "rgb(255, 71, 87)"; // Green or Red
-      const fillColor = isPositive
-        ? "rgba(0, 255, 127, 0.1)"
-        : "rgba(255, 71, 87, 0.1)";
-      const volumeColor = isPositive
-        ? "rgba(0, 200, 0, 0.4)"
-        : "rgba(200, 0, 0, 0.4)";
+      const volumeColors = candles.map((c) =>
+        c.close >= c.open ? "rgba(38, 166, 91, 0.6)" : "rgba(231, 76, 60, 0.6)"
+      );
 
-      // Create labels (empty for cleaner look)
-      const labels = candles.map(() => "");
+      // Time labels (empty for cleaner look, or format if needed)
+      const labels = candles.map((c, i) => {
+        if (c.timestamp) {
+          const date = new Date(c.timestamp);
+          return date.toLocaleTimeString("en-US", {
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+          });
+        }
+        return "";
+      });
 
+      // Use box plot style for candlestick simulation (QuickChart compatible)
+      // Since QuickChart doesn't have native candlestick, we use a combination approach
       const chartConfig = {
-        type: "line",
+        type: "bar",
         data: {
           labels: labels,
           datasets: [
+            // Candlestick body (using floating bars)
             {
-              label: `${symbol} Price`,
-              data: closePrices,
-              borderColor: lineColor,
-              backgroundColor: fillColor,
-              borderWidth: 2,
-              tension: 0.4,
-              fill: true,
-              pointRadius: 0,
-              pointHoverRadius: 4,
-              yAxisID: "y",
-            },
-            {
-              label: "High",
-              data: highPrices,
-              borderColor: "rgba(0, 255, 0, 0.3)",
+              type: "bar",
+              label: `${symbol}`,
+              data: candles.map((c) => {
+                const isGreen = c.close >= c.open;
+                return {
+                  x: labels[candles.indexOf(c)],
+                  y: [Math.min(c.open, c.close), Math.max(c.open, c.close)],
+                };
+              }),
+              backgroundColor: candles.map((c) =>
+                c.close >= c.open ? "rgba(38, 166, 91, 1)" : "rgba(231, 76, 60, 1)"
+              ),
+              borderColor: candles.map((c) =>
+                c.close >= c.open ? "rgb(38, 166, 91)" : "rgb(231, 76, 60)"
+              ),
               borderWidth: 1,
-              borderDash: [5, 5],
-              pointRadius: 0,
-              fill: false,
-              yAxisID: "y",
+              barPercentage: 0.8,
+              categoryPercentage: 0.9,
             },
-            {
-              label: "Low",
-              data: lowPrices,
-              borderColor: "rgba(255, 0, 0, 0.3)",
-              borderWidth: 1,
-              borderDash: [5, 5],
-              pointRadius: 0,
-              fill: false,
-              yAxisID: "y",
-            },
+            // Volume bars at bottom
             {
               type: "bar",
               label: "Volume",
-              data: volumes,
-              backgroundColor: volumeColor,
-              yAxisID: "volume-axis",
-              order: 2, // Show behind line chart
+              data: candles.map((c) => c.volume),
+              backgroundColor: volumeColors,
+              yAxisID: "volume",
+              barPercentage: 0.6,
+              order: 2,
             },
           ],
         },
@@ -416,52 +424,52 @@ class ChartScreenshotService {
               display: true,
               position: "top",
               labels: {
-                color: "white",
-                font: { size: 12, weight: "bold" },
-                usePointStyle: true,
+                color: "#ffffff",
+                font: { size: 14, weight: "bold" },
+                boxWidth: 15,
               },
             },
             title: {
               display: true,
-              text: `${symbol} Price Chart (${priceChange >= 0 ? "+" : ""
-                }${priceChange.toFixed(2)}%)`,
-              color: "white",
-              font: { size: 16, weight: "bold" },
-            },
-            tooltip: {
-              enabled: true,
-              mode: "index",
-              intersect: false,
+              text: `📊 ${symbol} | ${priceChange >= 0 ? "+" : ""}${priceChange.toFixed(2)}% | $${lastPrice.toFixed(6)}`,
+              color: isPositive ? "#26a65b" : "#e74c3c",
+              font: { size: 18, weight: "bold" },
+              padding: { top: 10, bottom: 20 },
             },
           },
           scales: {
             x: {
+              display: true,
               ticks: {
-                color: "white",
-                maxTicksLimit: 10,
-                display: false, // Hide x-axis labels for cleaner look
+                color: "#888888",
+                maxTicksLimit: 8,
+                font: { size: 10 },
               },
               grid: {
-                color: "rgba(255,255,255,0.1)",
-                display: true,
+                color: "rgba(255,255,255,0.05)",
               },
             },
             y: {
-              position: "left",
-              ticks: {
-                color: "white",
-                font: { size: 11 },
-              },
-              grid: {
-                color: "rgba(255,255,255,0.1)",
-              },
-            },
-            "volume-axis": {
               type: "linear",
               position: "right",
               ticks: {
-                color: "rgba(255,255,255,0.6)",
-                font: { size: 10 },
+                color: "#ffffff",
+                font: { size: 11 },
+                callback: (value) => {
+                  if (value >= 1) return "$" + value.toFixed(2);
+                  return "$" + value.toFixed(6);
+                },
+              },
+              grid: {
+                color: "rgba(255,255,255,0.08)",
+              },
+            },
+            volume: {
+              type: "linear",
+              position: "left",
+              max: Math.max(...candles.map((c) => c.volume)) * 4,
+              ticks: {
+                display: false,
               },
               grid: {
                 display: false,
@@ -472,7 +480,7 @@ class ChartScreenshotService {
       };
 
       const url = `${this.quickChartBaseUrl
-        }?width=1200&height=600&format=png&backgroundColor=rgb(20,20,20)&c=${encodeURIComponent(
+        }?width=1600&height=800&format=png&backgroundColor=rgb(20,20,20)&c=${encodeURIComponent(
           JSON.stringify(chartConfig)
         )}`;
 
@@ -508,7 +516,7 @@ class ChartScreenshotService {
         // Try POST method for large configs
         try {
           console.log(`📊 Trying POST method for QuickChart (large config)...`);
-          const postUrl = `${this.quickChartBaseUrl}?width=1200&height=600&format=png&backgroundColor=rgb(20,20,20)`;
+          const postUrl = `${this.quickChartBaseUrl}?width=1600&height=800&format=png&backgroundColor=rgb(20,20,20)`;
           res = await axios.post(
             postUrl,
             { config: chartConfig },
@@ -735,45 +743,49 @@ class ChartScreenshotService {
   }
 
   /**
-   * Main capture method - uses QuickChart (FAST), falls back to Puppeteer
+   * Main capture method - uses Canvas for REAL candlestick charts (FAST - no browser needed!)
    * @param {string} symbol - Trading pair symbol (e.g., VANAUSDT, BTCUSDT)
    * @param {string} timeframe - Chart timeframe (1m, 5m, 15m, 1h, 4h, 1d, 1w)
-   * @param {object} options - Options { useQuickChart: true/false, forcePuppeteer: false }
+   * @param {object} options - Options { useCandlestick: true (default) }
    * @returns {Promise<Buffer>} - Screenshot buffer
    */
   async captureChart(symbol, timeframe = "5m", options = {}) {
-    const useQuickChart = options.useQuickChart !== false && this.useQuickChart;
-    const forcePuppeteer = options.forcePuppeteer === true;
+    // Method 1: Canvas-based Candlestick (FAST - 1-2 seconds, real candlesticks!)
+    try {
+      console.log(`🕯️ Generating canvas candlestick chart for ${symbol}...`);
+      const candles = await this.getBinanceCandles(symbol, timeframe, 50);
 
-    // Method 1: QuickChart (FAST - Generated charts, 1-2 seconds)
-    if (useQuickChart && !forcePuppeteer) {
+      if (candles.length === 0) {
+        throw new Error("No candle data available from Binance");
+      }
+
+      // Use canvas-based candlestick generator (TradingView style)
+      const chartBuffer = candlestickCanvas.generate(symbol, candles);
+      console.log(`✅ Canvas candlestick chart generated (${(chartBuffer.length / 1024).toFixed(1)}KB)`);
+      return chartBuffer;
+
+    } catch (canvasError) {
+      // If IP banned, don't fallback
+      if (canvasError.message === "BINANCE_IP_BANNED") {
+        console.warn(`⚠️ Binance IP banned, cannot generate chart`);
+        throw canvasError;
+      }
+
+      console.warn(`⚠️ Canvas chart failed for ${symbol}: ${canvasError.message}`);
+
+      // Method 2: Puppeteer/TradingView (FALLBACK - slower but guaranteed candlestick)
       try {
-        // Fetch candle data from Binance
+        console.log(`📊 Falling back to Puppeteer for ${symbol}...`);
+        return await this.captureChartPuppeteer(symbol, timeframe);
+      } catch (puppeteerError) {
+        console.warn(`⚠️ Puppeteer also failed: ${puppeteerError.message}`);
+
+        // Method 3: QuickChart (LAST RESORT - line chart)
+        console.log(`📊 Using QuickChart as last resort for ${symbol}...`);
         const candles = await this.getBinanceCandles(symbol, timeframe, 50);
-
-        if (candles.length === 0) {
-          throw new Error("No candle data available from Binance");
-        }
-
-        // Generate chart using QuickChart
         return await this.captureCandlestickChart(symbol, candles);
-      } catch (quickChartError) {
-        // If IP banned or other error, skip Puppeteer fallback for IP ban
-        if (quickChartError.message === "BINANCE_IP_BANNED") {
-          console.warn(`⚠️ Skipping Puppeteer fallback due to IP ban`);
-          throw quickChartError;
-        }
-
-        console.warn(
-          `⚠️ QuickChart failed for ${symbol}, falling back to Puppeteer:`,
-          quickChartError.message
-        );
-        // Fall through to Puppeteer fallback
       }
     }
-
-    // Method 2: Puppeteer (FALLBACK - TradingView screenshots, 5-10 seconds)
-    return await this.captureChartPuppeteer(symbol, timeframe);
   }
 
   /**
