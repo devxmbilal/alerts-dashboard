@@ -66,9 +66,10 @@ class CandlestickChartGenerator {
         // Calculate volume range
         const maxVolume = Math.max(...candles.map(c => c.volume));
 
-        // Candle width
-        const candleWidth = (chartWidth / candles.length) * 0.7;
-        const candleSpacing = chartWidth / candles.length;
+        // Candle width - use 75% of chart for candles, leave 25% empty on right
+        const candleAreaWidth = chartWidth * 0.75; // 3/4 of chart width for candles
+        const candleWidth = (candleAreaWidth / candles.length) * 0.7;
+        const candleSpacing = candleAreaWidth / candles.length;
 
         // Draw grid lines
         this.drawGrid(ctx, chartWidth, chartHeight, minPrice - pricePadding, maxPrice + pricePadding);
