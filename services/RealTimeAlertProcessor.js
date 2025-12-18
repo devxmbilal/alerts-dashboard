@@ -2896,7 +2896,25 @@ class RealTimeAlertProcessor {
           const openPrice = parseFloat(candle.open);
           const timeSinceCandleStart = now - candleStartTime;
 
-          // Safety: Skip if we're too close to candle boundary (avoid stale data)
+          // 🛡️ CRITICAL FIX: Validate candle is from CURRENT timeframe boundary
+          // Calculate expected candle start time for this timeframe
+          const timeframeMs = this.getTimeframeMs(timeframe);
+          const expectedCandleStart = Math.floor(now / timeframeMs) * timeframeMs;
+
+          // If cached candle is from a DIFFERENT (expired) period, it's stale!
+          if (candleStartTime !== expectedCandleStart) {
+            console.log(`⚠️ [${timeframe}] STALE CANDLE DETECTED!`);
+            console.log(`   Cached startTime: ${new Date(candleStartTime).toISOString()}`);
+            console.log(`   Expected startTime: ${new Date(expectedCandleStart).toISOString()}`);
+            console.log(`   Invalidating cache and queueing fresh fetch...`);
+
+            // Invalidate stale cache entry
+            this.candleCache.delete(`${symbol}_${timeframe}`);
+            this.getCandleDataOrQueue(symbol, timeframe); // Queue fresh fetch
+            return false; // Wait for fresh data
+          }
+
+          // Safety: Skip if we're too close to candle boundary (avoid using old candle's data)
           if (timeSinceCandleStart < CANDLE_START_BUFFER_MS) {
             console.log(`⏳ [${timeframe}] Too close to candle start (${timeSinceCandleStart}ms), waiting...`);
             return false; // Wait for candle to stabilize
@@ -2958,6 +2976,18 @@ class RealTimeAlertProcessor {
 
         for (const timeframe of timeframes) {
           const candle = this.candleCache.get(`${symbol}_${timeframe}`);
+          const now = Date.now();
+
+          // 🛡️ CRITICAL: Validate candle is from CURRENT timeframe boundary
+          const timeframeMs = this.getTimeframeMs(timeframe);
+          const expectedCandleStart = Math.floor(now / timeframeMs) * timeframeMs;
+
+          if (candle.startTime !== expectedCandleStart) {
+            console.log(`⚠️ [${timeframe}] HAMMER: STALE CANDLE DETECTED! Refetching...`);
+            this.candleCache.delete(`${symbol}_${timeframe}`);
+            this.getCandleDataOrQueue(symbol, timeframe);
+            return false;
+          }
 
           const open = parseFloat(candle.open);
           const high = parseFloat(candle.high);
@@ -3031,6 +3061,18 @@ class RealTimeAlertProcessor {
 
         for (const timeframe of timeframes) {
           const candle = this.candleCache.get(`${symbol}_${timeframe}`);
+          const now = Date.now();
+
+          // 🛡️ CRITICAL: Validate candle is from CURRENT timeframe boundary
+          const timeframeMs = this.getTimeframeMs(timeframe);
+          const expectedCandleStart = Math.floor(now / timeframeMs) * timeframeMs;
+
+          if (candle.startTime !== expectedCandleStart) {
+            console.log(`⚠️ [${timeframe}] INVERTED_HAMMER: STALE CANDLE DETECTED! Refetching...`);
+            this.candleCache.delete(`${symbol}_${timeframe}`);
+            this.getCandleDataOrQueue(symbol, timeframe);
+            return false;
+          }
 
           const openInv = parseFloat(candle.open);
           const highInv = parseFloat(candle.high);
