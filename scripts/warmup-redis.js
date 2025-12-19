@@ -33,42 +33,72 @@ async function warmupRedis() {
     const startTime = Date.now();
 
     try {
-        // Step 1: Fetch ALL pairs from Binance BULK API (one request)
-        console.log("📡 Fetching all USDT pairs from Binance...");
+        // Step 1: Fetch exchangeInfo to get VALID trading pairs (like binance-worker does)
+        console.log("📡 Fetching exchangeInfo from Binance...");
 
-        const response = await fetch("https://api.binance.com/api/v3/ticker/24hr", {
+        const exchangeResponse = await fetch("https://api.binance.com/api/v3/exchangeInfo", {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': 'application/json',
             },
         });
 
-        if (!response.ok) {
-            throw new Error(`Binance API returned ${response.status}`);
+        if (!exchangeResponse.ok) {
+            throw new Error(`Binance exchangeInfo returned ${exchangeResponse.status}`);
         }
 
-        const tickers = await response.json();
-        console.log(`📊 Received ${tickers.length} tickers from Binance`);
+        const exchangeInfo = await exchangeResponse.json();
 
-        // Step 2: Filter for USDT spot pairs only
-        const leveragedTokens = ['BULL', 'BEAR', '3L', '3S', '5L', '5S', '2L', '2S'];
+        // Filter for USDT spot pairs EXACTLY like binance-worker.js does
+        const validPairs = new Set(
+            exchangeInfo.symbols
+                .filter((symbol) => {
+                    return (
+                        symbol.status === "TRADING" && // Only active trading pairs
+                        symbol.symbol.endsWith("USDT") && // Only USDT pairs
+                        symbol.isSpotTradingAllowed === true && // Only spot trading allowed
+                        !symbol.symbol.includes("_") && // Exclude premium pairs
+                        !symbol.symbol.includes("BULL") && // Exclude leveraged tokens
+                        !symbol.symbol.includes("BEAR") && // Exclude leveraged tokens
+                        !symbol.symbol.includes("3L") && // Exclude leveraged tokens
+                        !symbol.symbol.includes("3S") && // Exclude leveraged tokens
+                        !symbol.symbol.includes("5L") && // Exclude leveraged tokens
+                        !symbol.symbol.includes("5S") && // Exclude leveraged tokens
+                        symbol.baseAsset !== "BUSD" && // Exclude BUSD pairs
+                        symbol.quoteAsset === "USDT" // Only USDT as quote asset
+                    );
+                })
+                .map((symbol) => symbol.symbol)
+        );
 
-        const usdtPairs = tickers.filter(t => {
-            if (!t.symbol.endsWith("USDT")) return false;
-            if (t.symbol.includes("_")) return false;
-            if (leveragedTokens.some(token => t.symbol.includes(token))) return false;
-            if (t.symbol.startsWith("BUSD")) return false;
-            if (!t.lastPrice || parseFloat(t.lastPrice) === 0) return false;
-            return true;
+        console.log(`📊 Found ${validPairs.size} valid USDT spot pairs from exchangeInfo`);
+
+        // Step 2: Now fetch ticker data
+        console.log("📡 Fetching ticker data from Binance...");
+
+        const tickerResponse = await fetch("https://api.binance.com/api/v3/ticker/24hr", {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json',
+            },
         });
 
-        console.log(`📊 Filtered to ${usdtPairs.length} USDT spot pairs`);
+        if (!tickerResponse.ok) {
+            throw new Error(`Binance ticker API returned ${tickerResponse.status}`);
+        }
 
-        // Step 3: Cache ALL data using Redis pipeline (super fast)
+        const tickers = await tickerResponse.json();
+        console.log(`📊 Received ${tickers.length} tickers from Binance`);
+
+        // Step 3: Filter tickers to only include valid pairs from exchangeInfo
+        const filteredTickers = tickers.filter(t => validPairs.has(t.symbol));
+        console.log(`📊 Filtered to ${filteredTickers.length} valid trading pairs`);
+
+        // Step 4: Cache ALL data using Redis pipeline (super fast)
         const pipeline = redis.pipeline();
         const pairsList = [];
 
-        for (const t of usdtPairs) {
+        for (const t of filteredTickers) {
             const processedData = {
                 symbol: t.symbol,
                 price: parseFloat(t.lastPrice),
@@ -103,7 +133,7 @@ async function warmupRedis() {
         const duration = Date.now() - startTime;
         console.log(`\n✅ ========================================`);
         console.log(`✅ Redis Warmup Complete!`);
-        console.log(`✅ Cached ${usdtPairs.length} pairs in ${duration}ms`);
+        console.log(`✅ Cached ${filteredTickers.length} pairs in ${duration}ms`);
         console.log(`✅ Dashboard will now load ALL pairs instantly!`);
         console.log(`✅ ========================================\n`);
 
