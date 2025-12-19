@@ -2896,33 +2896,7 @@ class RealTimeAlertProcessor {
           const openPrice = parseFloat(candle.open);
           const timeSinceCandleStart = now - candleStartTime;
 
-          // 🛡️ STALE CANDLE FIX: Use tolerance-based check instead of strict equality
-          // Only invalidate if candle is from a COMPLETELY DIFFERENT (old/expired) period
-          const timeframeMs = this.getTimeframeMs(timeframe);
-          const expectedCandleStart = Math.floor(now / timeframeMs) * timeframeMs;
-          const candleAge = now - candleStartTime;
-
-          // Candle is stale only if:
-          // 1. It belongs to a PREVIOUS timeframe period (candleStartTime < expectedCandleStart)
-          // 2. AND the age exceeds the timeframe duration (truly old data)
-          const isFromPreviousPeriod = candleStartTime < expectedCandleStart;
-          const isExpired = candleAge > timeframeMs;
-
-          if (isFromPreviousPeriod && isExpired) {
-            console.log(`⚠️ [${timeframe}] STALE CANDLE - From expired period!`);
-            console.log(`   Cached startTime: ${new Date(candleStartTime).toISOString()}`);
-            console.log(`   Expected startTime: ${new Date(expectedCandleStart).toISOString()}`);
-            console.log(`   Age: ${Math.round(candleAge / 1000)}s (Max: ${Math.round(timeframeMs / 1000)}s)`);
-
-            // Invalidate stale cache entry
-            this.candleCache.delete(`${symbol}_${timeframe}`);
-            this.getCandleDataOrQueue(symbol, timeframe); // Queue fresh fetch
-            return false; // Wait for fresh data
-          }
-
-          // If candle is slightly old but from current period, it's still valid (use it)
-
-          // Safety: Skip if we're too close to candle boundary (avoid using old candle's data)
+          // Safety: Skip if we're too close to candle boundary (avoid stale data)
           if (timeSinceCandleStart < CANDLE_START_BUFFER_MS) {
             console.log(`⏳ [${timeframe}] Too close to candle start (${timeSinceCandleStart}ms), waiting...`);
             return false; // Wait for candle to stabilize
@@ -2984,21 +2958,6 @@ class RealTimeAlertProcessor {
 
         for (const timeframe of timeframes) {
           const candle = this.candleCache.get(`${symbol}_${timeframe}`);
-          const now = Date.now();
-
-          // 🛡️ TOLERANCE-BASED STALE CHECK: Only invalidate truly expired candles
-          const timeframeMs = this.getTimeframeMs(timeframe);
-          const expectedCandleStart = Math.floor(now / timeframeMs) * timeframeMs;
-          const candleAge = now - candle.startTime;
-          const isFromPreviousPeriod = candle.startTime < expectedCandleStart;
-          const isExpired = candleAge > timeframeMs;
-
-          if (isFromPreviousPeriod && isExpired) {
-            console.log(`⚠️ [${timeframe}] HAMMER: STALE CANDLE - Refetching...`);
-            this.candleCache.delete(`${symbol}_${timeframe}`);
-            this.getCandleDataOrQueue(symbol, timeframe);
-            return false;
-          }
 
           const open = parseFloat(candle.open);
           const high = parseFloat(candle.high);
@@ -3072,21 +3031,6 @@ class RealTimeAlertProcessor {
 
         for (const timeframe of timeframes) {
           const candle = this.candleCache.get(`${symbol}_${timeframe}`);
-          const now = Date.now();
-
-          // 🛡️ TOLERANCE-BASED STALE CHECK: Only invalidate truly expired candles
-          const timeframeMs = this.getTimeframeMs(timeframe);
-          const expectedCandleStart = Math.floor(now / timeframeMs) * timeframeMs;
-          const candleAge = now - candle.startTime;
-          const isFromPreviousPeriod = candle.startTime < expectedCandleStart;
-          const isExpired = candleAge > timeframeMs;
-
-          if (isFromPreviousPeriod && isExpired) {
-            console.log(`⚠️ [${timeframe}] INVERTED_HAMMER: STALE CANDLE - Refetching...`);
-            this.candleCache.delete(`${symbol}_${timeframe}`);
-            this.getCandleDataOrQueue(symbol, timeframe);
-            return false;
-          }
 
           const openInv = parseFloat(candle.open);
           const highInv = parseFloat(candle.high);
