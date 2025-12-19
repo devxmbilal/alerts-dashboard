@@ -2896,23 +2896,31 @@ class RealTimeAlertProcessor {
           const openPrice = parseFloat(candle.open);
           const timeSinceCandleStart = now - candleStartTime;
 
-          // 🛡️ CRITICAL FIX: Validate candle is from CURRENT timeframe boundary
-          // Calculate expected candle start time for this timeframe
+          // 🛡️ STALE CANDLE FIX: Use tolerance-based check instead of strict equality
+          // Only invalidate if candle is from a COMPLETELY DIFFERENT (old/expired) period
           const timeframeMs = this.getTimeframeMs(timeframe);
           const expectedCandleStart = Math.floor(now / timeframeMs) * timeframeMs;
+          const candleAge = now - candleStartTime;
 
-          // If cached candle is from a DIFFERENT (expired) period, it's stale!
-          if (candleStartTime !== expectedCandleStart) {
-            console.log(`⚠️ [${timeframe}] STALE CANDLE DETECTED!`);
+          // Candle is stale only if:
+          // 1. It belongs to a PREVIOUS timeframe period (candleStartTime < expectedCandleStart)
+          // 2. AND the age exceeds the timeframe duration (truly old data)
+          const isFromPreviousPeriod = candleStartTime < expectedCandleStart;
+          const isExpired = candleAge > timeframeMs;
+
+          if (isFromPreviousPeriod && isExpired) {
+            console.log(`⚠️ [${timeframe}] STALE CANDLE - From expired period!`);
             console.log(`   Cached startTime: ${new Date(candleStartTime).toISOString()}`);
             console.log(`   Expected startTime: ${new Date(expectedCandleStart).toISOString()}`);
-            console.log(`   Invalidating cache and queueing fresh fetch...`);
+            console.log(`   Age: ${Math.round(candleAge / 1000)}s (Max: ${Math.round(timeframeMs / 1000)}s)`);
 
             // Invalidate stale cache entry
             this.candleCache.delete(`${symbol}_${timeframe}`);
             this.getCandleDataOrQueue(symbol, timeframe); // Queue fresh fetch
             return false; // Wait for fresh data
           }
+
+          // If candle is slightly old but from current period, it's still valid (use it)
 
           // Safety: Skip if we're too close to candle boundary (avoid using old candle's data)
           if (timeSinceCandleStart < CANDLE_START_BUFFER_MS) {
@@ -2978,12 +2986,15 @@ class RealTimeAlertProcessor {
           const candle = this.candleCache.get(`${symbol}_${timeframe}`);
           const now = Date.now();
 
-          // 🛡️ CRITICAL: Validate candle is from CURRENT timeframe boundary
+          // 🛡️ TOLERANCE-BASED STALE CHECK: Only invalidate truly expired candles
           const timeframeMs = this.getTimeframeMs(timeframe);
           const expectedCandleStart = Math.floor(now / timeframeMs) * timeframeMs;
+          const candleAge = now - candle.startTime;
+          const isFromPreviousPeriod = candle.startTime < expectedCandleStart;
+          const isExpired = candleAge > timeframeMs;
 
-          if (candle.startTime !== expectedCandleStart) {
-            console.log(`⚠️ [${timeframe}] HAMMER: STALE CANDLE DETECTED! Refetching...`);
+          if (isFromPreviousPeriod && isExpired) {
+            console.log(`⚠️ [${timeframe}] HAMMER: STALE CANDLE - Refetching...`);
             this.candleCache.delete(`${symbol}_${timeframe}`);
             this.getCandleDataOrQueue(symbol, timeframe);
             return false;
@@ -3063,12 +3074,15 @@ class RealTimeAlertProcessor {
           const candle = this.candleCache.get(`${symbol}_${timeframe}`);
           const now = Date.now();
 
-          // 🛡️ CRITICAL: Validate candle is from CURRENT timeframe boundary
+          // 🛡️ TOLERANCE-BASED STALE CHECK: Only invalidate truly expired candles
           const timeframeMs = this.getTimeframeMs(timeframe);
           const expectedCandleStart = Math.floor(now / timeframeMs) * timeframeMs;
+          const candleAge = now - candle.startTime;
+          const isFromPreviousPeriod = candle.startTime < expectedCandleStart;
+          const isExpired = candleAge > timeframeMs;
 
-          if (candle.startTime !== expectedCandleStart) {
-            console.log(`⚠️ [${timeframe}] INVERTED_HAMMER: STALE CANDLE DETECTED! Refetching...`);
+          if (isFromPreviousPeriod && isExpired) {
+            console.log(`⚠️ [${timeframe}] INVERTED_HAMMER: STALE CANDLE - Refetching...`);
             this.candleCache.delete(`${symbol}_${timeframe}`);
             this.getCandleDataOrQueue(symbol, timeframe);
             return false;
