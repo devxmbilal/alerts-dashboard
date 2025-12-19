@@ -241,35 +241,63 @@ async function sendInitialData(controller, symbols) {
 
       // Step 2: If Redis is empty/sparse, fetch from Binance BULK API (instant)
       if (validData.length < 400) {
-        console.log(`⚡ Redis sparse (${validData.length} pairs), fetching from Binance BULK API...`);
+        console.log(`⚡ Redis sparse (${validData.length} pairs), fetching from Binance...`);
         try {
-          const response = await fetch("https://api.binance.com/api/v3/ticker/24hr", {
+          // First get exchangeInfo to know which pairs are TRADING
+          const exchangeResponse = await fetch("https://api.binance.com/api/v3/exchangeInfo", {
             headers: {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
               'Accept': 'application/json',
             },
-            // No timeout - let it complete
           });
 
-          if (!response.ok) {
-            throw new Error(`Binance API returned ${response.status}`);
+          if (!exchangeResponse.ok) {
+            throw new Error(`Binance exchangeInfo returned ${exchangeResponse.status}`);
           }
 
-          const tickers = await response.json();
+          const exchangeInfo = await exchangeResponse.json();
 
-          // Filter for USDT spot pairs only (no leveraged tokens)
-          // Note: Removed UP/DOWN - they incorrectly filter legitimate coins like SYRUP and JUP
-          const leveragedTokens = ['BULL', 'BEAR', '3L', '3S', '5L', '5S', '2L', '2S'];
+          // Filter for USDT spot pairs EXACTLY like binance-worker.js does
+          const validPairs = new Set(
+            exchangeInfo.symbols
+              .filter((symbol) => {
+                return (
+                  symbol.status === "TRADING" &&
+                  symbol.symbol.endsWith("USDT") &&
+                  symbol.isSpotTradingAllowed === true &&
+                  !symbol.symbol.includes("_") &&
+                  !symbol.symbol.includes("BULL") &&
+                  !symbol.symbol.includes("BEAR") &&
+                  !symbol.symbol.includes("3L") &&
+                  !symbol.symbol.includes("3S") &&
+                  !symbol.symbol.includes("5L") &&
+                  !symbol.symbol.includes("5S") &&
+                  symbol.baseAsset !== "BUSD" &&
+                  symbol.quoteAsset === "USDT"
+                );
+              })
+              .map((symbol) => symbol.symbol)
+          );
 
+          console.log(`📊 Found ${validPairs.size} valid trading pairs from exchangeInfo`);
+
+          // Now fetch ticker data
+          const tickerResponse = await fetch("https://api.binance.com/api/v3/ticker/24hr", {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Accept': 'application/json',
+            },
+          });
+
+          if (!tickerResponse.ok) {
+            throw new Error(`Binance ticker API returned ${tickerResponse.status}`);
+          }
+
+          const tickers = await tickerResponse.json();
+
+          // Filter tickers to only include valid pairs from exchangeInfo
           validData = tickers
-            .filter(t => {
-              if (!t.symbol.endsWith("USDT")) return false;
-              if (t.symbol.includes("_")) return false;
-              if (leveragedTokens.some(token => t.symbol.includes(token))) return false;
-              if (t.symbol.startsWith("BUSD")) return false;
-              if (!t.lastPrice || parseFloat(t.lastPrice) === 0) return false;
-              return true;
-            })
+            .filter(t => validPairs.has(t.symbol))
             .map(t => ({
               symbol: t.symbol,
               price: parseFloat(t.lastPrice),
