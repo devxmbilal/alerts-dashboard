@@ -244,8 +244,7 @@ class BinanceWorker {
             !symbol.symbol.includes("_") && // Exclude premium pairs (usually have _)
             !symbol.symbol.includes("BULL") && // Exclude leveraged tokens
             !symbol.symbol.includes("BEAR") && // Exclude leveraged tokens
-            !symbol.symbol.includes("UP") && // Exclude leveraged tokens
-            !symbol.symbol.includes("DOWN") && // Exclude leveraged tokens
+            // Note: Removed UP/DOWN filters - Binance delisted all leveraged tokens, and these were incorrectly filtering SYRUP, JUP etc.
             !symbol.symbol.includes("3L") && // Exclude leveraged tokens
             !symbol.symbol.includes("3S") && // Exclude leveraged tokens
             !symbol.symbol.includes("5L") && // Exclude leveraged tokens
@@ -295,44 +294,29 @@ class BinanceWorker {
 
     try {
       console.log("📊 Fetching initial market data (ONE TIME ONLY)...");
+      const startTime = Date.now();
       this.initialDataLoaded = true; // Mark as loaded immediately
 
       // Fetch 24hr ticker data for all pairs
       const response = await fetchWithFallback("/ticker/24hr");
       const tickers = await response.json();
 
-      console.log(`⚡ Processing initial data for pairs using pipeline...`);
+      console.log(`⚡ Processing ${tickers.length} tickers, caching to Redis...`);
 
       const pipeline = redis.pipeline();
       let count = 0;
 
       // Process and cache data using pipeline for speed
+      // NOTE: Do NOT publish individual updates during initial load!
+      // This would cause counting effect on frontend.
+      // Frontend will fetch all data at once from Redis via SSE initial_data
       for (const ticker of tickers) {
         if (USDT_PAIRS.includes(ticker.symbol.toLowerCase())) {
           const processedData = this.processTickerData(ticker);
           const cacheKey = `crypto:${processedData.symbol}`;
 
-          // Cache with 24h TTL (86400s)
+          // Cache with 24h TTL (86400s) - NO PUBLISHING during initial load!
           pipeline.setex(cacheKey, 86400, JSON.stringify(processedData));
-
-          // Also publish the update so subscribers get instant data
-          pipeline.publish(
-            "market:updates",
-            JSON.stringify({
-              type: "market_update",
-              symbol: processedData.symbol,
-              data: processedData,
-            })
-          );
-
-          pipeline.publish(
-            `market:${processedData.symbol}`,
-            JSON.stringify({
-              type: "symbol_update",
-              data: processedData,
-            })
-          );
-
           count++;
         }
       }
@@ -340,7 +324,7 @@ class BinanceWorker {
       // Execute all commands at once
       await pipeline.exec();
 
-      console.log(`✅ Initial data loaded and cached for ${count} pairs instantly`);
+      console.log(`✅ Cached ${count} pairs to Redis in ${Date.now() - startTime}ms (NO counting effect!)`);
     } catch (error) {
       console.error("❌ Failed to fetch initial data:", error);
     }

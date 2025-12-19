@@ -206,21 +206,23 @@ export async function POST() {
 async function sendInitialData(controller, symbols) {
   try {
     let validData = [];
+    const startTime = Date.now();
 
     if (symbols.length === 0) {
-      // FAST LOAD: First try Redis pipeline
-      console.log("📊 Fetching all market data using pipeline...");
+      // STRATEGY: Always try to get ALL pairs instantly
+      // Step 1: Try Redis first (fastest if data exists)
+      console.log("📊 [INSTANT LOAD] Fetching all market data...");
+
       const allKeys = await redis.keys("crypto:*");
       const cryptoKeys = allKeys.filter(
         (key) => key !== "crypto:usdt_pairs" && !key.includes("undefined")
       );
 
-      if (cryptoKeys.length > 0) {
-        // Use Redis Pipeline for instant fetch
+      if (cryptoKeys.length >= 400) {
+        // Redis has enough data - use pipeline for instant fetch
+        console.log(`📊 Redis has ${cryptoKeys.length} keys - using pipeline...`);
         const pipeline = redis.pipeline();
-        cryptoKeys.forEach((key) => {
-          pipeline.get(key);
-        });
+        cryptoKeys.forEach((key) => pipeline.get(key));
 
         const results = await pipeline.exec();
         validData = results
@@ -234,69 +236,91 @@ async function sendInitialData(controller, symbols) {
           })
           .filter(Boolean);
 
-        console.log(`📊 Found ${validData.length} market data entries from Redis`);
+        console.log(`✅ Loaded ${validData.length} pairs from Redis in ${Date.now() - startTime}ms`);
       }
 
-      // FALLBACK: If Redis data is sparse (<300 pairs), fetch from Binance bulk API for fresh data
-      if (validData.length < 300) {
-        console.log("⚡ Redis sparse, fetching from Binance bulk API...");
+      // Step 2: If Redis is empty/sparse, fetch from Binance BULK API (instant)
+      if (validData.length < 400) {
+        console.log(`⚡ Redis sparse (${validData.length} pairs), fetching from Binance BULK API...`);
         try {
           const response = await fetch("https://api.binance.com/api/v3/ticker/24hr", {
             headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Accept': 'application/json',
+            },
+            // No timeout - let it complete
           });
+
+          if (!response.ok) {
+            throw new Error(`Binance API returned ${response.status}`);
+          }
+
           const tickers = await response.json();
 
-          // Filter USDT pairs only (active, no leveraged tokens)
-          const leveragedTokens = ['BULL', 'BEAR', 'UP', 'DOWN', '3L', '3S', '5L', '5S', '2L', '2S'];
+          // Filter for USDT spot pairs only (no leveraged tokens)
+          // Note: Removed UP/DOWN - they incorrectly filter legitimate coins like SYRUP and JUP
+          const leveragedTokens = ['BULL', 'BEAR', '3L', '3S', '5L', '5S', '2L', '2S'];
 
           validData = tickers
             .filter(t => {
-              // Only USDT pairs
               if (!t.symbol.endsWith("USDT")) return false;
-              // Exclude premium pairs
               if (t.symbol.includes("_")) return false;
-              // Exclude leveraged tokens
               if (leveragedTokens.some(token => t.symbol.includes(token))) return false;
-              // Exclude BUSD base pairs
               if (t.symbol.startsWith("BUSD")) return false;
-              // Must have valid price (active trading)
               if (!t.lastPrice || parseFloat(t.lastPrice) === 0) return false;
               return true;
             })
             .map(t => ({
               symbol: t.symbol,
               price: parseFloat(t.lastPrice),
+              priceChange: parseFloat(t.priceChange),
+              priceChangePercent: parseFloat(t.priceChangePercent),
               change: parseFloat(t.priceChangePercent),
-              volume: parseFloat(t.quoteVolume),
+              changeAmount: parseFloat(t.priceChange),
+              volume24h: parseFloat(t.quoteVolume),
+              high: parseFloat(t.highPrice),
+              low: parseFloat(t.lowPrice),
               high24h: parseFloat(t.highPrice),
               low24h: parseFloat(t.lowPrice),
-              lastUpdate: Date.now(),
+              open: parseFloat(t.openPrice),
+              close: parseFloat(t.lastPrice),
+              openPrice: parseFloat(t.openPrice),
+              closePrice: parseFloat(t.lastPrice),
+              timestamp: Date.now(),
+              isFavorite: false,
             }));
 
-          console.log(`⚡ Loaded ${validData.length} pairs from Binance in ONE request!`);
+          console.log(`⚡ Loaded ${validData.length} pairs from Binance in ${Date.now() - startTime}ms`);
 
-          // Cache in Redis for future (non-blocking)
-          const cachePipeline = redis.pipeline();
-          validData.forEach(item => {
-            cachePipeline.setex(
-              `crypto:${item.symbol.toLowerCase()}`,
-              60, // 1 minute cache
-              JSON.stringify(item)
+          // Cache ALL data in Redis for future requests (non-blocking)
+          if (validData.length > 0) {
+            const cachePipeline = redis.pipeline();
+            validData.forEach(item => {
+              cachePipeline.setex(
+                `crypto:${item.symbol}`,
+                86400, // 24 hours TTL
+                JSON.stringify(item)
+              );
+            });
+            cachePipeline.exec().catch(err =>
+              console.warn("Redis cache error (non-blocking):", err.message)
             );
-          });
-          cachePipeline.exec().catch(err => console.warn("Redis cache error:", err.message));
+            console.log(`💾 Caching ${validData.length} pairs to Redis (background)...`);
+          }
 
         } catch (binanceError) {
           console.error("❌ Binance bulk API error:", binanceError.message);
+          // If Binance fails and we have some Redis data, use what we have
+          if (validData.length === 0) {
+            console.warn("⚠️ No data available - waiting for binance-worker to populate Redis");
+          }
         }
       }
     } else {
-      // Get specific symbols data using PIPELINE
+      // Specific symbols requested - use pipeline
       const pipeline = redis.pipeline();
       symbols.forEach((symbol) => {
-        pipeline.get(`crypto:${symbol.toLowerCase()}`);
+        pipeline.get(`crypto:${symbol.toUpperCase()}`);
       });
 
       const results = await pipeline.exec();
@@ -312,20 +336,30 @@ async function sendInitialData(controller, symbols) {
         .filter(Boolean);
     }
 
+    // SEND ALL DATA AT ONCE - no streaming, no counting effect
     if (validData.length > 0) {
       try {
-        controller.enqueue(
-          `data: ${JSON.stringify({
-            type: "initial_data",
-            data: validData,
-          })}\n\n`
-        );
-        console.log(`📡 Sent initial data: ${validData.length} symbols`);
+        const payload = JSON.stringify({
+          type: "initial_data",
+          data: validData,
+          count: validData.length,
+          loadTime: Date.now() - startTime,
+        });
+
+        controller.enqueue(`data: ${payload}\n\n`);
+        console.log(`📡 ✅ Sent ALL ${validData.length} pairs INSTANTLY in ${Date.now() - startTime}ms`);
       } catch (error) {
         console.log("📡 Controller closed during initial data send");
       }
     } else {
       console.log("⚠️ No market data available for initial load");
+      // Send empty initial data so frontend knows loading is complete
+      controller.enqueue(`data: ${JSON.stringify({
+        type: "initial_data",
+        data: [],
+        count: 0,
+        message: "Waiting for market data..."
+      })}\n\n`);
     }
   } catch (error) {
     console.error("❌ Error sending initial data:", error);
