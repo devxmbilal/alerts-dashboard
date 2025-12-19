@@ -26,6 +26,11 @@ export const SocketProvider = ({ children }) => {
   const [lastUpdate, setLastUpdate] = useState(null);
   const [alertProcessor, setAlertProcessor] = useState(null);
 
+  // Batching for market updates to prevent incremental loading effect
+  const pendingUpdates = React.useRef(new Map());
+  const batchTimeoutRef = React.useRef(null);
+  const initialDataLoadedRef = React.useRef(false);
+
   // Set alert processor from AlertContext
   const setAlertProcessorRef = useCallback((processor) => {
     setAlertProcessor(() => processor);
@@ -47,12 +52,18 @@ export const SocketProvider = ({ children }) => {
       }
 
       const symbolsParam = symbols.length > 0 ? symbols.join(",") : "";
-      const url = `/api/market/stream${
-        symbolsParam ? `?symbols=${symbolsParam}` : ""
-      }`;
+      const url = `/api/market/stream${symbolsParam ? `?symbols=${symbolsParam}` : ""
+        }`;
 
       console.log("🔌 Connecting to SSE:", url);
-      console.log("🔌 Symbols:", symbols);
+
+      // Reset initial data flag on new connection (for page refresh)
+      initialDataLoadedRef.current = false;
+      pendingUpdates.current = new Map();
+      if (batchTimeoutRef.current) {
+        clearTimeout(batchTimeoutRef.current);
+        batchTimeoutRef.current = null;
+      }
 
       const es = new EventSource(url);
       setEventSource(es);
@@ -65,16 +76,17 @@ export const SocketProvider = ({ children }) => {
 
       es.onmessage = (event) => {
         try {
-          console.log("📨 Raw SSE message:", event.data);
           const data = JSON.parse(event.data);
-          console.log("📨 Parsed SSE data:", data);
 
           if (data.type === "initial_data") {
             console.log(
               "📊 Received initial data:",
               data.data.length,
-              "symbols"
+              "symbols - loading ALL at once"
             );
+            // Mark initial data as loaded
+            initialDataLoadedRef.current = true;
+
             setMarketData((prev) => {
               const newMarketData = new Map();
               data.data.forEach((item) => {
@@ -85,43 +97,46 @@ export const SocketProvider = ({ children }) => {
                   isFavorite: previousData ? previousData.isFavorite : false,
                 });
               });
+              console.log(`✅ All ${newMarketData.size} pairs loaded instantly!`);
               return newMarketData;
             });
-            console.log(
-              "📊 Market data updated with",
-              data.data.length,
-              "entries"
-            );
           } else if (data.type === "market_update") {
-            console.log(
-              "📈 Market update received:",
-              data.symbol,
-              data.data.price
-            );
-            setMarketData((prev) => {
-              const newMap = new Map(prev);
-              const previousData = prev.get(data.symbol);
-              newMap.set(data.symbol, {
-                ...data.data,
-                isFavorite: previousData ? previousData.isFavorite : false,
-              });
-              console.log(
-                "📈 Market data updated for:",
-                data.symbol,
-                "Total pairs:",
-                newMap.size
-              );
-              return newMap;
-            });
-            setLastUpdate(Date.now());
-          } else if (data.type === "heartbeat") {
-            console.log("💓 Heartbeat received");
-          } else if (data.type === "ping") {
-            // Keep connection alive
+            // Only process updates AFTER initial data is loaded
+            // This prevents the counting effect
+            if (!initialDataLoadedRef.current) {
+              return; // Skip updates until initial data loads
+            }
+
+            // Batch updates to reduce re-renders
+            pendingUpdates.current.set(data.symbol, data.data);
+
+            // Apply batched updates every 500ms
+            if (!batchTimeoutRef.current) {
+              batchTimeoutRef.current = setTimeout(() => {
+                const updates = pendingUpdates.current;
+                if (updates.size > 0) {
+                  setMarketData((prev) => {
+                    const newMap = new Map(prev);
+                    updates.forEach((updateData, symbol) => {
+                      const previousData = prev.get(symbol);
+                      newMap.set(symbol, {
+                        ...updateData,
+                        isFavorite: previousData ? previousData.isFavorite : false,
+                      });
+                    });
+                    return newMap;
+                  });
+                  setLastUpdate(Date.now());
+                  pendingUpdates.current = new Map();
+                }
+                batchTimeoutRef.current = null;
+              }, 500);
+            }
+          } else if (data.type === "heartbeat" || data.type === "ping") {
+            // Keep connection alive - no logging to reduce noise
           }
         } catch (error) {
           console.error("❌ Error parsing SSE message:", error);
-          console.error("❌ Raw data:", event.data);
         }
       };
 
@@ -218,11 +233,10 @@ export const SocketProvider = ({ children }) => {
         }
 
         // Exclude leveraged tokens (more specific matching)
+        // Note: Removed UP/DOWN from this list - they were incorrectly filtering legitimate coins like SYRUP and JUP
         const leveragedTokens = [
           "BULL",
           "BEAR",
-          "UP",
-          "DOWN",
           "3L",
           "3S",
           "5L",

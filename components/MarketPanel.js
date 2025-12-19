@@ -85,12 +85,12 @@ const MarketPanel = forwardRef(
       clearAllFavorites,
     } = useFavorites();
 
-    // Debug market data
+    // Debug market data (only log significant changes)
     useEffect(() => {
-      console.log("📊 MarketPanel marketData size:", marketData.length);
-      console.log("📊 MarketPanel isConnected:", isConnected);
-      console.log("📊 MarketPanel mounted:", mounted);
-    }, [marketData.length, isConnected, mounted]);
+      if (marketData.length > 0) {
+        console.log(`📊 MarketPanel loaded with ${marketData.length} pairs`);
+      }
+    }, [marketData.length > 400]); // Only log when we have substantial data
 
     // State management
     const [view, setView] = useState("market");
@@ -335,7 +335,7 @@ const MarketPanel = forwardRef(
           icon: null,
         };
       }
-      
+
       const numChange = parseFloat(change) || 0;
       const isPositive = numChange >= 0;
       return {
@@ -475,8 +475,8 @@ const MarketPanel = forwardRef(
                   ? "Removing..."
                   : "Adding..."
                 : allFavorited
-                ? "Remove All Favorites"
-                : "Add All Favorites"}
+                  ? "Remove All Favorites"
+                  : "Add All Favorites"}
             </Button>
 
             {/* Clear All Favorites Button */}

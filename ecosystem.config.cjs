@@ -24,6 +24,10 @@ module.exports = {
         NODE_ENV: "production",
         PORT: 3000,
       },
+      // Wait for binance-worker to populate Redis before accepting requests
+      wait_ready: false,
+      listen_timeout: 10000,
+      kill_timeout: 5000,
       // Minimal logging - only errors
       error_file: "./logs/alerts-dashboard-error.log",
       out_file: "/dev/null",
