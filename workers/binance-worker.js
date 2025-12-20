@@ -164,7 +164,7 @@ class BinanceWorker {
     this.isConnected = false;
     this.heartbeatInterval = null;
     this.lastPublishTime = 0;
-    this.publishThrottle = 500; // Throttle to max 2 publishes per second
+    this.publishThrottle = 100; // 🔥 FIX: Reduced from 500ms to catch rapid price spikes
     this.initialDataLoaded = false; // FIX: Prevent duplicate REST calls
   }
 

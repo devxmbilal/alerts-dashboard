@@ -851,8 +851,13 @@ class RealTimeAlertProcessor {
   // Task 2: Process alert with live data - check baseline price comparison
   async processAlertWithLiveData(alert, liveData) {
     try {
+      // 🔥 CRITICAL FIX: Save ORIGINAL baseline BEFORE any updates
+      // This prevents race condition where baseline resets before condition check
+      const originalBaselinePrice = alert.baselinePrice;
+      const originalBaselineVolume = alert.baselineVolume;
+
       console.log(
-        `📊 Baseline: ${alert.baselinePrice}, Live: ${liveData.price}`
+        `📊 Baseline: ${originalBaselinePrice}, Live: ${liveData.price}`
       );
 
       // CRITICAL: Check if baseline needs to be updated based on timeframe
@@ -1011,16 +1016,17 @@ class RealTimeAlertProcessor {
 
       console.log(`✅ Alert ${alert._id} for ${alert.symbol} is NOT locked, proceeding...`);
 
-      // Check price direction based on alert settings
+      // 🔥 CRITICAL FIX: Use ORIGINAL baseline for direction check
+      // This ensures we compare against the baseline BEFORE it was updated
       const direction =
         alert.conditions?.changePercent?.direction || "increase";
-      const priceChanged = liveData.price !== alert.baselinePrice;
+      const priceChanged = liveData.price !== originalBaselinePrice;
 
-      if (direction === "increase" && liveData.price <= alert.baselinePrice) {
+      if (direction === "increase" && liveData.price <= originalBaselinePrice) {
         return { triggered: false, reason: "price_not_increased" };
       }
 
-      if (direction === "decrease" && liveData.price >= alert.baselinePrice) {
+      if (direction === "decrease" && liveData.price >= originalBaselinePrice) {
         return { triggered: false, reason: "price_not_decreased" };
       }
 
@@ -1028,10 +1034,11 @@ class RealTimeAlertProcessor {
         return { triggered: false, reason: "price_unchanged" };
       }
 
-      // Check alert conditions
+      // Check alert conditions - pass original baseline for Change Percent calculation
       const conditionsMet = await this.checkAlertConditionsWithLiveData(
         alert,
-        liveData
+        liveData,
+        originalBaselinePrice // 🔥 CRITICAL: Use original baseline for % change calc
       );
 
       if (conditionsMet) {
@@ -1049,9 +1056,12 @@ class RealTimeAlertProcessor {
   }
 
   // OPTIMIZED: Check conditions with live data - hierarchical and only check set conditions
-  async checkAlertConditionsWithLiveData(alert, liveData) {
+  async checkAlertConditionsWithLiveData(alert, liveData, originalBaselinePrice = null) {
     try {
       const conditions = alert.conditions;
+      
+      // 🔥 CRITICAL: Use original baseline if provided, otherwise use alert's baseline
+      const baselinePriceForCheck = originalBaselinePrice || alert.baselinePrice;
 
       console.log(`📋 Checking conditions for ${alert.symbol}:`);
 
@@ -1059,7 +1069,8 @@ class RealTimeAlertProcessor {
       const activeConditions = this.getActiveConditions(
         conditions,
         liveData,
-        alert
+        alert,
+        baselinePriceForCheck // 🔥 Pass original baseline for % change calculation
       );
 
       if (activeConditions.length === 0) {
@@ -1103,8 +1114,11 @@ class RealTimeAlertProcessor {
   }
 
   // OPTIMIZATION HELPER: Get only active/set conditions in priority order
-  getActiveConditions(conditions, liveData, alert) {
+  getActiveConditions(conditions, liveData, alert, baselinePriceForCheck = null) {
     const activeConditions = [];
+    
+    // 🔥 CRITICAL: Use passed baseline for calculations
+    const effectiveBaseline = baselinePriceForCheck || alert.baselinePrice;
 
     // Priority 1: Min Daily (fastest check, most likely to fail)
     // ✅ CRITICAL: Use ONLY volume24h (ticker.q = quote volume in USDT)
@@ -1174,9 +1188,10 @@ class RealTimeAlertProcessor {
           );
           const direction = conditions.changePercent.direction || "increase";
 
-          // Calculate change from baseline price
+          // 🔥 CRITICAL FIX: Calculate change from ORIGINAL baseline price
+          // This uses effectiveBaseline (passed from original) not alert.baselinePrice (possibly updated)
           const changeFromBaseline =
-            ((liveData.price - alert.baselinePrice) / alert.baselinePrice) *
+            ((liveData.price - effectiveBaseline) / effectiveBaseline) *
             100;
           const absoluteChange = Math.abs(changeFromBaseline);
 
