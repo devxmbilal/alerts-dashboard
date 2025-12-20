@@ -94,7 +94,17 @@ async function warmupRedis() {
         const filteredTickers = tickers.filter(t => validPairs.has(t.symbol));
         console.log(`📊 Filtered to ${filteredTickers.length} valid trading pairs`);
 
-        // Step 4: Cache ALL data using Redis pipeline (super fast)
+        // Step 4: CLEAR OLD DATA - Remove all old crypto keys first
+        console.log("🧹 Clearing old crypto data from Redis...");
+        const oldKeys = await redis.keys("crypto:*");
+        if (oldKeys.length > 0) {
+            const deletePipeline = redis.pipeline();
+            oldKeys.forEach(key => deletePipeline.del(key));
+            await deletePipeline.exec();
+            console.log(`🧹 Deleted ${oldKeys.length} old keys`);
+        }
+
+        // Step 5: Cache ALL NEW data using Redis pipeline (super fast)
         const pipeline = redis.pipeline();
         const pairsList = [];
 
