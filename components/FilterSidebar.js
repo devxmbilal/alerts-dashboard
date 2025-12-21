@@ -165,6 +165,96 @@ const FilterSidebar = forwardRef(
       },
     }));
 
+    // 🔥 NEW: Load saved conditions on mount (persist after refresh)
+    useEffect(() => {
+      const loadSavedConditions = async () => {
+        try {
+          const token = localStorage.getItem("token");
+          const user = localStorage.getItem("user");
+          if (!token || !user) return;
+
+          const userData = JSON.parse(user);
+          const response = await fetch(`/api/conditions?userId=${userData._id}`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.data) {
+              const saved = data.data;
+
+              // Map saved conditions to filter format
+              const loadedFilters = {
+                minDaily: {},
+                changePercent: { direction: "increase" },
+                alertCount: {},
+                candle: {},
+                rsiRange: {},
+                volume: {},
+              };
+
+              // Min Daily
+              if (saved.minDaily?.enabled && saved.minDaily?.value) {
+                loadedFilters.minDaily = { [saved.minDaily.value]: true };
+              }
+
+              // Change Percent
+              if (saved.changePercent?.enabled) {
+                loadedFilters.changePercent = {
+                  direction: saved.changePercent.direction || "increase",
+                  percentage: saved.changePercent.percentage || "",
+                };
+                if (saved.changePercent.timeframe) {
+                  loadedFilters.changePercent[saved.changePercent.timeframe] = true;
+                }
+              }
+
+              // Alert Count
+              if (saved.alertCount?.enabled && saved.alertCount?.timeframe) {
+                loadedFilters.alertCount = { [saved.alertCount.timeframe]: true };
+              }
+
+              // Candle
+              if (saved.candle?.enabled && saved.candle?.timeframes?.length > 0) {
+                saved.candle.timeframes.forEach(tf => {
+                  loadedFilters.candle[tf] = true;
+                });
+                loadedFilters.candle.condition = saved.candle.condition || "CANDLE_ABOVE_OPEN";
+              }
+
+              // RSI
+              if (saved.rsiRange?.enabled && saved.rsiRange?.timeframes?.length > 0) {
+                saved.rsiRange.timeframes.forEach(tf => {
+                  loadedFilters.rsiRange[tf] = true;
+                });
+                loadedFilters.rsiRange.period = saved.rsiRange.period || 14;
+                loadedFilters.rsiRange.level = saved.rsiRange.level || 50;
+                loadedFilters.rsiRange.condition = saved.rsiRange.condition || "ABOVE";
+              }
+
+              // Volume
+              if (saved.volume?.enabled && saved.volume?.timeframes?.length > 0) {
+                saved.volume.timeframes.forEach(tf => {
+                  loadedFilters.volume[tf] = true;
+                });
+                loadedFilters.volume.condition = saved.volume.condition || "INCREASING";
+                loadedFilters.volume.percentage = saved.volume.percentage || "";
+              }
+
+              setFilters(loadedFilters);
+              console.log("✅ Loaded saved conditions from database");
+            }
+          }
+        } catch (error) {
+          console.error("❌ Error loading saved conditions:", error);
+        }
+      };
+
+      loadSavedConditions();
+    }, []); // Run once on mount
+
     // Handle checkbox changes - exact same logic as client
     const handleCheckboxChange = useCallback(
       (category, value) => {
