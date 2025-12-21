@@ -132,7 +132,7 @@ export async function GET(request) {
   });
 
   const stream = new ReadableStream({
-    start(controller) {
+    async start(controller) {
       console.log("📡 SSE connection started for symbols:", symbols);
 
       // Track connection state
@@ -140,7 +140,9 @@ export async function GET(request) {
       let heartbeatInterval = null;
       const connectionId = Date.now() + Math.random();
       activeConnections.add(connectionId);
-      subscriberClients.set(connectionId, controller);
+
+      // DON'T add to subscriberClients yet - wait for initial data to be sent first!
+      // This prevents market_update messages from causing counting effect
 
       // Initialize shared subscriber if not already done
       initializeSharedSubscriber();
@@ -162,8 +164,14 @@ export async function GET(request) {
         }
       };
 
-      // Send initial data
-      sendInitialData(controller, symbols);
+      // CRITICAL FIX: Send initial data FIRST, then add to subscriber list
+      // This prevents counting effect by ensuring all 437 pairs load before any market_update
+      await sendInitialData(controller, symbols);
+
+      // NOW add to subscriber clients - only after initial data is sent
+      // Market updates will only be forwarded to clients that have received initial data
+      subscriberClients.set(connectionId, controller);
+      console.log(`📡 Client ${connectionId} ready for real-time updates (initial data sent)`);
 
       // Handle client disconnect
       request.signal.addEventListener("abort", () => {
