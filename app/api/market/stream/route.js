@@ -168,10 +168,12 @@ export async function GET(request) {
       // This prevents counting effect by ensuring all 437 pairs load before any market_update
       await sendInitialData(controller, symbols);
 
+      // Brief pause to ensure frontend processes initial_data
+      await new Promise(resolve => setTimeout(resolve, 100));
+
       // NOW add to subscriber clients - only after initial data is sent
-      // Market updates will only be forwarded to clients that have received initial data
       subscriberClients.set(connectionId, controller);
-      console.log(`📡 Client ${connectionId} ready for real-time updates (initial data sent)`);
+      console.log(`📡 Client ${connectionId} ready for real-time updates`);
 
       // Handle client disconnect
       request.signal.addEventListener("abort", () => {
@@ -217,56 +219,25 @@ async function sendInitialData(controller, symbols) {
     const startTime = Date.now();
 
     if (symbols.length === 0) {
-      // STRATEGY: Always try to get ALL pairs instantly
-      // Step 1: Try Redis first (fastest if data exists)
-      console.log("📊 [INSTANT LOAD] Fetching all market data...");
+      // STRATEGY: Binance API FIRST - guaranteed 437 active TRADING pairs
+      console.log("📊 [GUARANTEED LOAD] Fetching active trading pairs from Binance API...");
 
-      const allKeys = await redis.keys("crypto:*");
-      const cryptoKeys = allKeys.filter(
-        (key) => key !== "crypto:usdt_pairs" && !key.includes("undefined")
-      );
+      try {
+        // Step 1: Get exchangeInfo to find ONLY active TRADING pairs
+        const exchangeResponse = await fetch("https://api.binance.com/api/v3/exchangeInfo", {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+          },
+        });
 
-      if (cryptoKeys.length >= 400) {
-        // Redis has enough data - use pipeline for instant fetch
-        console.log(`📊 Redis has ${cryptoKeys.length} keys - using pipeline...`);
-        const pipeline = redis.pipeline();
-        cryptoKeys.forEach((key) => pipeline.get(key));
+        let validTradingPairs = new Set();
 
-        const results = await pipeline.exec();
-        validData = results
-          .map(([err, data]) => {
-            if (err || !data) return null;
-            try {
-              return JSON.parse(data);
-            } catch (e) {
-              return null;
-            }
-          })
-          .filter(Boolean);
-
-        console.log(`✅ Loaded ${validData.length} pairs from Redis in ${Date.now() - startTime}ms`);
-      }
-
-      // Step 2: If Redis is empty/sparse, fetch from Binance BULK API (instant)
-      if (validData.length < 400) {
-        console.log(`⚡ Redis sparse (${validData.length} pairs), fetching from Binance...`);
-        try {
-          // First get exchangeInfo to know which pairs are TRADING
-          const exchangeResponse = await fetch("https://api.binance.com/api/v3/exchangeInfo", {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-              'Accept': 'application/json',
-            },
-          });
-
-          if (!exchangeResponse.ok) {
-            throw new Error(`Binance exchangeInfo returned ${exchangeResponse.status}`);
-          }
-
+        if (exchangeResponse.ok) {
           const exchangeInfo = await exchangeResponse.json();
 
-          // Filter for USDT spot pairs EXACTLY like binance-worker.js does
-          const validPairs = new Set(
+          // Filter for ONLY active TRADING USDT spot pairs (same as binance-worker)
+          validTradingPairs = new Set(
             exchangeInfo.symbols
               .filter((symbol) => {
                 return (
@@ -287,69 +258,68 @@ async function sendInitialData(controller, symbols) {
               .map((symbol) => symbol.symbol)
           );
 
-          console.log(`📊 Found ${validPairs.size} valid trading pairs from exchangeInfo`);
+          console.log(`📊 Found ${validTradingPairs.size} active TRADING pairs from exchangeInfo`);
+        }
 
-          // Now fetch ticker data
-          const tickerResponse = await fetch("https://api.binance.com/api/v3/ticker/24hr", {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-              'Accept': 'application/json',
-            },
-          });
+        // Step 2: Get ticker data for all pairs
+        const tickerResponse = await fetch("https://api.binance.com/api/v3/ticker/24hr", {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+          },
+        });
 
-          if (!tickerResponse.ok) {
-            throw new Error(`Binance ticker API returned ${tickerResponse.status}`);
-          }
+        if (tickerResponse.ok) {
+          const allTickers = await tickerResponse.json();
 
-          const tickers = await tickerResponse.json();
+          // Filter tickers to ONLY include active TRADING pairs
+          const activeTickers = allTickers.filter(t => validTradingPairs.has(t.symbol));
 
-          // Filter tickers to only include valid pairs from exchangeInfo
-          validData = tickers
-            .filter(t => validPairs.has(t.symbol))
-            .map(t => ({
-              symbol: t.symbol,
-              price: parseFloat(t.lastPrice),
-              priceChange: parseFloat(t.priceChange),
-              priceChangePercent: parseFloat(t.priceChangePercent),
-              change: parseFloat(t.priceChangePercent),
-              changeAmount: parseFloat(t.priceChange),
-              volume24h: parseFloat(t.quoteVolume),
-              high: parseFloat(t.highPrice),
-              low: parseFloat(t.lowPrice),
-              high24h: parseFloat(t.highPrice),
-              low24h: parseFloat(t.lowPrice),
-              open: parseFloat(t.openPrice),
-              close: parseFloat(t.lastPrice),
-              openPrice: parseFloat(t.openPrice),
-              closePrice: parseFloat(t.lastPrice),
-              timestamp: Date.now(),
-              isFavorite: false,
-            }));
+          validData = activeTickers.map(t => ({
+            symbol: t.symbol,
+            price: parseFloat(t.lastPrice),
+            priceChange: parseFloat(t.priceChange),
+            priceChangePercent: parseFloat(t.priceChangePercent),
+            change: parseFloat(t.priceChangePercent),
+            changeAmount: parseFloat(t.priceChange),
+            volume24h: parseFloat(t.quoteVolume),
+            high: parseFloat(t.highPrice),
+            low: parseFloat(t.lowPrice),
+            high24h: parseFloat(t.highPrice),
+            low24h: parseFloat(t.lowPrice),
+            open: parseFloat(t.openPrice),
+            close: parseFloat(t.lastPrice),
+            openPrice: parseFloat(t.openPrice),
+            closePrice: parseFloat(t.lastPrice),
+            timestamp: Date.now(),
+            isFavorite: false,
+          }));
 
-          console.log(`⚡ Loaded ${validData.length} pairs from Binance in ${Date.now() - startTime}ms`);
+          console.log(`✅ BINANCE API: ${validData.length} active TRADING pairs in ${Date.now() - startTime}ms`);
+        }
+      } catch (binanceError) {
+        console.error("⚠️ Binance API error, trying Redis:", binanceError.message);
+      }
 
-          // Cache ALL data in Redis for future requests (non-blocking)
-          if (validData.length > 0) {
-            const cachePipeline = redis.pipeline();
-            validData.forEach(item => {
-              cachePipeline.setex(
-                `crypto:${item.symbol}`,
-                86400, // 24 hours TTL
-                JSON.stringify(item)
-              );
-            });
-            cachePipeline.exec().catch(err =>
-              console.warn("Redis cache error (non-blocking):", err.message)
-            );
-            console.log(`💾 Caching ${validData.length} pairs to Redis (background)...`);
-          }
+      // Fallback to Redis ONLY if Binance failed
+      if (validData.length < 400) {
+        console.log(`📊 Redis fallback (Binance: ${validData.length} pairs)...`);
+        const allKeys = await redis.keys("crypto:*");
+        const cryptoKeys = allKeys.filter(
+          (key) => key !== "crypto:usdt_pairs" && !key.includes("undefined")
+        );
 
-        } catch (binanceError) {
-          console.error("❌ Binance bulk API error:", binanceError.message);
-          // If Binance fails and we have some Redis data, use what we have
-          if (validData.length === 0) {
-            console.warn("⚠️ No data available - waiting for binance-worker to populate Redis");
-          }
+        if (cryptoKeys.length > 0) {
+          const pipeline = redis.pipeline();
+          cryptoKeys.forEach((key) => pipeline.get(key));
+          const results = await pipeline.exec();
+          validData = results
+            .map(([err, data]) => {
+              if (err || !data) return null;
+              try { return JSON.parse(data); } catch (e) { return null; }
+            })
+            .filter(Boolean);
+          console.log(`✅ Redis fallback: ${validData.length} pairs`);
         }
       }
     } else {
