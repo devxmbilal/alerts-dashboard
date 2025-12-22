@@ -79,32 +79,35 @@ export const SocketProvider = ({ children }) => {
           const data = JSON.parse(event.data);
 
           if (data.type === "initial_data") {
+            const pairCount = data.data?.length || 0;
             console.log(
-              "📊 Received initial data:",
-              data.data.length,
-              "symbols - loading ALL at once"
+              `📊 Received initial data: ${pairCount} symbols - loading ALL at once`
             );
-            // Mark initial data as loaded
-            initialDataLoadedRef.current = true;
 
-            setMarketData((prev) => {
-              const newMarketData = new Map();
-              data.data.forEach((item) => {
-                // Preserve favorite status from previous data
-                const previousData = prev.get(item.symbol);
-                newMarketData.set(item.symbol, {
-                  ...item,
-                  isFavorite: previousData ? previousData.isFavorite : false,
+            // Accept any initial_data with pairs
+            if (pairCount > 0) {
+              // Mark initial data as loaded
+              initialDataLoadedRef.current = true;
+
+              setMarketData((prev) => {
+                const newMarketData = new Map();
+                data.data.forEach((item) => {
+                  const previousData = prev.get(item.symbol);
+                  newMarketData.set(item.symbol, {
+                    ...item,
+                    isFavorite: previousData ? previousData.isFavorite : false,
+                  });
                 });
+                console.log(`✅ All ${newMarketData.size} pairs loaded instantly!`);
+                return newMarketData;
               });
-              console.log(`✅ All ${newMarketData.size} pairs loaded instantly!`);
-              return newMarketData;
-            });
+            } else {
+              console.log(`⚠️ Empty initial_data received, waiting...`);
+            }
           } else if (data.type === "market_update") {
-            // Only process updates AFTER initial data is loaded
-            // This prevents the counting effect
+            // Block market_update until initial_data is loaded
             if (!initialDataLoadedRef.current) {
-              return; // Skip updates until initial data loads
+              return; // Skip until initial data loads
             }
 
             // Batch updates to reduce re-renders
