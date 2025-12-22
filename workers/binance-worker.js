@@ -164,7 +164,7 @@ class BinanceWorker {
     this.isConnected = false;
     this.heartbeatInterval = null;
     this.lastPublishTime = 0;
-    this.publishThrottle = 500; // Throttle to max 2 publishes per second
+    this.publishThrottle = 100; // 🔥 FIX: Reduced from 500ms to catch rapid price spikes
     this.initialDataLoaded = false; // FIX: Prevent duplicate REST calls
   }
 
@@ -470,10 +470,10 @@ class BinanceWorker {
   }
 
   startScheduledRefresh() {
-    // Refresh pairs list every 24 hours (NOT ticker data - WebSocket handles that)
+    // Refresh pairs list every 8 hours (NOT ticker data - WebSocket handles that)
     setInterval(async () => {
       try {
-        console.log("🔄 Starting 24-hour scheduled refresh (pairs list only)...");
+        console.log("🔄 Starting 8-hour scheduled refresh (pairs list only)...");
 
         const oldPairsCount = USDT_PAIRS.length;
 
@@ -488,7 +488,7 @@ class BinanceWorker {
           this.connectWebSocket();
         }
 
-        console.log("✅ 24-hour refresh complete (WebSocket handles price updates)");
+        console.log("✅ 8-hour refresh complete (WebSocket handles price updates)");
 
       } catch (error) {
         console.error("❌ Error during scheduled refresh:", error);
