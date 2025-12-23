@@ -1059,7 +1059,7 @@ class RealTimeAlertProcessor {
   async checkAlertConditionsWithLiveData(alert, liveData, originalBaselinePrice = null) {
     try {
       const conditions = alert.conditions;
-      
+
       // 🔥 CRITICAL: Use original baseline if provided, otherwise use alert's baseline
       const baselinePriceForCheck = originalBaselinePrice || alert.baselinePrice;
 
@@ -1116,7 +1116,7 @@ class RealTimeAlertProcessor {
   // OPTIMIZATION HELPER: Get only active/set conditions in priority order
   getActiveConditions(conditions, liveData, alert, baselinePriceForCheck = null) {
     const activeConditions = [];
-    
+
     // 🔥 CRITICAL: Use passed baseline for calculations
     const effectiveBaseline = baselinePriceForCheck || alert.baselinePrice;
 
@@ -2877,64 +2877,132 @@ class RealTimeAlertProcessor {
           return false;
         }
 
-        console.log(`🔍 Checking ${timeframes.length} timeframes (AND condition - ALL must pass)`);
+        console.log(`🔍 CANDLE_ABOVE_OPEN: Checking ${timeframes.length} timeframes for ${symbol}`);
 
-        // ✅ PHASE 1: Pre-fetch ALL timeframes first (queue them for background fetch)
-        let allDataReady = true;
-        let pendingTimeframes = [];
-
-        for (const timeframe of timeframes) {
-          const candle = this.getCandleDataOrQueue(symbol, timeframe);
-          if (!candle || candle.open === null) {
-            allDataReady = false;
-            pendingTimeframes.push(timeframe);
-          }
-        }
-
-        // ✅ PHASE 2: If ANY data is pending, wait for next tick (don't check partial)
-        if (!allDataReady) {
-          console.log(`⏳ Waiting for ${pendingTimeframes.length}/${timeframes.length} timeframes: [${pendingTimeframes.join(', ')}]`);
-          console.log(`   Data will be fetched by queue system, will recheck on next price update...`);
-          return false; // Wait until ALL data is ready
-        }
-
-        // ✅ PHASE 3: All data ready - NOW check conditions
-        console.log(`✅ All ${timeframes.length} timeframes data ready, checking conditions...`);
-
-        let allTimeframesPassed = true;
+        // 🚀 HYBRID APPROACH: Cache First (FAST) + API Refresh if Stale (ACCURATE)
+        const CACHE_FRESH_TTL = 30000; // Cache is "fresh" for 30 seconds
         const now = Date.now();
 
-        for (const timeframe of timeframes) {
-          const candle = this.candleCache.get(`${symbol}_${timeframe}`);
+        const candlePromises = timeframes.map(async (timeframe, index) => {
+          const key = `${symbol}_${timeframe}`;
+          const cachedCandle = this.candleCache.get(key);
 
-          const candleStartTime = candle.startTime;
-          const openPrice = parseFloat(candle.open);
-          const timeSinceCandleStart = now - candleStartTime;
+          // Calculate expected candle start for this timeframe
+          const timeframeMs = this.getTimeframeMs(timeframe);
+          const expectedCandleStart = Math.floor(now / timeframeMs) * timeframeMs;
 
-          // Safety: Skip if we're too close to candle boundary (avoid stale data)
-          if (timeSinceCandleStart < CANDLE_START_BUFFER_MS) {
-            console.log(`⏳ [${timeframe}] Too close to candle start (${timeSinceCandleStart}ms), waiting...`);
-            return false; // Wait for candle to stabilize
+          // For D/W timeframes, allow timezone tolerance
+          const isLargeTimeframe = ['D', '1D', 'W', '1W', '12HR', '12H'].includes(timeframe.toUpperCase());
+
+          // Check if cache is FRESH and CURRENT
+          const cacheIsFresh = cachedCandle &&
+            cachedCandle.open !== null &&
+            cachedCandle.startTime >= expectedCandleStart - (isLargeTimeframe ? 3600000 : 5000);
+
+          if (cacheIsFresh) {
+            // ⚡ FAST PATH: Use cached data
+            const priceAboveOpen = currentPrice > (cachedCandle.open * EPSILON);
+            console.log(`   ⚡ [${timeframe}] CACHE HIT: Open=${cachedCandle.open.toFixed(6)}, Above=${priceAboveOpen ? '✅' : '❌'}`);
+            return {
+              timeframe,
+              success: true,
+              open: cachedCandle.open,
+              priceAboveOpen,
+              source: 'cache'
+            };
           }
 
-          // Apply epsilon: currentPrice must be > openPrice * 1.0001
-          const priceAboveOpen = currentPrice > (openPrice * EPSILON);
+          // 🔄 SLOW PATH: Fetch fresh from Binance API
+          // Stagger requests to avoid 418
+          await new Promise(r => setTimeout(r, index * 30));
 
-          console.log(`📊 [${timeframe}] Open: ${openPrice}, Current: ${currentPrice}, Above: ${priceAboveOpen}`);
+          try {
+            const binanceInterval = this.getBinanceInterval(timeframe);
+            const response = await fetch(
+              `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=1`
+            );
 
-          if (!priceAboveOpen) {
-            console.log(`❌ [${timeframe}] FAILED: ${currentPrice} <= ${openPrice * EPSILON}`);
-            allTimeframesPassed = false;
+            if (!response.ok) {
+              // If API fails, use stale cache as fallback (if exists)
+              if (cachedCandle && cachedCandle.open !== null) {
+                const priceAboveOpen = currentPrice > (cachedCandle.open * EPSILON);
+                console.log(`   ⚠️ [${timeframe}] API ${response.status}, using stale cache: Open=${cachedCandle.open}`);
+                return { timeframe, success: true, open: cachedCandle.open, priceAboveOpen, source: 'stale_cache' };
+              }
+              return { timeframe, success: false, error: `API error ${response.status}` };
+            }
+
+            const klines = await response.json();
+            if (!klines || klines.length === 0) {
+              return { timeframe, success: false, error: 'No data' };
+            }
+
+            const kline = klines[0];
+            const candleOpen = parseFloat(kline[1]);
+            const candleStartTime = parseInt(kline[0]);
+
+            // Cache the fresh candle
+            this.candleCache.set(key, {
+              open: candleOpen,
+              high: parseFloat(kline[2]),
+              low: parseFloat(kline[3]),
+              close: parseFloat(kline[4]),
+              volume: parseFloat(kline[5]),
+              startTime: candleStartTime,
+              endTime: parseInt(kline[6]),
+              isComplete: false,
+              fetchedAt: now
+            });
+
+            // Check: Current Price > Open Price (with epsilon)
+            const priceAboveOpen = currentPrice > (candleOpen * EPSILON);
+            console.log(`   🔄 [${timeframe}] API FETCH: Open=${candleOpen.toFixed(6)}, Above=${priceAboveOpen ? '✅' : '❌'}`);
+
+            return {
+              timeframe,
+              success: true,
+              open: candleOpen,
+              priceAboveOpen,
+              source: 'api'
+            };
+          } catch (error) {
+            // On error, try stale cache
+            if (cachedCandle && cachedCandle.open !== null) {
+              const priceAboveOpen = currentPrice > (cachedCandle.open * EPSILON);
+              console.log(`   ⚠️ [${timeframe}] Error, using stale cache`);
+              return { timeframe, success: true, open: cachedCandle.open, priceAboveOpen, source: 'stale_cache' };
+            }
+            return { timeframe, success: false, error: error.message };
+          }
+        });
+
+        // Wait for ALL timeframes
+        const results = await Promise.all(candlePromises);
+
+        // Check results
+        let allPassed = true;
+        let failedTimeframe = null;
+
+        for (const result of results) {
+          if (!result.success) {
+            allPassed = false;
+            failedTimeframe = result.timeframe;
             break;
           }
-
-          console.log(`✅ [${timeframe}] PASSED`);
+          if (!result.priceAboveOpen) {
+            allPassed = false;
+            failedTimeframe = result.timeframe;
+            break;
+          }
         }
 
-        if (allTimeframesPassed) {
-          console.log(`🎉 ALL ${timeframes.length} timeframes PASSED - Alert condition met`);
+        if (allPassed) {
+          console.log(`   🎉 ALL ${timeframes.length} timeframes PASSED - CANDLE ABOVE OPEN confirmed!`);
+        } else {
+          console.log(`   ❌ CANDLE_ABOVE_OPEN FAILED at [${failedTimeframe}]`);
         }
-        return allTimeframesPassed;
+
+        return allPassed;
 
       case "HAMMER":
         // Hammer: Bullish reversal pattern
@@ -2970,9 +3038,21 @@ class RealTimeAlertProcessor {
         console.log(`✅ HAMMER: All ${timeframes.length} timeframes data ready, checking pattern...`);
 
         let allHammersPassed = true;
+        const hammerNow = Date.now();
 
         for (const timeframe of timeframes) {
           const candle = this.candleCache.get(`${symbol}_${timeframe}`);
+
+          // 🔥 CRITICAL FIX: Verify this is the CURRENT candle, not a stale one
+          const timeframeMs = this.getTimeframeMs(timeframe);
+          const expectedCandleStart = Math.floor(hammerNow / timeframeMs) * timeframeMs;
+
+          if (candle.startTime < expectedCandleStart) {
+            console.log(`⚠️ [${timeframe}] HAMMER: STALE candle detected! Forcing refresh...`);
+            this.candleCache.delete(`${symbol}_${timeframe}`);
+            this.addCandleToQueue(symbol, timeframe);
+            return false;
+          }
 
           const open = parseFloat(candle.open);
           const high = parseFloat(candle.high);
