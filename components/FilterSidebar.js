@@ -567,6 +567,22 @@ const FilterSidebar = forwardRef(
             volume: {},
           });
 
+          // 🔥 Delete conditions from database
+          try {
+            const user = JSON.parse(localStorage.getItem("user") || "{}");
+            if (user._id) {
+              await fetch(`/api/conditions?userId=${user._id}`, {
+                method: "DELETE",
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                },
+              });
+              console.log("✅ Conditions deleted from database");
+            }
+          } catch (conditionError) {
+            console.error("⚠️ Failed to delete conditions:", conditionError);
+          }
+
           // Clear created alerts
           setCreatedAlerts([]);
           setSuccessMessage("");
