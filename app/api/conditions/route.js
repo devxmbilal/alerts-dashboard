@@ -133,3 +133,34 @@ export async function POST(request) {
         );
     }
 }
+
+// DELETE /api/conditions - Delete user's condition
+export async function DELETE(request) {
+    try {
+        await connectToMongoDB();
+
+        const { searchParams } = new URL(request.url);
+        const userId = searchParams.get("userId");
+
+        if (!userId) {
+            return NextResponse.json(
+                { error: "User ID is required" },
+                { status: 400 }
+            );
+        }
+
+        await Condition.findOneAndDelete({ userId });
+        console.log(`✅ Condition deleted for user ${userId}`);
+
+        return NextResponse.json({
+            success: true,
+            message: "Condition deleted successfully",
+        });
+    } catch (error) {
+        console.error("Error deleting condition:", error);
+        return NextResponse.json(
+            { error: "Failed to delete condition" },
+            { status: 500 }
+        );
+    }
+}

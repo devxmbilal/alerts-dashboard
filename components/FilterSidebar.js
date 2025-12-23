@@ -153,7 +153,8 @@ const FilterSidebar = forwardRef(
         handleCreateAlert();
       },
       getFilters: () => filters,
-      resetFilters: () => {
+      resetFilters: async () => {
+        // Reset local state
         setFilters({
           minDaily: {},
           changePercent: { direction: "increase" },
@@ -162,6 +163,24 @@ const FilterSidebar = forwardRef(
           rsiRange: {},
           volume: {},
         });
+
+        // 🔥 Also delete conditions from database
+        try {
+          const token = localStorage.getItem("token");
+          const user = localStorage.getItem("user");
+          if (token && user) {
+            const userData = JSON.parse(user);
+            await fetch(`/api/conditions?userId=${userData._id}`, {
+              method: "DELETE",
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            });
+            console.log("✅ Conditions deleted from database");
+          }
+        } catch (error) {
+          console.error("❌ Error deleting conditions:", error);
+        }
       },
     }));
 
