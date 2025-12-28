@@ -149,7 +149,7 @@ const UserSettingsModal = ({ open, onClose, user }) => {
 
       if (response.ok) {
         setSuccess("Settings updated successfully!");
-        
+
         // Update local storage with new user data
         const updatedUser = { ...user, ...data.user };
         localStorage.setItem("user", JSON.stringify(updatedUser));
@@ -220,11 +220,20 @@ const UserSettingsModal = ({ open, onClose, user }) => {
             name="name"
             value={formData.name}
             onChange={handleChange}
-            sx={{ mb: 2 }}
+            placeholder="Your name"
+            sx={{
+              mb: 2,
+              "& .MuiOutlinedInput-root": {
+                color: "white",
+                "& fieldset": { borderColor: "#666", borderWidth: "1px" },
+                "&:hover fieldset": { borderColor: "#888" },
+              },
+            }}
             InputProps={{
               style: { color: "white" },
             }}
             InputLabelProps={{
+              shrink: true,
               style: { color: "#888" },
             }}
           />
@@ -236,11 +245,20 @@ const UserSettingsModal = ({ open, onClose, user }) => {
             type="email"
             value={formData.email}
             onChange={handleChange}
-            sx={{ mb: 2 }}
+            placeholder="your@email.com"
+            sx={{
+              mb: 2,
+              "& .MuiOutlinedInput-root": {
+                color: "white",
+                "& fieldset": { borderColor: "#666", borderWidth: "1px" },
+                "&:hover fieldset": { borderColor: "#888" },
+              },
+            }}
             InputProps={{
               style: { color: "white" },
             }}
             InputLabelProps={{
+              shrink: true,
               style: { color: "#888" },
             }}
           />
@@ -261,7 +279,15 @@ const UserSettingsModal = ({ open, onClose, user }) => {
             type={showPasswords.current ? "text" : "password"}
             value={formData.currentPassword}
             onChange={handleChange}
-            sx={{ mb: 2 }}
+            placeholder="Enter current password"
+            sx={{
+              mb: 2,
+              "& .MuiOutlinedInput-root": {
+                color: "white",
+                "& fieldset": { borderColor: "#666", borderWidth: "1px" },
+                "&:hover fieldset": { borderColor: "#888" },
+              },
+            }}
             InputProps={{
               style: { color: "white" },
               endAdornment: (
@@ -269,7 +295,8 @@ const UserSettingsModal = ({ open, onClose, user }) => {
                   <IconButton
                     onClick={() => handleTogglePassword("current")}
                     edge="end"
-                    sx={{ color: "#888" }}
+                    size="small"
+                    sx={{ color: "#888", mr: -0.5 }}
                   >
                     {showPasswords.current ? <VisibilityOff /> : <Visibility />}
                   </IconButton>
@@ -277,6 +304,7 @@ const UserSettingsModal = ({ open, onClose, user }) => {
               ),
             }}
             InputLabelProps={{
+              shrink: true,
               style: { color: "#888" },
             }}
           />
@@ -288,8 +316,16 @@ const UserSettingsModal = ({ open, onClose, user }) => {
             type={showPasswords.new ? "text" : "password"}
             value={formData.newPassword}
             onChange={handleChange}
-            sx={{ mb: 2 }}
+            placeholder="Enter new password"
             helperText="Leave blank to keep current password"
+            sx={{
+              mb: 2,
+              "& .MuiOutlinedInput-root": {
+                color: "white",
+                "& fieldset": { borderColor: "#666", borderWidth: "1px" },
+                "&:hover fieldset": { borderColor: "#888" },
+              },
+            }}
             InputProps={{
               style: { color: "white" },
               endAdornment: (
@@ -297,7 +333,8 @@ const UserSettingsModal = ({ open, onClose, user }) => {
                   <IconButton
                     onClick={() => handleTogglePassword("new")}
                     edge="end"
-                    sx={{ color: "#888" }}
+                    size="small"
+                    sx={{ color: "#888", mr: -0.5 }}
                   >
                     {showPasswords.new ? <VisibilityOff /> : <Visibility />}
                   </IconButton>
@@ -305,6 +342,7 @@ const UserSettingsModal = ({ open, onClose, user }) => {
               ),
             }}
             InputLabelProps={{
+              shrink: true,
               style: { color: "#888" },
             }}
             FormHelperTextProps={{
@@ -319,7 +357,15 @@ const UserSettingsModal = ({ open, onClose, user }) => {
             type={showPasswords.confirm ? "text" : "password"}
             value={formData.confirmPassword}
             onChange={handleChange}
-            sx={{ mb: 2 }}
+            placeholder="Re-enter new password"
+            sx={{
+              mb: 2,
+              "& .MuiOutlinedInput-root": {
+                color: "white",
+                "& fieldset": { borderColor: "#666", borderWidth: "1px" },
+                "&:hover fieldset": { borderColor: "#888" },
+              },
+            }}
             InputProps={{
               style: { color: "white" },
               endAdornment: (
@@ -327,7 +373,8 @@ const UserSettingsModal = ({ open, onClose, user }) => {
                   <IconButton
                     onClick={() => handleTogglePassword("confirm")}
                     edge="end"
-                    sx={{ color: "#888" }}
+                    size="small"
+                    sx={{ color: "#888", mr: -0.5 }}
                   >
                     {showPasswords.confirm ? <VisibilityOff /> : <Visibility />}
                   </IconButton>
@@ -335,6 +382,7 @@ const UserSettingsModal = ({ open, onClose, user }) => {
               ),
             }}
             InputLabelProps={{
+              shrink: true,
               style: { color: "#888" },
             }}
           />
@@ -354,12 +402,21 @@ const UserSettingsModal = ({ open, onClose, user }) => {
             name="telegramChatId"
             value={formData.telegramChatId}
             onChange={handleChange}
-            sx={{ mb: 2 }}
+            placeholder="123456789"
             helperText="Get your Chat ID from @userinfobot on Telegram"
+            sx={{
+              mb: 2,
+              "& .MuiOutlinedInput-root": {
+                color: "white",
+                "& fieldset": { borderColor: "#666", borderWidth: "1px" },
+                "&:hover fieldset": { borderColor: "#888" },
+              },
+            }}
             InputProps={{
               style: { color: "white" },
             }}
             InputLabelProps={{
+              shrink: true,
               style: { color: "#888" },
             }}
             FormHelperTextProps={{

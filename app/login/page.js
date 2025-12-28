@@ -190,6 +190,8 @@ const LoginForm = () => {
                         aria-label="toggle password visibility"
                         onClick={togglePasswordVisibility}
                         edge="end"
+                        size="small"
+                        sx={{ mr: -0.5 }}
                       >
                         {showPassword ? <VisibilityOff /> : <Visibility />}
                       </IconButton>
