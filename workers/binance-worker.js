@@ -1,6 +1,7 @@
 import Redis from "ioredis";
 import WebSocket from "ws";
 import dotenv from "dotenv";
+import logger from "../utils/logger.js";
 dotenv.config();
 // Redis configuration
 const redis = new Redis({

@@ -23,6 +23,7 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         PORT: 3000,
+        LOG_LEVEL: "error", // Only log errors in production
       },
       // Wait for binance-worker to populate Redis before accepting requests
       wait_ready: false,
@@ -50,6 +51,7 @@ module.exports = {
         REDIS_HOST: "localhost",
         REDIS_PORT: 6379,
         MONGODB_URI: "mongodb://127.0.0.1:27017/crypto-alerts",
+        LOG_LEVEL: "error",
       },
       // Minimal logging - only errors
       error_file: "./logs/binance-worker-error.log",
@@ -71,6 +73,7 @@ module.exports = {
         REDIS_HOST: "localhost",
         REDIS_PORT: 6379,
         MONGODB_URI: "mongodb://127.0.0.1:27017/crypto-alerts",
+        LOG_LEVEL: "error",
       },
       // Minimal logging - only errors
       error_file: "./logs/alert-worker-error.log",
@@ -89,6 +92,7 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         CLEANUP_WORKER_AUTOSTART: "true",
+        LOG_LEVEL: "error",
       },
       // Minimal logging - only errors
       error_file: "./logs/cleanup-worker-error.log",
@@ -110,6 +114,7 @@ module.exports = {
         REDIS_HOST: "localhost",
         REDIS_PORT: 6379,
         MONGODB_URI: "mongodb://127.0.0.1:27017/crypto-alerts",
+        LOG_LEVEL: "error",
       },
       // Minimal logging - only errors
       error_file: "./logs/notify-worker-error.log",
@@ -131,6 +136,7 @@ module.exports = {
         REDIS_HOST: "localhost",
         REDIS_PORT: 6379,
         MONGODB_URI: "mongodb://127.0.0.1:27017/crypto-alerts",
+        LOG_LEVEL: "error",
       },
       // Minimal logging - only errors
       error_file: "./logs/db-queue-worker-error.log",

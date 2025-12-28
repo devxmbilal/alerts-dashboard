@@ -1032,11 +1032,13 @@ const FilterSidebar = forwardRef(
                     size="small"
                     type="number"
                     label="RSI Period"
-                    value={filters.rsiRange.period}
+                    value={filters.rsiRange.period || ""}
                     onChange={(e) =>
                       handleInputChange("rsiRange", "period", e.target.value)
                     }
                     inputProps={{ min: 7, max: 14 }}
+                    InputLabelProps={{ shrink: true }}
+                    placeholder="14"
                   />
                 </Grid>
                 <Grid item xs={6}>
@@ -1045,11 +1047,13 @@ const FilterSidebar = forwardRef(
                     size="small"
                     type="number"
                     label="Level (1-100)"
-                    value={filters.rsiRange.level}
+                    value={filters.rsiRange.level || ""}
                     onChange={(e) =>
                       handleInputChange("rsiRange", "level", e.target.value)
                     }
                     inputProps={{ min: 1, max: 100 }}
+                    InputLabelProps={{ shrink: true }}
+                    placeholder="50"
                   />
                 </Grid>
               </Grid>

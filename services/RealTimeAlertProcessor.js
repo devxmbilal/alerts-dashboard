@@ -640,6 +640,9 @@ class RealTimeAlertProcessor {
       }
 
       // Process all alerts for this symbol using SafeAlertProcessor (prevents race conditions)
+      // 🔥 OPTIMIZATION: Create Map for O(1) lookup instead of O(A) findIndex
+      const alertMap = new Map(alerts.map((a, idx) => [a._id.toString(), idx]));
+
       const alertPromises = alerts.map((alert) =>
         this.processLimit(async () => {
           try {
@@ -652,11 +655,9 @@ class RealTimeAlertProcessor {
 
             // OPTIMIZATION: Update cache without blocking (fire-and-forget)
             if (result.success && result.result && result.result.triggered) {
-              // Update in-memory cache immediately (no DB query needed)
-              const alertIndex = alerts.findIndex(
-                (a) => a._id.toString() === alert._id.toString()
-              );
-              if (alertIndex !== -1) {
+              // 🔥 O(1) Map lookup instead of O(A) findIndex
+              const alertIndex = alertMap.get(alert._id.toString());
+              if (alertIndex !== undefined) {
                 // Update baseline in memory
                 alerts[alertIndex].baselinePrice = liveData.price;
                 alerts[alertIndex].baselineVolume =
