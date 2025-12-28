@@ -424,16 +424,16 @@ class RealTimeAlertProcessor {
 
       const symbol = alert.symbol;
       const cacheKey = `alerts:cache:${symbol}`;
+      const alertIdStr = alert._id.toString();
 
       // Get existing alerts for this symbol
       const existingAlerts = await this.getAlertsFromCache(symbol);
 
-      // Update the alert in the array
-      const alertIndex = existingAlerts.findIndex(
-        (a) => a._id.toString() === alert._id.toString()
-      );
+      // 🔥 OPTIMIZATION: Use Map for O(1) lookup instead of O(A) findIndex
+      const alertMap = new Map(existingAlerts.map((a, idx) => [a._id.toString(), idx]));
+      const alertIndex = alertMap.get(alertIdStr);
 
-      if (alertIndex !== -1) {
+      if (alertIndex !== undefined) {
         existingAlerts[alertIndex] = alert;
       } else {
         existingAlerts.push(alert);
@@ -442,13 +442,12 @@ class RealTimeAlertProcessor {
       // Update cache (no TTL - cache is updated automatically on alert events)
       await redis.set(cacheKey, JSON.stringify(existingAlerts));
 
-      // Also update in-memory map
+      // Also update in-memory map using same O(1) approach
       if (this.activeAlerts.has(symbol)) {
         const inMemoryAlerts = this.activeAlerts.get(symbol);
-        const inMemoryIndex = inMemoryAlerts.findIndex(
-          (a) => a._id.toString() === alert._id.toString()
-        );
-        if (inMemoryIndex !== -1) {
+        const memMap = new Map(inMemoryAlerts.map((a, idx) => [a._id.toString(), idx]));
+        const inMemoryIndex = memMap.get(alertIdStr);
+        if (inMemoryIndex !== undefined) {
           inMemoryAlerts[inMemoryIndex] = alert;
         }
       }
