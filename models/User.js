@@ -52,6 +52,10 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    telegramBotToken: {
+      type: String,
+      default: null,
+    },
     notificationPreferences: {
       email: {
         type: Boolean,
