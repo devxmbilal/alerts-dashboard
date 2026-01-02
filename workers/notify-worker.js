@@ -86,7 +86,8 @@ redis.on("message", async (channel, message) => {
             symbol: history.symbol,
             targetValue:
               history.alertConditions?.changePercent?.percentage || "N/A",
-            actualValue: history.triggerData?.priceChangePercent || 0,
+            actualValue: history.baselineData?.changeFromBaselinePercent ??
+              history.triggerData?.priceChangePercent ?? 0, // 🔥 FIX: Use baseline change first
             direction:
               history.alertConditions?.changePercent?.direction === "increase"
                 ? "Increase"
@@ -186,7 +187,8 @@ redis.on("message", async (channel, message) => {
     const alertData = {
       symbol: history.symbol,
       targetValue: history.alertConditions?.changePercent?.percentage || "N/A",
-      actualValue: history.triggerData?.priceChangePercent || 0,
+      actualValue: history.baselineData?.changeFromBaselinePercent ??
+        history.triggerData?.priceChangePercent ?? 0, // 🔥 FIX: Use baseline change for timeframe-based alerts
       direction:
         history.alertConditions?.changePercent?.direction === "increase"
           ? "Increase"
