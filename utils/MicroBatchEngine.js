@@ -6,7 +6,7 @@ export class MicroBatchExecutionEngine {
   constructor(options = {}) {
     // Configuration
     this.batchSize = options.batchSize || 100; // Process 100 symbols per batch
-    this.batchInterval = options.batchInterval || 50; // 50ms batch window
+    this.batchInterval = options.batchInterval || 30; // 🔥 Conservative Fix: 30ms (was 50ms) for better spike detection
     this.maxConcurrentBatches = options.maxConcurrentBatches || 20; // 20 parallel batches
     this.targetThroughput = options.targetThroughput || 50000; // 50k alerts per minute
 

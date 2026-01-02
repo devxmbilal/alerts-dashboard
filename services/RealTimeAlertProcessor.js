@@ -1857,17 +1857,37 @@ class RealTimeAlertProcessor {
       }
 
       // Check if alert is locked (temporary lock due to alert count)
+      // 🔥 SPIKE FIX (Option A - Conservative): Bypass lock for MASSIVE spikes (3x+ target)
       if (isAlertLocked(alert)) {
         const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
         const now = new Date();
         const timeRemaining = Math.max(0, lockUntil.getTime() - now.getTime());
         const minutesRemaining = Math.ceil(timeRemaining / (1000 * 60));
 
-        console.log(
-          `🔒 Alert ${alert._id} for ${alert.symbol
-          } is LOCKED until ${lockUntil.toISOString()}`
-        );
-        return false;
+        // Calculate current spike magnitude
+        const requiredChange = parseFloat(alert.conditions?.changePercent?.percentage) || 0;
+        const currentChange = alert.baselinePrice && alert.baselinePrice > 0
+          ? Math.abs((priceData.price - alert.baselinePrice) / alert.baselinePrice * 100)
+          : 0;
+
+        // Bypass lock ONLY for massive spikes (3x+ the target)
+        const spikeBypassThreshold = requiredChange * 3; // Conservative: 3x target
+        const isMassiveSpike = currentChange >= spikeBypassThreshold;
+
+        if (isMassiveSpike) {
+          console.log(
+            `🚨 MASSIVE SPIKE DETECTED! ${currentChange.toFixed(2)}% (${(currentChange / requiredChange).toFixed(1)}x target) - BYPASSING LOCK for ${alert.symbol}`
+          );
+          console.log(
+            `   Lock was until ${lockUntil.toISOString()} (${minutesRemaining}min remaining)`
+          );
+          // Don't return false - continue to process alert
+        } else {
+          console.log(
+            `🔒 Alert ${alert._id} for ${alert.symbol} is LOCKED until ${lockUntil.toISOString()} (spike ${currentChange.toFixed(2)}% < ${spikeBypassThreshold.toFixed(2)}% bypass threshold)`
+          );
+          return false;
+        }
       }
 
       // IMPORTANT: Check price direction based on alert settings
