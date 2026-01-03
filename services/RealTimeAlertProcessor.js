@@ -20,16 +20,16 @@ class RealTimeAlertProcessor {
     this.alertBaselines = new Map(); // Track baseline prices for change calculations
     this.redisSubscribed = false; // Track Redis subscription status
     this.candleData = new Map(); // Track candle data for timeframe-based changes
-    // Concurrency limit for parallel alert processing (20-50 alerts at once)
-    this.processLimit = pLimit(50);
+    // Concurrency limit for parallel alert processing - INCREASED for 95% accuracy
+    this.processLimit = pLimit(100); // Was 50, now 100 for faster processing
     // Initialize SafeAlertProcessor for race condition protection
     this.safeProcessor = new SafeAlertProcessor();
-    // Initialize Micro-Batch Execution Engine for ultra-high performance
+    // Initialize Micro-Batch Execution Engine - OPTIMIZED for 95% accuracy
     this.microBatchEngine = new MicroBatchExecutionEngine({
-      batchSize: 100,
-      batchInterval: 50, // 50ms
-      maxConcurrentBatches: 20,
-      targetThroughput: 50000, // 50k alerts per minute
+      batchSize: 50,       // Smaller batches = faster processing
+      batchInterval: 20,   // 20ms window (was 50ms)
+      maxConcurrentBatches: 30,
+      targetThroughput: 100000, // 100k alerts per minute
     });
     this.rsiData = new Map(); // Track RSI values for each symbol+timeframe: key = "symbol_timeframe_period", value = { current: number, previous: number }
     this.openInterestData = new Map(); // Track Open Interest for each symbol+timeframe: key = "symbol_timeframe", value = { current: number, baseline: number, timestamp: number }
@@ -853,8 +853,17 @@ class RealTimeAlertProcessor {
     try {
       // 🔥 CRITICAL FIX: Save ORIGINAL baseline BEFORE any updates
       // This prevents race condition where baseline resets before condition check
-      const originalBaselinePrice = alert.baselinePrice;
-      const originalBaselineVolume = alert.baselineVolume;
+      const originalBaselinePrice = parseFloat(alert.baselinePrice) || 0;
+      const originalBaselineVolume = parseFloat(alert.baselineVolume) || 0;
+
+      // 🛡️ SAFETY CHECK: If baseline is 0 or missing, set it to current price and skip this check
+      if (originalBaselinePrice <= 0) {
+        console.log(`⚠️ Alert ${alert._id} has no baseline price, setting to current: ${liveData.price}`);
+        alert.baselinePrice = liveData.price;
+        alert.baselineTimestamp = new Date();
+        // Skip this cycle - alert needs a baseline first
+        return { triggered: false, reason: "baseline_initialized" };
+      }
 
       console.log(
         `📊 Baseline: ${originalBaselinePrice}, Live: ${liveData.price}`
@@ -1020,13 +1029,29 @@ class RealTimeAlertProcessor {
       // This ensures we compare against the baseline BEFORE it was updated
       const direction =
         alert.conditions?.changePercent?.direction || "increase";
-      const priceChanged = liveData.price !== originalBaselinePrice;
 
-      if (direction === "increase" && liveData.price <= originalBaselinePrice) {
+      // 🛡️ Calculate actual change percentage FIRST
+      const livePrice = parseFloat(liveData.price) || 0;
+      const actualChangePercent = originalBaselinePrice > 0
+        ? ((livePrice - originalBaselinePrice) / originalBaselinePrice) * 100
+        : 0;
+
+      // 🛡️ MINIMUM CHANGE THRESHOLD - Prevent 0% change alerts
+      const MIN_CHANGE_THRESHOLD = 0.001; // 0.001% minimum change required
+      const hasMinimumChange = Math.abs(actualChangePercent) >= MIN_CHANGE_THRESHOLD;
+
+      if (!hasMinimumChange) {
+        console.log(`⏸️ Alert ${alert._id}: Change ${actualChangePercent.toFixed(4)}% below threshold ${MIN_CHANGE_THRESHOLD}%`);
+        return { triggered: false, reason: "change_below_threshold" };
+      }
+
+      const priceChanged = livePrice !== originalBaselinePrice;
+
+      if (direction === "increase" && livePrice <= originalBaselinePrice) {
         return { triggered: false, reason: "price_not_increased" };
       }
 
-      if (direction === "decrease" && liveData.price >= originalBaselinePrice) {
+      if (direction === "decrease" && livePrice >= originalBaselinePrice) {
         return { triggered: false, reason: "price_not_decreased" };
       }
 
@@ -1043,7 +1068,8 @@ class RealTimeAlertProcessor {
 
       if (conditionsMet) {
         // Trigger the alert (this will apply the lock)
-        await this.triggerAlertWithLiveData(alert, liveData);
+        // 🔥 FIX: Pass original baseline so correct % is saved in history
+        await this.triggerAlertWithLiveData(alert, liveData, originalBaselinePrice);
 
         return { triggered: true, reason: "conditions_met" };
       } else {
@@ -1423,7 +1449,8 @@ class RealTimeAlertProcessor {
   }
 
   // Trigger alert with live data and update baseline
-  async triggerAlertWithLiveData(alert, liveData) {
+  // 🔥 FIX: Added originalBaselinePrice parameter to preserve correct change %
+  async triggerAlertWithLiveData(alert, liveData, originalBaselinePrice = null) {
     // CRITICAL: Check if alert is ALREADY locked (Alert Count condition)
     if (isAlertLocked(alert)) {
       const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
@@ -1445,8 +1472,9 @@ class RealTimeAlertProcessor {
     }
 
     try {
-      // Safely get baseline values with proper defaults
-      const baselinePrice = parseFloat(alert.baselinePrice) || 0;
+      // 🔥 FIX: Use originalBaselinePrice if passed, else use current baseline
+      // This preserves the correct change % before baseline was reset
+      const baselinePrice = originalBaselinePrice || parseFloat(alert.baselinePrice) || 0;
       const baselineVolume = parseFloat(alert.baselineVolume) || 0;
       const baselineTimestamp = alert.baselineTimestamp || new Date();
       const livePrice = parseFloat(liveData.price) || 0;
