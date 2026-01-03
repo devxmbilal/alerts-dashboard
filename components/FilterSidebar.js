@@ -153,7 +153,8 @@ const FilterSidebar = forwardRef(
         handleCreateAlert();
       },
       getFilters: () => filters,
-      resetFilters: () => {
+      resetFilters: async () => {
+        // Reset local state
         setFilters({
           minDaily: {},
           changePercent: { direction: "increase" },
@@ -162,6 +163,24 @@ const FilterSidebar = forwardRef(
           rsiRange: {},
           volume: {},
         });
+
+        // 🔥 Also delete conditions from database
+        try {
+          const token = localStorage.getItem("token");
+          const user = localStorage.getItem("user");
+          if (token && user) {
+            const userData = JSON.parse(user);
+            await fetch(`/api/conditions?userId=${userData._id}`, {
+              method: "DELETE",
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            });
+            console.log("✅ Conditions deleted from database");
+          }
+        } catch (error) {
+          console.error("❌ Error deleting conditions:", error);
+        }
       },
     }));
 
@@ -547,6 +566,22 @@ const FilterSidebar = forwardRef(
             rsiRange: {},
             volume: {},
           });
+
+          // 🔥 Delete conditions from database
+          try {
+            const user = JSON.parse(localStorage.getItem("user") || "{}");
+            if (user._id) {
+              await fetch(`/api/conditions?userId=${user._id}`, {
+                method: "DELETE",
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                },
+              });
+              console.log("✅ Conditions deleted from database");
+            }
+          } catch (conditionError) {
+            console.error("⚠️ Failed to delete conditions:", conditionError);
+          }
 
           // Clear created alerts
           setCreatedAlerts([]);
@@ -997,11 +1032,13 @@ const FilterSidebar = forwardRef(
                     size="small"
                     type="number"
                     label="RSI Period"
-                    value={filters.rsiRange.period}
+                    value={filters.rsiRange.period || ""}
                     onChange={(e) =>
                       handleInputChange("rsiRange", "period", e.target.value)
                     }
                     inputProps={{ min: 7, max: 14 }}
+                    InputLabelProps={{ shrink: true }}
+                    placeholder="14"
                   />
                 </Grid>
                 <Grid item xs={6}>
@@ -1010,11 +1047,13 @@ const FilterSidebar = forwardRef(
                     size="small"
                     type="number"
                     label="Level (1-100)"
-                    value={filters.rsiRange.level}
+                    value={filters.rsiRange.level || ""}
                     onChange={(e) =>
                       handleInputChange("rsiRange", "level", e.target.value)
                     }
                     inputProps={{ min: 1, max: 100 }}
+                    InputLabelProps={{ shrink: true }}
+                    placeholder="50"
                   />
                 </Grid>
               </Grid>

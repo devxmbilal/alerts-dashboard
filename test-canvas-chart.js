@@ -13,7 +13,7 @@ function generateMockCandles() {
     let basePrice = 0.0397;
     const now = Date.now();
 
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < 200; i++) {
         const change = (Math.random() - 0.45) * 0.001; // Slight upward bias
         const open = basePrice;
         const close = basePrice + change;

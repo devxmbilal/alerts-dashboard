@@ -27,6 +27,7 @@ const UserSettingsModal = ({ open, onClose, user }) => {
     newPassword: "",
     confirmPassword: "",
     telegramChatId: "",
+    telegramBotToken: "",
     emailNotifications: true,
     telegramNotifications: false,
   });
@@ -35,6 +36,7 @@ const UserSettingsModal = ({ open, onClose, user }) => {
     current: false,
     new: false,
     confirm: false,
+    botToken: false,
   });
 
   const [loading, setLoading] = useState(false);
@@ -51,6 +53,7 @@ const UserSettingsModal = ({ open, onClose, user }) => {
         newPassword: "",
         confirmPassword: "",
         telegramChatId: user.telegramChatId || "",
+        telegramBotToken: "",
         emailNotifications: user.notificationPreferences?.email ?? true,
         telegramNotifications: user.notificationPreferences?.telegram ?? false,
       });
@@ -130,6 +133,11 @@ const UserSettingsModal = ({ open, onClose, user }) => {
         },
       };
 
+      // Only include bot token if user entered a new value
+      if (formData.telegramBotToken) {
+        updateData.telegramBotToken = formData.telegramBotToken;
+      }
+
       // Only include password fields if user wants to change password
       if (formData.newPassword) {
         updateData.currentPassword = formData.currentPassword;
@@ -149,7 +157,7 @@ const UserSettingsModal = ({ open, onClose, user }) => {
 
       if (response.ok) {
         setSuccess("Settings updated successfully!");
-        
+
         // Update local storage with new user data
         const updatedUser = { ...user, ...data.user };
         localStorage.setItem("user", JSON.stringify(updatedUser));
@@ -220,11 +228,20 @@ const UserSettingsModal = ({ open, onClose, user }) => {
             name="name"
             value={formData.name}
             onChange={handleChange}
-            sx={{ mb: 2 }}
+            placeholder="Your name"
+            sx={{
+              mb: 2,
+              "& .MuiOutlinedInput-root": {
+                color: "white",
+                "& fieldset": { borderColor: "#666", borderWidth: "1px" },
+                "&:hover fieldset": { borderColor: "#888" },
+              },
+            }}
             InputProps={{
               style: { color: "white" },
             }}
             InputLabelProps={{
+              shrink: true,
               style: { color: "#888" },
             }}
           />
@@ -236,11 +253,20 @@ const UserSettingsModal = ({ open, onClose, user }) => {
             type="email"
             value={formData.email}
             onChange={handleChange}
-            sx={{ mb: 2 }}
+            placeholder="your@email.com"
+            sx={{
+              mb: 2,
+              "& .MuiOutlinedInput-root": {
+                color: "white",
+                "& fieldset": { borderColor: "#666", borderWidth: "1px" },
+                "&:hover fieldset": { borderColor: "#888" },
+              },
+            }}
             InputProps={{
               style: { color: "white" },
             }}
             InputLabelProps={{
+              shrink: true,
               style: { color: "#888" },
             }}
           />
@@ -261,7 +287,15 @@ const UserSettingsModal = ({ open, onClose, user }) => {
             type={showPasswords.current ? "text" : "password"}
             value={formData.currentPassword}
             onChange={handleChange}
-            sx={{ mb: 2 }}
+            placeholder="Enter current password"
+            sx={{
+              mb: 2,
+              "& .MuiOutlinedInput-root": {
+                color: "white",
+                "& fieldset": { borderColor: "#666", borderWidth: "1px" },
+                "&:hover fieldset": { borderColor: "#888" },
+              },
+            }}
             InputProps={{
               style: { color: "white" },
               endAdornment: (
@@ -269,7 +303,8 @@ const UserSettingsModal = ({ open, onClose, user }) => {
                   <IconButton
                     onClick={() => handleTogglePassword("current")}
                     edge="end"
-                    sx={{ color: "#888" }}
+                    size="small"
+                    sx={{ color: "#888", mr: -0.5 }}
                   >
                     {showPasswords.current ? <VisibilityOff /> : <Visibility />}
                   </IconButton>
@@ -277,6 +312,7 @@ const UserSettingsModal = ({ open, onClose, user }) => {
               ),
             }}
             InputLabelProps={{
+              shrink: true,
               style: { color: "#888" },
             }}
           />
@@ -288,8 +324,16 @@ const UserSettingsModal = ({ open, onClose, user }) => {
             type={showPasswords.new ? "text" : "password"}
             value={formData.newPassword}
             onChange={handleChange}
-            sx={{ mb: 2 }}
+            placeholder="Enter new password"
             helperText="Leave blank to keep current password"
+            sx={{
+              mb: 2,
+              "& .MuiOutlinedInput-root": {
+                color: "white",
+                "& fieldset": { borderColor: "#666", borderWidth: "1px" },
+                "&:hover fieldset": { borderColor: "#888" },
+              },
+            }}
             InputProps={{
               style: { color: "white" },
               endAdornment: (
@@ -297,7 +341,8 @@ const UserSettingsModal = ({ open, onClose, user }) => {
                   <IconButton
                     onClick={() => handleTogglePassword("new")}
                     edge="end"
-                    sx={{ color: "#888" }}
+                    size="small"
+                    sx={{ color: "#888", mr: -0.5 }}
                   >
                     {showPasswords.new ? <VisibilityOff /> : <Visibility />}
                   </IconButton>
@@ -305,6 +350,7 @@ const UserSettingsModal = ({ open, onClose, user }) => {
               ),
             }}
             InputLabelProps={{
+              shrink: true,
               style: { color: "#888" },
             }}
             FormHelperTextProps={{
@@ -319,7 +365,15 @@ const UserSettingsModal = ({ open, onClose, user }) => {
             type={showPasswords.confirm ? "text" : "password"}
             value={formData.confirmPassword}
             onChange={handleChange}
-            sx={{ mb: 2 }}
+            placeholder="Re-enter new password"
+            sx={{
+              mb: 2,
+              "& .MuiOutlinedInput-root": {
+                color: "white",
+                "& fieldset": { borderColor: "#666", borderWidth: "1px" },
+                "&:hover fieldset": { borderColor: "#888" },
+              },
+            }}
             InputProps={{
               style: { color: "white" },
               endAdornment: (
@@ -327,7 +381,8 @@ const UserSettingsModal = ({ open, onClose, user }) => {
                   <IconButton
                     onClick={() => handleTogglePassword("confirm")}
                     edge="end"
-                    sx={{ color: "#888" }}
+                    size="small"
+                    sx={{ color: "#888", mr: -0.5 }}
                   >
                     {showPasswords.confirm ? <VisibilityOff /> : <Visibility />}
                   </IconButton>
@@ -335,6 +390,7 @@ const UserSettingsModal = ({ open, onClose, user }) => {
               ),
             }}
             InputLabelProps={{
+              shrink: true,
               style: { color: "#888" },
             }}
           />
@@ -354,18 +410,74 @@ const UserSettingsModal = ({ open, onClose, user }) => {
             name="telegramChatId"
             value={formData.telegramChatId}
             onChange={handleChange}
-            sx={{ mb: 2 }}
+            placeholder="123456789"
             helperText="Get your Chat ID from @userinfobot on Telegram"
+            sx={{
+              mb: 2,
+              "& .MuiOutlinedInput-root": {
+                color: "white",
+                "& fieldset": { borderColor: "#666", borderWidth: "1px" },
+                "&:hover fieldset": { borderColor: "#888" },
+              },
+            }}
             InputProps={{
               style: { color: "white" },
             }}
             InputLabelProps={{
+              shrink: true,
               style: { color: "#888" },
             }}
             FormHelperTextProps={{
               style: { color: "#888" },
             }}
           />
+
+          <TextField
+            fullWidth
+            label="Telegram Bot Token"
+            name="telegramBotToken"
+            type={showPasswords.botToken ? "text" : "password"}
+            value={formData.telegramBotToken}
+            onChange={handleChange}
+            placeholder={user?.telegramBotToken === '***configured***' ? "Token already configured" : "Enter your Telegram Bot Token"}
+            helperText="Get your Bot Token from @BotFather on Telegram. Leave empty to keep current."
+            sx={{
+              mb: 2,
+              "& .MuiOutlinedInput-root": {
+                color: "white",
+                "& fieldset": { borderColor: "#666", borderWidth: "1px" },
+                "&:hover fieldset": { borderColor: "#888" },
+              },
+            }}
+            InputProps={{
+              style: { color: "white" },
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton
+                    onClick={() => handleTogglePassword("botToken")}
+                    edge="end"
+                    size="small"
+                    sx={{ color: "#888", mr: -0.5 }}
+                  >
+                    {showPasswords.botToken ? <VisibilityOff /> : <Visibility />}
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }}
+            InputLabelProps={{
+              shrink: true,
+              style: { color: "#888" },
+            }}
+            FormHelperTextProps={{
+              style: { color: "#888" },
+            }}
+          />
+
+          {user?.telegramBotToken === '***configured***' && (
+            <Alert severity="success" sx={{ mb: 2, backgroundColor: 'rgba(46, 125, 50, 0.15)', color: '#4caf50' }}>
+              ✓ Telegram Bot Token is configured. Enter a new token to replace it.
+            </Alert>
+          )}
         </Box>
 
         <Divider sx={{ my: 2, borderColor: "#333" }} />

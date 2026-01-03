@@ -84,7 +84,7 @@ export class SafeAlertProcessor {
   async acquireProcessingLock(alertId, symbol) {
     const lockKey = `alert:processing:${alertId}`;
     const lockValue = `${Date.now()}_${Math.random()}`;
-    const lockTTL = 5; // 5 seconds to prevent stuck locks
+    const lockTTL = 1; // 🔥 REDUCED: 1 second (was 5s - caused missed alerts)
 
     // Check if Redis is available
     if (!this.isRedisAvailable()) {

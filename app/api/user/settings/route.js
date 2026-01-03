@@ -27,6 +27,7 @@ export async function PUT(request) {
       currentPassword,
       newPassword,
       telegramChatId,
+      telegramBotToken,
       notificationPreferences,
       preferredTimeframe,
     } = updateData;
@@ -92,6 +93,11 @@ export async function PUT(request) {
       user.telegramChatId = telegramChatId;
     }
 
+    // Update Telegram Bot Token if provided
+    if (telegramBotToken !== undefined) {
+      user.telegramBotToken = telegramBotToken;
+    }
+
     // Update notification preferences if provided
     if (notificationPreferences) {
       user.notificationPreferences = {
@@ -132,6 +138,7 @@ export async function PUT(request) {
       name: user.name,
       email: user.email,
       telegramChatId: user.telegramChatId,
+      telegramBotToken: user.telegramBotToken ? '***configured***' : null,
       notificationPreferences: user.notificationPreferences,
       preferredTimeframe: user.preferredTimeframe,
     };
@@ -181,6 +188,7 @@ export async function GET(request) {
         name: user.name,
         email: user.email,
         telegramChatId: user.telegramChatId,
+        telegramBotToken: user.telegramBotToken ? '***configured***' : null,
         notificationPreferences: user.notificationPreferences,
         preferredTimeframe: user.preferredTimeframe,
       },

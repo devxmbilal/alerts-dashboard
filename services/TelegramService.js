@@ -17,6 +17,12 @@ class TelegramService {
     this.lastSentAt = 0;
   }
 
+  // Get API URL for a specific token (user token or fallback to global)
+  getApiUrlForToken(customToken) {
+    const token = customToken || this.botToken;
+    return `https://api.telegram.org/bot${token}`;
+  }
+
   initialize() {
     try {
       if (this.initialized) return;
@@ -49,7 +55,8 @@ class TelegramService {
 
   async processQueue() {
     if (this.isProcessing) return;
-    if (!this.botToken) return;
+    // Check if we have any valid token (global or per-job)
+    if (!this.botToken && this.queue.every(job => !job.customBotToken)) return;
     if (this.queue.length === 0) return;
 
     this.isProcessing = true;
@@ -67,14 +74,14 @@ class TelegramService {
         const job = this.queue.shift();
         if (!job) continue;
 
-        const { type, chatId, alertData, photo } = job;
+        const { type, chatId, alertData, photo, customBotToken } = job;
 
         let ok = false;
 
         if (type === "text") {
-          ok = await this._sendTextNow(chatId, alertData);
+          ok = await this._sendTextNow(chatId, alertData, customBotToken);
         } else if (type === "photo") {
-          ok = await this._sendPhotoNow(chatId, photo, alertData);
+          ok = await this._sendPhotoNow(chatId, photo, alertData, customBotToken);
         }
 
         this.lastSentAt = Date.now();
@@ -158,20 +165,22 @@ ${changeEmoji} Change: \`${safeNumber(changeFromBaselinePercent)}%\`
 
   // =============== LOW-LEVEL SENDS (rate-limited) ===============
 
-  async _sendTextNow(chatId, alertData) {
+  async _sendTextNow(chatId, alertData, customBotToken = null) {
     try {
       if (!this.initialized) {
         this.initialize();
       }
 
-      if (!this.botToken) {
+      const effectiveToken = customBotToken || this.botToken;
+      if (!effectiveToken) {
         console.error("❌ Telegram bot token not configured");
         return false;
       }
 
+      const apiUrl = this.getApiUrlForToken(customBotToken);
       const message = this.formatAlertMessage(alertData);
 
-      const response = await fetch(`${this.apiUrl}/sendMessage`, {
+      const response = await fetch(`${apiUrl}/sendMessage`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -206,16 +215,19 @@ ${changeEmoji} Change: \`${safeNumber(changeFromBaselinePercent)}%\`
     }
   }
 
-  async _sendPhotoNow(chatId, photo, alertData) {
+  async _sendPhotoNow(chatId, photo, alertData, customBotToken = null) {
     try {
       if (!this.initialized) {
         this.initialize();
       }
 
-      if (!this.botToken) {
+      const effectiveToken = customBotToken || this.botToken;
+      if (!effectiveToken) {
         console.error("❌ Telegram bot token not configured");
         return false;
       }
+
+      const apiUrl = this.getApiUrlForToken(customBotToken);
 
       // Validate photo buffer
       if (!photo || !Buffer.isBuffer(photo)) {
@@ -287,7 +299,7 @@ ${changeEmoji} Change: \`${safeNumber(changeFromBaselinePercent)}%\`
       formData.append("caption", caption);
       formData.append("parse_mode", "Markdown");
 
-      const response = await axios.post(`${this.apiUrl}/sendPhoto`, formData, {
+      const response = await axios.post(`${apiUrl}/sendPhoto`, formData, {
         headers: {
           ...formData.getHeaders(),
         },
@@ -321,7 +333,7 @@ ${changeEmoji} Change: \`${safeNumber(changeFromBaselinePercent)}%\`
 
         // fallback text-only
         console.log("⚠️ Falling back to text-only message...");
-        return await this._sendTextNow(chatId, alertData);
+        return await this._sendTextNow(chatId, alertData, customBotToken);
       }
     } catch (error) {
       console.error("❌ Error sending Telegram photo:", error.message);
@@ -340,7 +352,7 @@ ${changeEmoji} Change: \`${safeNumber(changeFromBaselinePercent)}%\`
       }
       console.log("⚠️ Falling back to text-only message...");
       try {
-        return await this._sendTextNow(chatId, alertData);
+        return await this._sendTextNow(chatId, alertData, customBotToken);
       } catch (fallbackError) {
         console.error(
           "❌ Fallback text message also failed:",
@@ -355,15 +367,18 @@ ${changeEmoji} Change: \`${safeNumber(changeFromBaselinePercent)}%\`
 
   /**
    * Queue alert message to Telegram (non-blocking)
+   * @param {string} chatId - Telegram chat ID
+   * @param {object} alertData - Alert data to format and send
+   * @param {string|null} customBotToken - Optional custom bot token (user-specific)
    */
-  async sendAlertMessage(chatId, alertData) {
+  async sendAlertMessage(chatId, alertData, customBotToken = null) {
     if (!chatId) {
       console.error("❌ sendAlertMessage: chatId missing");
       return false;
     }
 
     // Queue job instead of sending immediately
-    this.enqueueJob({ type: "text", chatId, alertData });
+    this.enqueueJob({ type: "text", chatId, alertData, customBotToken });
 
     // We return true = "successfully queued"
     return true;
@@ -371,8 +386,12 @@ ${changeEmoji} Change: \`${safeNumber(changeFromBaselinePercent)}%\`
 
   /**
    * Queue photo alert to Telegram (non-blocking)
+   * @param {string} chatId - Telegram chat ID
+   * @param {Buffer} photo - Photo buffer
+   * @param {object} alertData - Alert data to format and send
+   * @param {string|null} customBotToken - Optional custom bot token (user-specific)
    */
-  async sendPhotoAlert(chatId, photo, alertData) {
+  async sendPhotoAlert(chatId, photo, alertData, customBotToken = null) {
     if (!chatId) {
       console.error("❌ sendPhotoAlert: chatId missing");
       return false;
@@ -380,11 +399,11 @@ ${changeEmoji} Change: \`${safeNumber(changeFromBaselinePercent)}%\`
 
     if (!photo) {
       console.warn("⚠️ sendPhotoAlert: photo missing, sending text-only");
-      this.enqueueJob({ type: "text", chatId, alertData });
+      this.enqueueJob({ type: "text", chatId, alertData, customBotToken });
       return true;
     }
 
-    this.enqueueJob({ type: "photo", chatId, photo, alertData });
+    this.enqueueJob({ type: "photo", chatId, photo, alertData, customBotToken });
     return true;
   }
 

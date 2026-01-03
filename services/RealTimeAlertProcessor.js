@@ -424,16 +424,16 @@ class RealTimeAlertProcessor {
 
       const symbol = alert.symbol;
       const cacheKey = `alerts:cache:${symbol}`;
+      const alertIdStr = alert._id.toString();
 
       // Get existing alerts for this symbol
       const existingAlerts = await this.getAlertsFromCache(symbol);
 
-      // Update the alert in the array
-      const alertIndex = existingAlerts.findIndex(
-        (a) => a._id.toString() === alert._id.toString()
-      );
+      // 🔥 OPTIMIZATION: Use Map for O(1) lookup instead of O(A) findIndex
+      const alertMap = new Map(existingAlerts.map((a, idx) => [a._id.toString(), idx]));
+      const alertIndex = alertMap.get(alertIdStr);
 
-      if (alertIndex !== -1) {
+      if (alertIndex !== undefined) {
         existingAlerts[alertIndex] = alert;
       } else {
         existingAlerts.push(alert);
@@ -442,13 +442,12 @@ class RealTimeAlertProcessor {
       // Update cache (no TTL - cache is updated automatically on alert events)
       await redis.set(cacheKey, JSON.stringify(existingAlerts));
 
-      // Also update in-memory map
+      // Also update in-memory map using same O(1) approach
       if (this.activeAlerts.has(symbol)) {
         const inMemoryAlerts = this.activeAlerts.get(symbol);
-        const inMemoryIndex = inMemoryAlerts.findIndex(
-          (a) => a._id.toString() === alert._id.toString()
-        );
-        if (inMemoryIndex !== -1) {
+        const memMap = new Map(inMemoryAlerts.map((a, idx) => [a._id.toString(), idx]));
+        const inMemoryIndex = memMap.get(alertIdStr);
+        if (inMemoryIndex !== undefined) {
           inMemoryAlerts[inMemoryIndex] = alert;
         }
       }
@@ -640,6 +639,9 @@ class RealTimeAlertProcessor {
       }
 
       // Process all alerts for this symbol using SafeAlertProcessor (prevents race conditions)
+      // 🔥 OPTIMIZATION: Create Map for O(1) lookup instead of O(A) findIndex
+      const alertMap = new Map(alerts.map((a, idx) => [a._id.toString(), idx]));
+
       const alertPromises = alerts.map((alert) =>
         this.processLimit(async () => {
           try {
@@ -652,11 +654,9 @@ class RealTimeAlertProcessor {
 
             // OPTIMIZATION: Update cache without blocking (fire-and-forget)
             if (result.success && result.result && result.result.triggered) {
-              // Update in-memory cache immediately (no DB query needed)
-              const alertIndex = alerts.findIndex(
-                (a) => a._id.toString() === alert._id.toString()
-              );
-              if (alertIndex !== -1) {
+              // 🔥 O(1) Map lookup instead of O(A) findIndex
+              const alertIndex = alertMap.get(alert._id.toString());
+              if (alertIndex !== undefined) {
                 // Update baseline in memory
                 alerts[alertIndex].baselinePrice = liveData.price;
                 alerts[alertIndex].baselineVolume =
@@ -1850,8 +1850,12 @@ class RealTimeAlertProcessor {
         `📊 Baseline: Price=${alert.baselinePrice}, Volume=${alert.baselineVolume}, Timestamp=${alert.baselineTimestamp}`
       );
 
-      // CRITICAL: Check if baseline needs to be updated based on timeframe
-      // If timeframe interval has passed, update baseline to current live price
+      // 🔥 CRITICAL FIX: Track if baseline needs updating, but DON'T update until AFTER alert check
+      // This prevents the "Change in price: 0.000%" bug at timeframe boundaries
+      let shouldUpdateBaseline = false;
+      let newBaselinePrice = null;
+      let newBaselineVolume = null;
+
       if (alert.conditions?.changePercent?.timeframe) {
         const timeframe = alert.conditions.changePercent.timeframe;
         const timeframeMs = this.getTimeframeMs(timeframe);
@@ -1864,96 +1868,54 @@ class RealTimeAlertProcessor {
         // Check if timeframe interval has passed
         if (timeSinceBaseline >= timeframeMs) {
           console.log(
-            `🔄 Timeframe interval passed for ${alert.symbol}, updating baseline from ${alert.baselinePrice} to ${priceData.price}`
+            `⏰ Timeframe interval passed for ${alert.symbol}, will update baseline from ${alert.baselinePrice} to ${priceData.price} AFTER alert check`
           );
 
-          // Update baseline to current live price
-          alert.baselinePrice = priceData.price;
-          alert.baselineVolume = priceData.volume || priceData.volume24h;
-          alert.baselineTimestamp = new Date();
-
-          // OPTIMIZATION: Queue baseline update to Redis Stream (non-blocking)
-          await this.enqueueDbOperation({
-            type: "update_baseline",
-            alertId: alert._id.toString(),
-            data: {
-              baselinePrice: priceData.price,
-              baselineVolume: priceData.volume || priceData.volume24h,
-              baselineTimestamp: new Date(),
-            },
-            priority: "normal",
-          }).catch((error) => {
-            console.error(
-              `❌ Error enqueueing baseline update to DB queue:`,
-              error.message
-            );
-            // Fallback: Try direct DB update if queue fails
-            Alert.findByIdAndUpdate(alert._id, {
-              baselinePrice: priceData.price,
-              baselineVolume: priceData.volume || priceData.volume24h,
-              baselineTimestamp: new Date(),
-            }).catch((dbError) => {
-              console.error(
-                `❌ Error updating baseline for ${alert.symbol} (fallback):`,
-                dbError.message
-              );
-            });
-          });
-
-          // OPTIMIZATION: Update in-memory cache immediately
-          const alertsForSymbol = this.activeAlerts.get(alert.symbol);
-          if (alertsForSymbol) {
-            const alertIndex = alertsForSymbol.findIndex(
-              (a) => a._id.toString() === alert._id.toString()
-            );
-            if (alertIndex !== -1) {
-              // Update with new baseline values
-              alertsForSymbol[alertIndex] = {
-                ...alertsForSymbol[alertIndex],
-                baselinePrice: priceData.price,
-                baselineVolume: priceData.volume || priceData.volume24h,
-                baselineTimestamp: new Date(),
-              };
-            }
-          }
-
-          // OPTIMIZATION: Update Redis cache (non-blocking)
-          await this.updateAlertInCache({
-            ...alert,
-            baselinePrice: priceData.price,
-            baselineVolume: priceData.volume || priceData.volume24h,
-            baselineTimestamp: new Date(),
-          }).catch((error) => {
-            console.error(
-              `❌ Error updating alert in Redis cache for ${alert.symbol}:`,
-              error.message
-            );
-          });
-
-          console.log(
-            `✅ Baseline updated in memory and Redis cache for ${alert.symbol}`
-          );
+          // 🔥 FIX: Store new baseline values but DON'T apply them yet
+          shouldUpdateBaseline = true;
+          newBaselinePrice = priceData.price;
+          newBaselineVolume = priceData.volume || priceData.volume24h;
         } else {
           const remainingMs = timeframeMs - timeSinceBaseline;
           const remainingMinutes = Math.ceil(remainingMs / (1000 * 60));
           console.log(
-            `⏰ Timeframe interval (${timeframe}) not yet reached for ${alert.symbol}`
+            `⏰ Timeframe interval (${timeframe}) not yet reached for ${alert.symbol} (${remainingMinutes}min remaining)`
           );
         }
       }
 
       // Check if alert is locked (temporary lock due to alert count)
+      // 🔥 SPIKE FIX (Option A - Conservative): Bypass lock for MASSIVE spikes (3x+ target)
       if (isAlertLocked(alert)) {
         const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
         const now = new Date();
         const timeRemaining = Math.max(0, lockUntil.getTime() - now.getTime());
         const minutesRemaining = Math.ceil(timeRemaining / (1000 * 60));
 
-        console.log(
-          `🔒 Alert ${alert._id} for ${alert.symbol
-          } is LOCKED until ${lockUntil.toISOString()}`
-        );
-        return false;
+        // Calculate current spike magnitude
+        const requiredChange = parseFloat(alert.conditions?.changePercent?.percentage) || 0;
+        const currentChange = alert.baselinePrice && alert.baselinePrice > 0
+          ? Math.abs((priceData.price - alert.baselinePrice) / alert.baselinePrice * 100)
+          : 0;
+
+        // Bypass lock ONLY for massive spikes (3x+ the target)
+        const spikeBypassThreshold = requiredChange * 3; // Conservative: 3x target
+        const isMassiveSpike = currentChange >= spikeBypassThreshold;
+
+        if (isMassiveSpike) {
+          console.log(
+            `🚨 MASSIVE SPIKE DETECTED! ${currentChange.toFixed(2)}% (${(currentChange / requiredChange).toFixed(1)}x target) - BYPASSING LOCK for ${alert.symbol}`
+          );
+          console.log(
+            `   Lock was until ${lockUntil.toISOString()} (${minutesRemaining}min remaining)`
+          );
+          // Don't return false - continue to process alert
+        } else {
+          console.log(
+            `🔒 Alert ${alert._id} for ${alert.symbol} is LOCKED until ${lockUntil.toISOString()} (spike ${currentChange.toFixed(2)}% < ${spikeBypassThreshold.toFixed(2)}% bypass threshold)`
+          );
+          return false;
+        }
       }
 
       // IMPORTANT: Check price direction based on alert settings
@@ -2150,6 +2112,81 @@ class RealTimeAlertProcessor {
         );
       }
 
+      // 🔥 CRITICAL FIX: Apply deferred baseline update AFTER alert processing
+      // This ensures alert was triggered with the OLD baseline (correct change calculation)
+      // Now we update to the NEW baseline for the next alert cycle
+      if (shouldUpdateBaseline && newBaselinePrice !== null) {
+        console.log(
+          `🔄 NOW updating baseline for ${alert.symbol} from ${alert.baselinePrice} to ${newBaselinePrice} (deferred from earlier)`
+        );
+
+        // Update in-memory alert
+        alert.baselinePrice = newBaselinePrice;
+        alert.baselineVolume = newBaselineVolume;
+        alert.baselineTimestamp = new Date();
+
+        // Queue baseline update to database (non-blocking)
+        await this.enqueueDbOperation({
+          type: "update_baseline",
+          alertId: alert._id.toString(),
+          data: {
+            baselinePrice: newBaselinePrice,
+            baselineVolume: newBaselineVolume,
+            baselineTimestamp: new Date(),
+          },
+          priority: "normal",
+        }).catch((error) => {
+          console.error(
+            `❌ Error enqueueing deferred baseline update:`,
+            error.message
+          );
+          // Fallback: Try direct DB update if queue fails
+          Alert.findByIdAndUpdate(alert._id, {
+            baselinePrice: newBaselinePrice,
+            baselineVolume: newBaselineVolume,
+            baselineTimestamp: new Date(),
+          }).catch((dbError) => {
+            console.error(
+              `❌ Error updating deferred baseline (fallback):`,
+              dbError.message
+            );
+          });
+        });
+
+        // Update in-memory cache
+        const alertsForSymbol = this.activeAlerts.get(alert.symbol);
+        if (alertsForSymbol) {
+          const alertIndex = alertsForSymbol.findIndex(
+            (a) => a._id.toString() === alert._id.toString()
+          );
+          if (alertIndex !== -1) {
+            alertsForSymbol[alertIndex] = {
+              ...alertsForSymbol[alertIndex],
+              baselinePrice: newBaselinePrice,
+              baselineVolume: newBaselineVolume,
+              baselineTimestamp: new Date(),
+            };
+          }
+        }
+
+        // Update Redis cache (non-blocking)
+        await this.updateAlertInCache({
+          ...alert,
+          baselinePrice: newBaselinePrice,
+          baselineVolume: newBaselineVolume,
+          baselineTimestamp: new Date(),
+        }).catch((error) => {
+          console.error(
+            `❌ Error updating deferred baseline in Redis cache:`,
+            error.message
+          );
+        });
+
+        console.log(
+          `✅ Deferred baseline update applied for ${alert.symbol}: ${newBaselinePrice}`
+        );
+      }
+
       return conditionsMet;
     } catch (error) {
       console.error(
@@ -2170,7 +2207,7 @@ class RealTimeAlertProcessor {
       // Create more robust alert key with longer time window (5 minutes)
       const alertKey = `${alert._id}_${Math.floor(
         priceData.timestamp / (1 * 60 * 1000)
-      )}_${Math.floor(parseFloat(priceData.price))}`;
+      )}_${parseFloat(priceData.price).toFixed(8)}`; // 🔥 FIX: Use precise price (8 decimals) instead of Math.floor
 
       // Check if we already processed this alert recently (prevent spam)
       if (this.processedAlerts.has(alertKey)) {
@@ -2180,16 +2217,12 @@ class RealTimeAlertProcessor {
         return false;
       }
 
-      // ADDITIONAL: Check if we already processed this alert at the same price
-      const priceKey = `${alert._id}_price_${Math.floor(
-        parseFloat(priceData.price)
-      )}`;
+      // 🔥 FIX: Check price-based key with precise decimal tracking (not floored)
+      // This prevents false duplicates for low-price coins (<$1)
+      const priceKey = `${alert._id}_price_${parseFloat(priceData.price).toFixed(8)}`;
       if (this.processedAlerts.has(priceKey)) {
         console.log(
-          `⚠️ Alert ${alert._id
-          } already triggered at same price level (${Math.floor(
-            parseFloat(priceData.price)
-          )}), skipping duplicate`
+          `⚠️ Alert ${alert._id} already triggered at same price level ($${parseFloat(priceData.price).toFixed(8)}), skipping duplicate`
         );
         return false;
       }

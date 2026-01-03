@@ -753,7 +753,7 @@ class ChartScreenshotService {
     // Method 1: Canvas-based Candlestick (FAST - 1-2 seconds, real candlesticks!)
     try {
       console.log(`🕯️ Generating canvas candlestick chart for ${symbol}...`);
-      const candles = await this.getBinanceCandles(symbol, timeframe, 35);
+      const candles = await this.getBinanceCandles(symbol, timeframe, 200); // 🔥 Zoom out: Show 100 candles (was 35)
 
       if (candles.length === 0) {
         throw new Error("No candle data available from Binance");

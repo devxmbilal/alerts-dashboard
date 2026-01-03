@@ -55,7 +55,7 @@ redis.on("message", async (channel, message) => {
     const [user, history] = await Promise.all([
       User.findById(userQueryId)
         .select(
-          "email telegramChatId notificationPreferences preferredTimeframe"
+          "email telegramChatId telegramBotToken notificationPreferences preferredTimeframe"
         )
         .lean(),
       AlertHistory.findById(historyId).lean(),
@@ -70,7 +70,7 @@ redis.on("message", async (channel, message) => {
         // Already tried ObjectId, try as string directly
         const userByString = await User.findOne({ _id: userId.toString() })
           .select(
-            "email telegramChatId notificationPreferences preferredTimeframe"
+            "email telegramChatId telegramBotToken notificationPreferences preferredTimeframe"
           )
           .lean();
         if (userByString) {
@@ -86,7 +86,8 @@ redis.on("message", async (channel, message) => {
             symbol: history.symbol,
             targetValue:
               history.alertConditions?.changePercent?.percentage || "N/A",
-            actualValue: history.triggerData?.priceChangePercent || 0,
+            actualValue: history.baselineData?.changeFromBaselinePercent ??
+              history.triggerData?.priceChangePercent ?? 0, // 🔥 FIX: Use baseline change first
             direction:
               history.alertConditions?.changePercent?.direction === "increase"
                 ? "Increase"
@@ -146,13 +147,15 @@ redis.on("message", async (channel, message) => {
                 await TelegramService.sendPhotoAlert(
                   userByString.telegramChatId,
                   chartScreenshot,
-                  alertData
+                  alertData,
+                  userByString.telegramBotToken || null
                 );
                 console.log(`✅ Telegram PHOTO alert sent for ${alertData.symbol}`);
               } else {
                 await TelegramService.sendAlertMessage(
                   userByString.telegramChatId,
-                  alertData
+                  alertData,
+                  userByString.telegramBotToken || null
                 );
                 console.log(`✅ Telegram TEXT alert sent for ${alertData.symbol}`);
               }
@@ -184,7 +187,8 @@ redis.on("message", async (channel, message) => {
     const alertData = {
       symbol: history.symbol,
       targetValue: history.alertConditions?.changePercent?.percentage || "N/A",
-      actualValue: history.triggerData?.priceChangePercent || 0,
+      actualValue: history.baselineData?.changeFromBaselinePercent ??
+        history.triggerData?.priceChangePercent ?? 0, // 🔥 FIX: Use baseline change for timeframe-based alerts
       direction:
         history.alertConditions?.changePercent?.direction === "increase"
           ? "Increase"
@@ -289,7 +293,8 @@ redis.on("message", async (channel, message) => {
           telegramQueued = await TelegramService.sendPhotoAlert(
             user.telegramChatId,
             chartScreenshot,
-            alertData
+            alertData,
+            user.telegramBotToken || null
           );
           if (telegramQueued) {
             console.log(
@@ -303,7 +308,8 @@ redis.on("message", async (channel, message) => {
         } else {
           telegramQueued = await TelegramService.sendAlertMessage(
             user.telegramChatId,
-            alertData
+            alertData,
+            user.telegramBotToken || null
           );
           if (telegramQueued) {
             console.log(
