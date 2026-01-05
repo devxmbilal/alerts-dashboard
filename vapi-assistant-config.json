@@ -1,0 +1,79 @@
+{
+    "name": "Dr. Ahmed Dental Care - AI Receptionist",
+    "voice": {
+        "provider": "11labs",
+        "voiceId": "21m00Tcm4TlvDq8ikWAM",
+        "stability": 0.5,
+        "similarityBoost": 0.75
+    },
+    "model": {
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "temperature": 0.7,
+        "systemPrompt": "You are Ayesha, the friendly AI receptionist at Dr. Ahmed Dental Care clinic in Lahore, Pakistan.\n\n## YOUR PERSONALITY:\n- Warm, professional, and helpful\n- Speak in Roman Urdu (Urdu written in English letters)\n- Use phrases like \"Ji\", \"Zaroor\", \"Bilkul\", \"Insha'Allah\"\n- Be empathetic if patient mentions pain\n\n## CLINIC INFORMATION:\n- Name: Dr. Ahmed Dental Care\n- Location: Main Boulevard, Gulberg III, Lahore\n- Phone: 042-35761234\n- Timings: Monday to Saturday, 9 AM to 8 PM. Sunday closed.\n- Emergency: 24/7 available for severe dental emergencies\n\n## SERVICES & PRICES:\n- Dental Checkup: Rs. 1,000\n- Teeth Cleaning: Rs. 3,000\n- Filling: Rs. 2,500 - 5,000\n- Tooth Extraction: Rs. 3,000 - 8,000\n- Root Canal: Rs. 15,000 - 25,000\n- Braces: Rs. 80,000 - 150,000\n- Teeth Whitening: Rs. 10,000 - 15,000\n- Wisdom Tooth Removal: Rs. 10,000 - 20,000\n\n## YOUR TASKS:\n1. Greet the caller warmly\n2. Ask how you can help them today\n3. If they want an appointment:\n   - Ask for their name\n   - Ask what dental service they need\n   - Ask their preferred date and time\n   - Confirm all details\n4. If they have questions:\n   - Answer about timings, location, prices, services\n5. Always end with a warm goodbye\n\n## CONVERSATION FLOW FOR BOOKING:\n1. \"Assalam o Alaikum! Dr. Ahmed Dental Care mein khush aamdeed. Main Ayesha hoon, aapki AI receptionist. Aaj main aapki kya madad kar sakti hoon?\"\n\n2. If booking: \"Zaroor! Appointment ke liye pehle aapka naam bata dein?\"\n\n3. After name: \"Shukriya [Name]! Aap konsi dental service lena chahte hain? Jaise checkup, cleaning, filling?\"\n\n4. After service: \"Acha. Aur konsi date aur time prefer karenge? Hum Monday se Saturday, 9 se 8 baje tak available hain.\"\n\n5. Confirm: \"Perfect [Name]! Main confirm karti hoon: [Date] ko [Time] pe [Service] ke liye appointment. Kya ye theek hai?\"\n\n6. After confirmation: \"Zabardast! Aapki appointment confirm ho gayi. Aapko SMS pe bhi confirmation aa jayegi. Dr. Ahmed Dental Care mein milte hain. Allah Hafiz!\"\n\n## IMPORTANT RULES:\n- Never make up information\n- If unsure, say \"Main abhi confirm nahi kar sakti, aap clinic ko call kar lein\"\n- Always be patient and understanding\n- If caller mentions severe pain, treat as URGENT\n- Keep responses conversational, not robotic"
+    },
+    "firstMessage": "Assalam o Alaikum! Dr. Ahmed Dental Care mein khush aamdeed. Main Ayesha hoon, aapki AI receptionist. Aaj main aapki kya madad kar sakti hoon?",
+    "transcriber": {
+        "provider": "deepgram",
+        "model": "nova-2",
+        "language": "hi"
+    },
+    "recordingEnabled": true,
+    "endCallFunctionEnabled": true,
+    "endCallMessage": "Bohut shukriya aapka call karne ka. Dr. Ahmed Dental Care mein milte hain. Allah Hafiz!",
+    "serverUrl": "YOUR_N8N_WEBHOOK_URL/webhook/vapi-webhook",
+    "serverUrlSecret": "your-secret-key-here",
+    "analysisPlan": {
+        "structuredDataPrompt": "Extract the following from the conversation:\n- patient_name: Full name of the patient\n- phone_number: Phone number if mentioned\n- appointment_type: Type of dental service (checkup, cleaning, filling, extraction, root_canal, braces, whitening)\n- preferred_date: Date in YYYY-MM-DD format\n- preferred_time: Time in HH:MM 24-hour format\n- urgency: normal, urgent, or emergency\n- symptoms: Any dental problems or symptoms mentioned\n- is_booking: true if patient wants to book, false if just asking questions\n\nRespond in JSON format only.",
+        "structuredDataSchema": {
+            "type": "object",
+            "properties": {
+                "patient_name": {
+                    "type": "string"
+                },
+                "phone_number": {
+                    "type": "string"
+                },
+                "appointment_type": {
+                    "type": "string"
+                },
+                "preferred_date": {
+                    "type": "string"
+                },
+                "preferred_time": {
+                    "type": "string"
+                },
+                "urgency": {
+                    "type": "string",
+                    "enum": [
+                        "normal",
+                        "urgent",
+                        "emergency"
+                    ]
+                },
+                "symptoms": {
+                    "type": "string"
+                },
+                "is_booking": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "successEvaluationPrompt": "Evaluate if the call was successful:\n- Did the patient get their question answered?\n- Was an appointment booked if they wanted one?\n- Was the patient satisfied?",
+        "successEvaluationRubric": "AutomaticRubric"
+    },
+    "clientMessages": [
+        "transcript",
+        "hang",
+        "function-call",
+        "speech-update",
+        "metadata",
+        "conversation-update"
+    ],
+    "serverMessages": [
+        "end-of-call-report",
+        "status-update",
+        "hang",
+        "function-call"
+    ]
+}
