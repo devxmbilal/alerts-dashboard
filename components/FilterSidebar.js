@@ -1157,33 +1157,36 @@ const FilterSidebar = forwardRef(
               />
             </AccordionDetails>
           </DarkAccordion>
+
+          {/* 🔥 UI FIX: Moved buttons here - after Volume accordion, inside filters area */}
+          <Box sx={{ p: 1, mt: 2 }}>
+            <Button
+              fullWidth
+              variant="contained"
+              onClick={handleCreateAlert}
+              disabled={favoriteCount === 0 || isCreating}
+              startIcon={<NotificationsActiveIcon />}
+              sx={{ mb: 1 }}
+            >
+              {isCreating
+                ? "Creating..."
+                : `Create Alerts for ${favoriteCount} Favorites`}
+            </Button>
+
+            <Button
+              fullWidth
+              variant="outlined"
+              color="error"
+              onClick={() => setResetDialogOpen(true)}
+              disabled={isResetting}
+            >
+              {isResetting ? "Resetting..." : "Reset Filters & Remove Alerts"}
+            </Button>
+          </Box>
         </Box>
 
-        {/* Actions */}
-        <Box sx={{ p: 1, borderTop: 1, borderColor: "divider" }}>
-          <Button
-            fullWidth
-            variant="contained"
-            onClick={handleCreateAlert}
-            disabled={favoriteCount === 0 || isCreating}
-            startIcon={<NotificationsActiveIcon />}
-            sx={{ mb: 1 }}
-          >
-            {isCreating
-              ? "Creating..."
-              : `Create Alerts for ${favoriteCount} Favorites`}
-          </Button>
-
-          <Button
-            fullWidth
-            variant="outlined"
-            color="error"
-            onClick={() => setResetDialogOpen(true)}
-            disabled={isResetting}
-            sx={{ mb: 1 }}
-          >
-            {isResetting ? "Resetting..." : "Reset Filters & Remove Alerts"}
-          </Button>
+        {/* Actions - Messages and Dialogs */}
+        <Box sx={{ p: 1 }}>
 
           {/* Confirmation Dialog */}
           <Dialog
