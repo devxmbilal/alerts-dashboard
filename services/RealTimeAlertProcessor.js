@@ -865,30 +865,32 @@ class RealTimeAlertProcessor {
         return { triggered: false, reason: "baseline_initialized" };
       }
 
-      console.log(
-        `📊 Baseline: ${originalBaselinePrice}, Live: ${liveData.price}`
-      );
 
       // CRITICAL: Check if baseline needs to be updated based on timeframe
-      // If timeframe interval has passed, update baseline to current live price
+      // 🔥 FIX: Update baseline at CANDLE CLOSE boundaries, not time since last update
+      // Example: For 5MIN, update at 10:00, 10:05, 10:10, etc.
       if (alert.conditions?.changePercent?.timeframe) {
         const timeframe = alert.conditions.changePercent.timeframe;
         const timeframeMs = this.getTimeframeMs(timeframe);
+        const currentTime = Date.now();
+
+        // Calculate current candle start time (aligned to timeframe boundaries)
+        const currentCandleStart = Math.floor(currentTime / timeframeMs) * timeframeMs;
+
+        // Get the candle when baseline was last set
         const baselineTimestamp = alert.baselineTimestamp
           ? new Date(alert.baselineTimestamp).getTime()
-          : Date.now();
-        const currentTime = Date.now();
-        const timeSinceBaseline = currentTime - baselineTimestamp;
+          : 0;
+        const baselineCandleStart = Math.floor(baselineTimestamp / timeframeMs) * timeframeMs;
 
-        // Check if timeframe interval has passed
-        if (timeSinceBaseline >= timeframeMs) {
-          console.log(
-            `🔄 Timeframe interval passed for ${alert.symbol}, updating baseline from ${alert.baselinePrice} to ${liveData.price}`
-          );
+        // 🔥 CRITICAL: Update baseline only when we've moved to a NEW CANDLE
+        // This ensures baseline updates at candle close, not just after X minutes
+        if (currentCandleStart > baselineCandleStart) {
+
 
           // Update baseline to current live price
           alert.baselinePrice = liveData.price;
-          alert.baselineTimestamp = new Date();
+          alert.baselineTimestamp = new Date(currentCandleStart); // Set to candle start for accurate tracking
 
           // Update baseline volume based on smallest volume timeframe (if volume condition exists)
           let updatedVolume = liveData.volume || liveData.volume24h;
@@ -900,10 +902,11 @@ class RealTimeAlertProcessor {
               return tfMs < minMs ? tf : min;
             });
             const smallestTimeframeMs = this.getTimeframeMs(smallestTimeframe);
+            const smallestCandleStart = Math.floor(currentTime / smallestTimeframeMs) * smallestTimeframeMs;
+            const baselineSmallestCandle = Math.floor(baselineTimestamp / smallestTimeframeMs) * smallestTimeframeMs;
 
-            if (timeSinceBaseline >= smallestTimeframeMs) {
+            if (smallestCandleStart > baselineSmallestCandle) {
               alert.baselineVolume = updatedVolume;
-              console.log(`📊 Volume baseline updated (${smallestTimeframe}): ${alert.baselineVolume}`);
             }
           } else {
             alert.baselineVolume = updatedVolume;
@@ -913,7 +916,7 @@ class RealTimeAlertProcessor {
           Alert.findByIdAndUpdate(alert._id, {
             baselinePrice: liveData.price,
             baselineVolume: alert.baselineVolume,
-            baselineTimestamp: new Date(),
+            baselineTimestamp: new Date(currentCandleStart),
           }).catch((error) => {
             console.error(
               `❌ Error updating baseline for ${alert.symbol}:`,
@@ -924,16 +927,16 @@ class RealTimeAlertProcessor {
           // CRITICAL FIX: Update in-memory cache with baseline AND preserve lock
           const alertsForSymbol = this.activeAlerts.get(alert.symbol);
           if (alertsForSymbol) {
-            const alertIndex = alertsForSymbol.findIndex(
-              (a) => a._id.toString() === alert._id.toString()
-            );
-            if (alertIndex !== -1) {
+            // 🔥 OPTIMIZATION: Use Map for O(1) lookup
+            const alertMap = new Map(alertsForSymbol.map((a, idx) => [a._id.toString(), idx]));
+            const alertIndex = alertMap.get(alert._id.toString());
+            if (alertIndex !== undefined) {
               // Update with new baseline AND preserve conditions (lock)
               alertsForSymbol[alertIndex] = {
                 ...alertsForSymbol[alertIndex],
                 baselinePrice: liveData.price,
                 baselineVolume: liveData.volume || liveData.volume24h,
-                baselineTimestamp: new Date(),
+                baselineTimestamp: new Date(currentCandleStart),
                 conditions: alert.conditions, // Preserve lock
               };
             }
@@ -944,7 +947,7 @@ class RealTimeAlertProcessor {
             ...alert,
             baselinePrice: liveData.price,
             baselineVolume: liveData.volume || liveData.volume24h,
-            baselineTimestamp: new Date(),
+            baselineTimestamp: new Date(currentCandleStart),
           }).catch((error) => {
             console.error(
               `❌ Error updating alert in Redis cache for ${alert.symbol}:`,
@@ -952,14 +955,12 @@ class RealTimeAlertProcessor {
             );
           });
 
-          console.log(
-            `✅ Baseline updated in memory and Redis cache for ${alert.symbol}`
-          );
+
         }
       }
 
       // ✅ INDEPENDENT VOLUME BASELINE UPDATE
-      // Volume baseline updates on smallest volume timeframe interval
+      // 🔥 FIX: Volume baseline updates at CANDLE CLOSE of smallest volume timeframe
       // This runs SEPARATELY from price baseline update
       if (alert.conditions?.volume?.timeframes?.length > 0) {
         const volumeTimeframes = alert.conditions.volume.timeframes;
@@ -969,43 +970,48 @@ class RealTimeAlertProcessor {
           return tfMs < minMs ? tf : min;
         });
         const smallestVolumeTimeframeMs = this.getTimeframeMs(smallestVolumeTimeframe);
+        const currentTime = Date.now();
+
+        // Calculate current volume candle start (aligned to smallest timeframe)
+        const currentVolumeCandleStart = Math.floor(currentTime / smallestVolumeTimeframeMs) * smallestVolumeTimeframeMs;
 
         // Get volume baseline timestamp (separate from price baseline)
         const volumeBaselineTimestamp = alert.volumeBaselineTimestamp
           ? new Date(alert.volumeBaselineTimestamp).getTime()
-          : (alert.baselineTimestamp ? new Date(alert.baselineTimestamp).getTime() : Date.now());
+          : (alert.baselineTimestamp ? new Date(alert.baselineTimestamp).getTime() : 0);
 
-        const timeSinceVolumeBaseline = Date.now() - volumeBaselineTimestamp;
+        // Get the candle when volume baseline was last set
+        const volumeBaselineCandleStart = Math.floor(volumeBaselineTimestamp / smallestVolumeTimeframeMs) * smallestVolumeTimeframeMs;
 
-        // Update volume baseline if smallest timeframe interval has passed
-        if (timeSinceVolumeBaseline >= smallestVolumeTimeframeMs) {
+        // 🔥 CRITICAL: Update volume baseline only when we've moved to a NEW CANDLE
+        if (currentVolumeCandleStart > volumeBaselineCandleStart) {
           const newVolumeBaseline = liveData.quoteVolume || liveData.volume24h || liveData.volume;
 
-          console.log(`📊 Volume baseline UPDATE (${smallestVolumeTimeframe}): ${alert.baselineVolume?.toLocaleString()} → ${newVolumeBaseline?.toLocaleString()} USDT`);
+
 
           // Update in-memory
           alert.baselineVolume = newVolumeBaseline;
-          alert.volumeBaselineTimestamp = new Date();
+          alert.volumeBaselineTimestamp = new Date(currentVolumeCandleStart);
 
-          // Update in-memory cache
+          // Update in-memory cache using Map for O(1) lookup
           const alertsForSymbol = this.activeAlerts.get(alert.symbol);
           if (alertsForSymbol) {
-            const alertIndex = alertsForSymbol.findIndex(
-              (a) => a._id.toString() === alert._id.toString()
-            );
-            if (alertIndex !== -1) {
+            const alertMap = new Map(alertsForSymbol.map((a, idx) => [a._id.toString(), idx]));
+            const alertIndex = alertMap.get(alert._id.toString());
+            if (alertIndex !== undefined) {
               alertsForSymbol[alertIndex].baselineVolume = newVolumeBaseline;
-              alertsForSymbol[alertIndex].volumeBaselineTimestamp = new Date();
+              alertsForSymbol[alertIndex].volumeBaselineTimestamp = new Date(currentVolumeCandleStart);
             }
           }
 
           // Update in database (non-blocking)
           Alert.findByIdAndUpdate(alert._id, {
             baselineVolume: newVolumeBaseline,
-            volumeBaselineTimestamp: new Date(),
+            volumeBaselineTimestamp: new Date(currentVolumeCandleStart),
           }).catch((error) => {
             console.error(`❌ Error updating volume baseline for ${alert.symbol}:`, error.message);
           });
+
         }
       }
 
