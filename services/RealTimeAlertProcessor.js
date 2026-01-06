@@ -865,6 +865,9 @@ class RealTimeAlertProcessor {
         return { triggered: false, reason: "baseline_initialized" };
       }
 
+      console.log(
+        `📊 Baseline: ${originalBaselinePrice}, Live: ${liveData.price}`
+      );
 
       // CRITICAL: Check if baseline needs to be updated based on timeframe
       // 🔥 FIX: Update baseline at CANDLE CLOSE boundaries, not time since last update
@@ -886,7 +889,15 @@ class RealTimeAlertProcessor {
         // 🔥 CRITICAL: Update baseline only when we've moved to a NEW CANDLE
         // This ensures baseline updates at candle close, not just after X minutes
         if (currentCandleStart > baselineCandleStart) {
-
+          console.log(
+            `🕯️ New candle started for ${alert.symbol} (${timeframe}), updating baseline from ${alert.baselinePrice} to ${liveData.price}`
+          );
+          console.log(
+            `   Baseline candle: ${new Date(baselineCandleStart).toISOString()}`
+          );
+          console.log(
+            `   Current candle:  ${new Date(currentCandleStart).toISOString()}`
+          );
 
           // Update baseline to current live price
           alert.baselinePrice = liveData.price;
@@ -907,6 +918,7 @@ class RealTimeAlertProcessor {
 
             if (smallestCandleStart > baselineSmallestCandle) {
               alert.baselineVolume = updatedVolume;
+              console.log(`📊 Volume baseline updated at ${smallestTimeframe} candle close: ${alert.baselineVolume}`);
             }
           } else {
             alert.baselineVolume = updatedVolume;
@@ -955,7 +967,9 @@ class RealTimeAlertProcessor {
             );
           });
 
-
+          console.log(
+            `✅ Baseline updated at candle close for ${alert.symbol}`
+          );
         }
       }
 
@@ -987,7 +1001,9 @@ class RealTimeAlertProcessor {
         if (currentVolumeCandleStart > volumeBaselineCandleStart) {
           const newVolumeBaseline = liveData.quoteVolume || liveData.volume24h || liveData.volume;
 
-
+          console.log(`🕯️📊 Volume candle closed (${smallestVolumeTimeframe}): ${alert.baselineVolume?.toLocaleString()} → ${newVolumeBaseline?.toLocaleString()} USDT`);
+          console.log(`   Volume baseline candle: ${new Date(volumeBaselineCandleStart).toISOString()}`);
+          console.log(`   Current volume candle:  ${new Date(currentVolumeCandleStart).toISOString()}`);
 
           // Update in-memory
           alert.baselineVolume = newVolumeBaseline;
@@ -1012,6 +1028,7 @@ class RealTimeAlertProcessor {
             console.error(`❌ Error updating volume baseline for ${alert.symbol}:`, error.message);
           });
 
+          console.log(`✅ Volume baseline updated at candle close for ${alert.symbol}`);
         }
       }
 
