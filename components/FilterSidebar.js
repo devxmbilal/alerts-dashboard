@@ -496,6 +496,10 @@ const FilterSidebar = forwardRef(
           onCreateAlert?.(data.data.alerts);
           setSuccessMessage(data.message);
 
+          // 🔥 Show toast notification
+          setToastMessage(`✅ ${data.data.alerts.length} Alerts Created Successfully!`);
+          setToastOpen(true);
+
           // Save condition to Condition model (replaces old condition)
           try {
             const user = JSON.parse(localStorage.getItem("user") || "{}");
@@ -1238,6 +1242,28 @@ const FilterSidebar = forwardRef(
             </Alert>
           )}
         </Box>
+
+        {/* 🔥 Toast Notification */}
+        <Snackbar
+          open={toastOpen}
+          autoHideDuration={5000}
+          onClose={() => setToastOpen(false)}
+          anchorOrigin={{ vertical: "top", horizontal: "right" }}
+        >
+          <Alert
+            onClose={() => setToastOpen(false)}
+            severity="success"
+            variant="filled"
+            sx={{
+              width: "100%",
+              fontSize: "1rem",
+              fontWeight: "bold",
+              boxShadow: 3,
+            }}
+          >
+            {toastMessage}
+          </Alert>
+        </Snackbar>
       </Box>
     );
   }
