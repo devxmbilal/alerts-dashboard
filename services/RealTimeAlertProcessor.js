@@ -1302,10 +1302,14 @@ class RealTimeAlertProcessor {
             await this.updateCandleData(alert.symbol, timeframe, liveData);
           }
 
+          // 🔥 FIX: Pass Change% percentage so CANDLE_ABOVE_OPEN checks X% above open
+          const requiredPercent = parseFloat(conditions.changePercent?.percentage) || 0;
+
           const candleMatch = await this.evaluateCandleConditions(
             conditions.candle,
             liveData,
-            alert.symbol
+            alert.symbol,
+            requiredPercent // Pass the Change% percentage
           );
           return {
             passed: candleMatch,
@@ -2922,14 +2926,15 @@ class RealTimeAlertProcessor {
   }
 
   // Technical analysis helper methods
-  async evaluateCandleConditions(candleConditions, priceData, symbol = null) {
+  // 🔥 FIX: Added requiredPercent parameter to check X% above open
+  async evaluateCandleConditions(candleConditions, priceData, symbol = null, requiredPercent = 0) {
     const currentPrice = parseFloat(priceData.price || priceData.close);
     const condition = candleConditions.condition;
     const timeframes = candleConditions.timeframes || [];
     const EPSILON = 1.0001; // 0.01% epsilon to avoid float equality issues
     const CANDLE_START_BUFFER_MS = 2000; // Wait 2s after candle starts
 
-    console.log(`🕯️ Candle Evaluation: ${condition}, Live Price: ${currentPrice}`);
+    console.log(`🕯️ Candle Evaluation: ${condition}, Live Price: ${currentPrice}, Required %: ${requiredPercent}%`);
 
     switch (condition) {
       case "CANDLE_ABOVE_OPEN":
@@ -2938,7 +2943,7 @@ class RealTimeAlertProcessor {
           return false;
         }
 
-        console.log(`🔍 CANDLE_ABOVE_OPEN: Checking ${timeframes.length} timeframes for ${symbol}`);
+        console.log(`🔍 CANDLE_ABOVE_OPEN: Checking ${timeframes.length} timeframes for ${symbol}, need ${requiredPercent}% above open`);
 
         // 🚀 HYBRID APPROACH: Cache First (FAST) + API Refresh if Stale (ACCURATE)
         const CACHE_FRESH_TTL = 30000; // Cache is "fresh" for 30 seconds
@@ -2962,12 +2967,17 @@ class RealTimeAlertProcessor {
 
           if (cacheIsFresh) {
             // ⚡ FAST PATH: Use cached data
-            const priceAboveOpen = currentPrice > (cachedCandle.open * EPSILON);
-            console.log(`   ⚡ [${timeframe}] CACHE HIT: Open=${cachedCandle.open.toFixed(6)}, Above=${priceAboveOpen ? '✅' : '❌'}`);
+            // 🔥 FIX: Check X% above open, not just above open
+            const percentAboveOpen = cachedCandle.open > 0
+              ? ((currentPrice - cachedCandle.open) / cachedCandle.open) * 100
+              : 0;
+            const priceAboveOpen = percentAboveOpen >= requiredPercent;
+            console.log(`   ⚡ [${timeframe}] CACHE HIT: Open=${cachedCandle.open.toFixed(6)}, Current=${currentPrice.toFixed(6)}, Above=${percentAboveOpen.toFixed(2)}%, Need=${requiredPercent}%, Pass=${priceAboveOpen ? '✅' : '❌'}`);
             return {
               timeframe,
               success: true,
               open: cachedCandle.open,
+              percentAboveOpen,
               priceAboveOpen,
               source: 'cache'
             };
@@ -2986,9 +2996,12 @@ class RealTimeAlertProcessor {
             if (!response.ok) {
               // If API fails, use stale cache as fallback (if exists)
               if (cachedCandle && cachedCandle.open !== null) {
-                const priceAboveOpen = currentPrice > (cachedCandle.open * EPSILON);
-                console.log(`   ⚠️ [${timeframe}] API ${response.status}, using stale cache: Open=${cachedCandle.open}`);
-                return { timeframe, success: true, open: cachedCandle.open, priceAboveOpen, source: 'stale_cache' };
+                const percentAboveOpen = cachedCandle.open > 0
+                  ? ((currentPrice - cachedCandle.open) / cachedCandle.open) * 100
+                  : 0;
+                const priceAboveOpen = percentAboveOpen >= requiredPercent;
+                console.log(`   ⚠️ [${timeframe}] API ${response.status}, using stale cache: ${percentAboveOpen.toFixed(2)}% vs ${requiredPercent}%`);
+                return { timeframe, success: true, open: cachedCandle.open, percentAboveOpen, priceAboveOpen, source: 'stale_cache' };
               }
               return { timeframe, success: false, error: `API error ${response.status}` };
             }
@@ -3015,23 +3028,31 @@ class RealTimeAlertProcessor {
               fetchedAt: now
             });
 
-            // Check: Current Price > Open Price (with epsilon)
-            const priceAboveOpen = currentPrice > (candleOpen * EPSILON);
-            console.log(`   🔄 [${timeframe}] API FETCH: Open=${candleOpen.toFixed(6)}, Above=${priceAboveOpen ? '✅' : '❌'}`);
+            // Check: Current Price X% above Open Price
+            // 🔥 FIX: Check percentage above open, not just above
+            const percentAboveOpen = candleOpen > 0
+              ? ((currentPrice - candleOpen) / candleOpen) * 100
+              : 0;
+            const priceAboveOpen = percentAboveOpen >= requiredPercent;
+            console.log(`   🔄 [${timeframe}] API FETCH: Open=${candleOpen.toFixed(6)}, Current=${currentPrice.toFixed(6)}, Above=${percentAboveOpen.toFixed(2)}%, Need=${requiredPercent}%, Pass=${priceAboveOpen ? '✅' : '❌'}`);
 
             return {
               timeframe,
               success: true,
               open: candleOpen,
+              percentAboveOpen,
               priceAboveOpen,
               source: 'api'
             };
           } catch (error) {
             // On error, try stale cache
             if (cachedCandle && cachedCandle.open !== null) {
-              const priceAboveOpen = currentPrice > (cachedCandle.open * EPSILON);
-              console.log(`   ⚠️ [${timeframe}] Error, using stale cache`);
-              return { timeframe, success: true, open: cachedCandle.open, priceAboveOpen, source: 'stale_cache' };
+              const percentAboveOpen = cachedCandle.open > 0
+                ? ((currentPrice - cachedCandle.open) / cachedCandle.open) * 100
+                : 0;
+              const priceAboveOpen = percentAboveOpen >= requiredPercent;
+              console.log(`   ⚠️ [${timeframe}] Error, using stale cache: ${percentAboveOpen.toFixed(2)}% vs ${requiredPercent}%`);
+              return { timeframe, success: true, open: cachedCandle.open, percentAboveOpen, priceAboveOpen, source: 'stale_cache' };
             }
             return { timeframe, success: false, error: error.message };
           }
