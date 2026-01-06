@@ -515,9 +515,13 @@ const FilterSidebar = forwardRef(
             console.error("⚠️ Failed to save condition:", conditionError);
           }
 
+          // 🔥 FIX: Show toast notification for success (more visible)
+          setToastMessage(`✅ ${data.data.alerts.length} alerts created successfully!`);
+          setToastOpen(true);
+
           // Clear success message after 5 seconds
           setTimeout(
-            () => setSuccessMessage("alerts are created successfully"),
+            () => setSuccessMessage(""),
             5000
           );
         } else {
