@@ -4,7 +4,43 @@
  * Generates TradingView-style candlestick charts
  */
 
-import { createCanvas } from "canvas";
+import { createCanvas, registerFont } from "canvas";
+import path from "path";
+import fs from "fs";
+
+// 🔥 FIX: Register fonts for server environments where Arial might not be available
+// Try to register common fonts that exist on Linux servers
+const fontPaths = [
+    // DejaVu Sans (common on Linux)
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    // Liberation Sans (common on CentOS/RHEL)
+    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    // Ubuntu font
+    "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
+];
+
+let fontRegistered = false;
+for (const fontPath of fontPaths) {
+    try {
+        if (fs.existsSync(fontPath)) {
+            registerFont(fontPath, { family: "ChartFont" });
+            fontRegistered = true;
+            console.log(`✅ Registered chart font: ${fontPath}`);
+            break;
+        }
+    } catch (e) {
+        // Continue to next font
+    }
+}
+
+if (!fontRegistered) {
+    console.log("⚠️ No custom fonts found, using system default");
+}
+
+// Font to use throughout the chart - fallback to sans-serif if custom font not available
+const CHART_FONT = fontRegistered ? "ChartFont" : "sans-serif";
 
 class CandlestickChartGenerator {
     constructor(options = {}) {
@@ -186,25 +222,45 @@ class CandlestickChartGenerator {
         const priceStep = (maxPrice - minPrice) / numLabels;
 
         ctx.fillStyle = this.colors.text;
-        ctx.font = "12px Arial";
+        ctx.font = `12px ${CHART_FONT}`;
         ctx.textAlign = "left";
 
         for (let i = 0; i <= numLabels; i++) {
             const price = maxPrice - (priceStep * i);
             const y = this.padding.top + (height * i / numLabels);
 
-            // Format price
-            const formattedPrice = price >= 1
-                ? `$${price.toFixed(2)}`
-                : `$${price.toFixed(6)}`;
+            // 🔥 FIX: Dynamic decimal places for very small prices
+            const formattedPrice = this.formatPrice(price);
 
             ctx.fillText(formattedPrice, this.width - this.padding.right + 5, y + 4);
         }
     }
 
+    // 🔥 NEW: Smart price formatting for all price ranges
+    formatPrice(price) {
+        if (price === 0 || price === null || price === undefined || isNaN(price)) {
+            return "$0.00";
+        }
+
+        const absPrice = Math.abs(price);
+
+        if (absPrice >= 1000) {
+            return `$${price.toFixed(2)}`;
+        } else if (absPrice >= 1) {
+            return `$${price.toFixed(4)}`;
+        } else if (absPrice >= 0.001) {
+            return `$${price.toFixed(6)}`;
+        } else if (absPrice >= 0.0000001) {
+            return `$${price.toFixed(8)}`;
+        } else {
+            // For extremely small prices, use scientific notation
+            return `$${price.toExponential(4)}`;
+        }
+    }
+
     drawTimeLabels(ctx, candles, spacing, chartHeight) {
         ctx.fillStyle = this.colors.text;
-        ctx.font = "10px Arial";
+        ctx.font = `10px ${CHART_FONT}`;
         ctx.textAlign = "center";
 
         const labelInterval = Math.ceil(candles.length / 6);
@@ -234,23 +290,21 @@ class CandlestickChartGenerator {
 
         // Symbol + Timeframe
         ctx.fillStyle = "#ffffff";
-        ctx.font = "bold 18px Arial";
+        ctx.font = `bold 18px ${CHART_FONT}`;
         ctx.textAlign = "left";
         ctx.fillText(`${symbol} · ${timeframe.toUpperCase()}`, this.padding.left, 30);
 
-        // Price
-        const priceStr = lastPrice >= 1
-            ? `$${lastPrice.toFixed(2)}`
-            : `$${lastPrice.toFixed(6)}`;
+        // Price - 🔥 FIX: Use smart formatting for small prices
+        const priceStr = this.formatPrice(lastPrice);
 
         ctx.fillStyle = this.colors.text;
-        ctx.font = "bold 16px Arial";
+        ctx.font = `bold 16px ${CHART_FONT}`;
         ctx.fillText(priceStr, this.padding.left + 150, 30);
 
         // Change percentage
         const changeStr = `${isPositive ? "+" : ""}${change.toFixed(2)}%`;
         ctx.fillStyle = isPositive ? this.colors.bullish : this.colors.bearish;
-        ctx.font = "bold 14px Arial";
+        ctx.font = `bold 14px ${CHART_FONT}`;
         ctx.fillText(changeStr, this.padding.left + 280, 30);
     }
 
@@ -274,11 +328,11 @@ class CandlestickChartGenerator {
         ctx.fillStyle = this.colors.priceLabel;
         ctx.fillRect(this.width - this.padding.right, y - labelHeight / 2, labelWidth, labelHeight);
 
-        // Price text
+        // Price text - 🔥 FIX: Use smart formatting for small prices
         ctx.fillStyle = "#ffffff";
-        ctx.font = "bold 11px Arial";
+        ctx.font = `bold 11px ${CHART_FONT}`;
         ctx.textAlign = "left";
-        const priceStr = price >= 1 ? price.toFixed(2) : price.toFixed(6);
+        const priceStr = this.formatPrice(price).replace('$', ''); // Remove $ as it's in a colored box
         ctx.fillText(priceStr, this.width - this.padding.right + 5, y + 4);
     }
 }
