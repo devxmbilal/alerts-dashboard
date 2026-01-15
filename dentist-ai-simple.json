@@ -1,0 +1,408 @@
+{
+    "name": "Dentist AI Agent - Simple (No WhatsApp)",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "vapi-webhook",
+                "responseMode": "responseNode",
+                "options": {}
+            },
+            "id": "webhook-1",
+            "name": "VAPI Webhook",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [
+                200,
+                400
+            ],
+            "webhookId": "vapi-webhook"
+        },
+        {
+            "parameters": {
+                "jsCode": "const input = $input.first().json;\nconst messageType = input.message?.type || input.type || 'unknown';\n\nreturn {\n  json: {\n    event_type: messageType,\n    raw_data: input\n  }\n};"
+            },
+            "id": "code-1",
+            "name": "Identify Event",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                400,
+                400
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "string": [
+                        {
+                            "value1": "={{ $json.event_type }}",
+                            "value2": "end-of-call-report",
+                            "operation": "equals"
+                        }
+                    ]
+                }
+            },
+            "id": "if-1",
+            "name": "Is Call Ended?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                600,
+                400
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const input = $input.first().json.raw_data;\nconst message = input.message || input;\nconst call = message.call || {};\nconst analysis = message.analysis || {};\nconst structuredData = analysis.structuredData || {};\nconst transcript = message.transcript || '';\n\nconst now = new Date();\nconst bookingRef = 'DAC-' + now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0') + '-' + String(Math.floor(Math.random() * 10000)).padStart(4, '0');\n\n// Appointment duration based on service type\nconst complexTypes = ['root_canal', 'extraction', 'braces', 'root canal'];\nconst appointmentType = structuredData.appointment_type || structuredData.service || '';\nconst duration = complexTypes.some(t => appointmentType.toLowerCase().includes(t)) ? 60 : 30;\n\n// Calculate end time\nlet endTime = '';\nif (structuredData.preferred_time) {\n  const timeParts = structuredData.preferred_time.split(':');\n  const hours = parseInt(timeParts[0]) || 0;\n  const minutes = parseInt(timeParts[1]) || 0;\n  const totalMinutes = hours * 60 + minutes + duration;\n  endTime = String(Math.floor(totalMinutes / 60) % 24).padStart(2, '0') + ':' + String(totalMinutes % 60).padStart(2, '0');\n}\n\n// Format phone number\nlet phoneNumber = call.customer?.number || structuredData.phone_number || '';\nphoneNumber = phoneNumber.replace(/[^0-9]/g, '');\nif (phoneNumber.startsWith('0')) {\n  phoneNumber = '92' + phoneNumber.substring(1);\n}\n\nreturn {\n  json: {\n    call_id: call.id || '',\n    phone_number: phoneNumber,\n    phone_formatted: '+' + phoneNumber,\n    transcript: transcript,\n    patient_name: structuredData.patient_name || structuredData.name || '',\n    appointment_type: appointmentType,\n    preferred_date: structuredData.preferred_date || '',\n    preferred_time: structuredData.preferred_time || '',\n    end_time: endTime,\n    duration_minutes: duration,\n    urgency: structuredData.urgency || 'normal',\n    symptoms: structuredData.symptoms || structuredData.notes || '',\n    is_booking: structuredData.is_booking !== false,\n    booking_reference: bookingRef,\n    created_at: now.toISOString(),\n    status: 'pending'\n  }\n};"
+            },
+            "id": "code-2",
+            "name": "Process Call Data",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                800,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "string": [
+                        {
+                            "value1": "={{ $json.patient_name }}",
+                            "operation": "isNotEmpty"
+                        },
+                        {
+                            "value1": "={{ $json.preferred_date }}",
+                            "operation": "isNotEmpty"
+                        }
+                    ]
+                },
+                "combineOperation": "all"
+            },
+            "id": "if-2",
+            "name": "Valid Booking?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                1000,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "resource": "event",
+                "operation": "getAll",
+                "calendar": "primary",
+                "returnAll": false,
+                "limit": 20,
+                "options": {
+                    "timeMin": "={{ $json.preferred_date }}T00:00:00Z",
+                    "timeMax": "={{ $json.preferred_date }}T23:59:59Z"
+                }
+            },
+            "id": "gcal-1",
+            "name": "Check Calendar",
+            "type": "n8n-nodes-base.googleCalendar",
+            "typeVersion": 1,
+            "position": [
+                1200,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const existingEvents = $input.all();\nconst bookingData = $('Process Call Data').first().json;\n\nconst preferredDate = bookingData.preferred_date;\nconst preferredTime = bookingData.preferred_time;\nconst duration = bookingData.duration_minutes;\n\nif (!preferredTime) {\n  return { json: { ...bookingData, is_available: false, reason: 'No time specified' } };\n}\n\nconst preferredStart = new Date(preferredDate + 'T' + preferredTime + ':00');\nconst preferredEnd = new Date(preferredStart.getTime() + duration * 60000);\n\nlet isAvailable = true;\nlet conflictEvent = null;\n\nfor (const event of existingEvents) {\n  const e = event.json;\n  if (e.start && e.end) {\n    const eventStart = new Date(e.start.dateTime || e.start.date + 'T00:00:00');\n    const eventEnd = new Date(e.end.dateTime || e.end.date + 'T23:59:59');\n    if (preferredStart < eventEnd && preferredEnd > eventStart) {\n      isAvailable = false;\n      conflictEvent = e.summary;\n      break;\n    }\n  }\n}\n\nreturn { json: { ...bookingData, is_available: isAvailable, conflict_with: conflictEvent } };"
+            },
+            "id": "code-3",
+            "name": "Check Availability",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                1400,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "boolean": [
+                        {
+                            "value1": "={{ $json.is_available }}",
+                            "value2": true
+                        }
+                    ]
+                }
+            },
+            "id": "if-3",
+            "name": "Slot Available?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                1600,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "resource": "event",
+                "calendar": "primary",
+                "summary": "=🦷 {{ $json.appointment_type }} - {{ $json.patient_name }}",
+                "start": "={{ $json.preferred_date }}T{{ $json.preferred_time }}:00",
+                "end": "={{ $json.preferred_date }}T{{ $json.end_time }}:00",
+                "additionalFields": {
+                    "description": "Patient: {{ $json.patient_name }}\nPhone: {{ $json.phone_formatted }}\nService: {{ $json.appointment_type }}\nDuration: {{ $json.duration_minutes }} min\nUrgency: {{ $json.urgency }}\nSymptoms: {{ $json.symptoms }}\n\nBooking Ref: {{ $json.booking_reference }}\nSource: VAPI Voice AI",
+                    "location": "Dr. Ahmed Dental Care, Main Boulevard, Gulberg III, Lahore"
+                }
+            },
+            "id": "gcal-2",
+            "name": "Create Appointment",
+            "type": "n8n-nodes-base.googleCalendar",
+            "typeVersion": 1,
+            "position": [
+                1800,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "operation": "append",
+                "documentId": {
+                    "__rl": true,
+                    "mode": "list",
+                    "value": ""
+                },
+                "sheetName": {
+                    "__rl": true,
+                    "mode": "list",
+                    "value": "Appointments"
+                },
+                "columns": {
+                    "mappingMode": "defineBelow",
+                    "value": {
+                        "Booking Ref": "={{ $('Check Availability').first().json.booking_reference }}",
+                        "Date": "={{ $('Check Availability').first().json.preferred_date }}",
+                        "Time": "={{ $('Check Availability').first().json.preferred_time }}",
+                        "Patient Name": "={{ $('Check Availability').first().json.patient_name }}",
+                        "Phone": "={{ $('Check Availability').first().json.phone_formatted }}",
+                        "Service": "={{ $('Check Availability').first().json.appointment_type }}",
+                        "Duration": "={{ $('Check Availability').first().json.duration_minutes }}",
+                        "Urgency": "={{ $('Check Availability').first().json.urgency }}",
+                        "Symptoms": "={{ $('Check Availability').first().json.symptoms }}",
+                        "Status": "Confirmed",
+                        "Call ID": "={{ $('Check Availability').first().json.call_id }}",
+                        "Created At": "={{ $('Check Availability').first().json.created_at }}",
+                        "Calendar Event": "={{ $json.id }}"
+                    }
+                },
+                "options": {}
+            },
+            "id": "sheets-1",
+            "name": "Save to Sheet",
+            "type": "n8n-nodes-base.googleSheets",
+            "typeVersion": 4,
+            "position": [
+                2000,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "respondWith": "json",
+                "responseBody": "={\n  \"success\": true,\n  \"action\": \"appointment_booked\",\n  \"booking_reference\": \"{{ $('Check Availability').first().json.booking_reference }}\",\n  \"message\": \"Appointment confirmed for {{ $('Check Availability').first().json.patient_name }} on {{ $('Check Availability').first().json.preferred_date }} at {{ $('Check Availability').first().json.preferred_time }}\"\n}",
+                "options": {}
+            },
+            "id": "response-1",
+            "name": "Success Response",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1,
+            "position": [
+                2200,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "respondWith": "json",
+                "responseBody": "={\n  \"success\": false,\n  \"action\": \"slot_unavailable\",\n  \"message\": \"Sorry, the requested time slot is not available. Please try another time.\"\n}",
+                "options": {}
+            },
+            "id": "response-2",
+            "name": "Unavailable Response",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1,
+            "position": [
+                1800,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "respondWith": "json",
+                "responseBody": "={\n  \"success\": false,\n  \"action\": \"incomplete_data\",\n  \"message\": \"Could not process booking - missing required information\"\n}",
+                "options": {}
+            },
+            "id": "response-3",
+            "name": "Incomplete Response",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1,
+            "position": [
+                1200,
+                400
+            ]
+        },
+        {
+            "parameters": {
+                "respondWith": "json",
+                "responseBody": "{\n  \"success\": true,\n  \"action\": \"event_received\"\n}",
+                "options": {}
+            },
+            "id": "response-4",
+            "name": "Other Event Response",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1,
+            "position": [
+                800,
+                500
+            ]
+        }
+    ],
+    "connections": {
+        "VAPI Webhook": {
+            "main": [
+                [
+                    {
+                        "node": "Identify Event",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Identify Event": {
+            "main": [
+                [
+                    {
+                        "node": "Is Call Ended?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Is Call Ended?": {
+            "main": [
+                [
+                    {
+                        "node": "Process Call Data",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Other Event Response",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Process Call Data": {
+            "main": [
+                [
+                    {
+                        "node": "Valid Booking?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Valid Booking?": {
+            "main": [
+                [
+                    {
+                        "node": "Check Calendar",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Incomplete Response",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Check Calendar": {
+            "main": [
+                [
+                    {
+                        "node": "Check Availability",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Check Availability": {
+            "main": [
+                [
+                    {
+                        "node": "Slot Available?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Slot Available?": {
+            "main": [
+                [
+                    {
+                        "node": "Create Appointment",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Unavailable Response",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Create Appointment": {
+            "main": [
+                [
+                    {
+                        "node": "Save to Sheet",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Save to Sheet": {
+            "main": [
+                [
+                    {
+                        "node": "Success Response",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "active": false,
+    "settings": {
+        "executionOrder": "v1"
+    }
+}
