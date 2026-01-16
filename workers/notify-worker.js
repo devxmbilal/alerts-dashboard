@@ -126,25 +126,17 @@ redis.on("message", async (channel, message) => {
                 userByString.preferredTimeframe ||
                 alertData.timeframe?.toLowerCase() ||
                 "5m";
-
-              // Check chart service state
-              const chartState = ChartScreenshotService.getState();
-              if (chartState.isDisabled) {
-                ChartScreenshotService.resetFailures();
-              }
-
               const screenshotPromise = ChartScreenshotService.captureChart(
                 history.symbol,
                 timeframe
               );
               const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error("Screenshot timeout after 20s")), 20000)
+                setTimeout(() => reject(new Error("Screenshot timeout")), 10000)
               );
               chartScreenshot = await Promise.race([
                 screenshotPromise,
                 timeoutPromise,
               ]);
-              console.log(`✅ Screenshot captured for ${history.symbol} (${chartScreenshot?.length || 0} bytes)`);
             } catch (e) {
               console.warn(`⚠️ Screenshot failed for ${history.symbol}: ${e.message}`);
               // Screenshot failed, continue with text-only
@@ -259,43 +251,25 @@ redis.on("message", async (channel, message) => {
           `📸 Capturing chart screenshot for ${alertData.symbol} (timeframe: ${timeframe})...`
         );
 
-        // Check chart service state before attempting screenshot
-        const chartState = ChartScreenshotService.getState();
-        console.log(`📊 Chart service state: ${JSON.stringify(chartState)}`);
-
-        if (chartState.binanceIpBanned) {
-          console.warn(`⚠️ Binance IP is BANNED, cannot generate chart. Ban remaining: ${Math.ceil(chartState.binanceIpBanRemaining / 60000)}min`);
-          // Skip screenshot entirely when banned
-        } else if (chartState.isDisabled) {
-          console.warn(`⚠️ Chart service is DISABLED due to consecutive failures`);
-          // Try to reset failures and retry
-          ChartScreenshotService.resetFailures();
-          console.log(`🔄 Reset chart service failures, retrying...`);
-        }
-
-        // Add timeout to prevent long delays (max 20 seconds for screenshot - increased from 10s)
+        // Add timeout to prevent long delays (max 10 seconds for screenshot)
         const screenshotPromise = ChartScreenshotService.captureChart(
           alertData.symbol,
           timeframe
         );
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Screenshot timeout after 20s")), 20000)
+          setTimeout(() => reject(new Error("Screenshot timeout")), 10000)
         );
 
         chartScreenshot = await Promise.race([
           screenshotPromise,
           timeoutPromise,
         ]);
-        console.log(`✅ Screenshot captured successfully for ${alertData.symbol} (${chartScreenshot?.length || 0} bytes)`);
+        console.log(`✅ Screenshot captured successfully for ${alertData.symbol}`);
       } catch (screenshotError) {
         console.error(
           `❌ Failed to capture chart screenshot:`,
           screenshotError.message
         );
-        // Log detailed error for debugging
-        if (screenshotError.message.includes("BINANCE_IP_BANNED")) {
-          console.error(`🚫 Binance IP is banned - charts will be unavailable until ban expires`);
-        }
         console.log(`📱 Will send text-only alert (no delay)`);
       }
 
