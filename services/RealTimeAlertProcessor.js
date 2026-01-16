@@ -7,6 +7,7 @@ import User from "../models/User.js";
 import AlertRedisService from "./AlertRedisService.js";
 import SafeAlertProcessor from "../utils/alertProcessor.js";
 import MicroBatchExecutionEngine from "../utils/MicroBatchEngine.js";
+import ChartScreenshotService from "../utils/chartScreenshot.js"; // 🔥 NEW: Pre-capture chart at trigger time
 import pLimit from "p-limit";
 import dotenv from "dotenv";
 import WebSocket from "ws";
@@ -1691,6 +1692,36 @@ class RealTimeAlertProcessor {
       console.log(
         `📤 About to send notification for ${alert.symbol}, savedAlertHistory:`
       );
+
+      // 🔥 NEW: Pre-capture chart at EXACT trigger moment (no delay!)
+      // This ensures chart shows the correct candle, not a new one started after processing
+      try {
+        const timeframe = alert.conditions?.changePercent?.timeframe?.toLowerCase() || "5m";
+        const chartOptions = {
+          alertData: {
+            triggerPrice: liveData.price,
+            baselinePrice: baselinePrice,
+            changePercent: changeFromBaselinePercent
+          }
+        };
+
+        console.log(`📸 Pre-capturing chart for ${alert.symbol} at trigger moment...`);
+        const chartBuffer = await ChartScreenshotService.captureChart(
+          alert.symbol,
+          timeframe,
+          chartOptions
+        );
+
+        if (chartBuffer && this.redisClient) {
+          // Store chart in Redis with 5 minute TTL (enough time for notification to be sent)
+          const chartKey = `chart:alert:${savedAlertHistory._id}`;
+          await this.redisClient.setex(chartKey, 300, chartBuffer.toString('base64'));
+          console.log(`✅ Pre-captured chart stored in Redis: ${chartKey} (${(chartBuffer.length / 1024).toFixed(1)}KB)`);
+        }
+      } catch (chartError) {
+        console.warn(`⚠️ Pre-capture chart failed for ${alert.symbol}: ${chartError.message}`);
+        // Continue with notification - chart is optional
+      }
 
       // Send real-time notification using saved alert history (with _id)
       // Fire and forget - don't block alert processing for notifications

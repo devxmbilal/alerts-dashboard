@@ -126,9 +126,20 @@ redis.on("message", async (channel, message) => {
                 userByString.preferredTimeframe ||
                 alertData.timeframe?.toLowerCase() ||
                 "5m";
+
+              // 🔥 FIX: Pass alertData to chart for trigger price marker
+              const chartOptions = {
+                alertData: {
+                  triggerPrice: alertData.triggeredPrice,
+                  baselinePrice: alertData.baselinePrice,  // 🔥 NEW: For baseline line
+                  changePercent: alertData.changeFromBaselinePercent || alertData.actualValue || 0
+                }
+              };
+
               const screenshotPromise = ChartScreenshotService.captureChart(
                 history.symbol,
-                timeframe
+                timeframe,
+                chartOptions  // 🔥 Pass alert context for chart marker
               );
               const timeoutPromise = new Promise((_, reject) =>
                 setTimeout(() => reject(new Error("Screenshot timeout")), 10000)
@@ -243,28 +254,48 @@ redis.on("message", async (channel, message) => {
       // Capture chart screenshot using user's preferred timeframe (with timeout)
       let chartScreenshot = null;
       try {
-        const userPreferredTimeframe = user.preferredTimeframe || "5m";
-        const timeframe =
-          userPreferredTimeframe || alertData.timeframe?.toLowerCase() || "5m";
+        // 🔥 NEW: Check for pre-captured chart in Redis FIRST (instant, no delay!)
+        const preCapturedKey = `chart:alert:${historyId}`;
+        const preCapturedChart = await redis.get(preCapturedKey);
 
-        console.log(
-          `📸 Capturing chart screenshot for ${alertData.symbol} (timeframe: ${timeframe})...`
-        );
+        if (preCapturedChart) {
+          console.log(`✅ Using PRE-CAPTURED chart for ${alertData.symbol} (zero delay!)`);
+          chartScreenshot = Buffer.from(preCapturedChart, 'base64');
+          // Delete from Redis after use (cleanup)
+          redis.del(preCapturedKey).catch(() => { });
+        } else {
+          // Fallback: Generate new chart (may have slight delay)
+          console.log(`📸 No pre-captured chart found, generating new for ${alertData.symbol}...`);
 
-        // Add timeout to prevent long delays (max 10 seconds for screenshot)
-        const screenshotPromise = ChartScreenshotService.captureChart(
-          alertData.symbol,
-          timeframe
-        );
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Screenshot timeout")), 10000)
-        );
+          const userPreferredTimeframe = user.preferredTimeframe || "5m";
+          const timeframe =
+            userPreferredTimeframe || alertData.timeframe?.toLowerCase() || "5m";
 
-        chartScreenshot = await Promise.race([
-          screenshotPromise,
-          timeoutPromise,
-        ]);
-        console.log(`✅ Screenshot captured successfully for ${alertData.symbol}`);
+          // 🔥 FIX: Pass alertData to chart for trigger price marker
+          const chartOptions = {
+            alertData: {
+              triggerPrice: alertData.triggeredPrice,
+              baselinePrice: alertData.baselinePrice,
+              changePercent: alertData.changeFromBaselinePercent || alertData.actualValue || 0
+            }
+          };
+
+          // Add timeout to prevent long delays (max 10 seconds for screenshot)
+          const screenshotPromise = ChartScreenshotService.captureChart(
+            alertData.symbol,
+            timeframe,
+            chartOptions
+          );
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Screenshot timeout")), 10000)
+          );
+
+          chartScreenshot = await Promise.race([
+            screenshotPromise,
+            timeoutPromise,
+          ]);
+        }
+        console.log(`✅ Chart ready for ${alertData.symbol}`);
       } catch (screenshotError) {
         console.error(
           `❌ Failed to capture chart screenshot:`,

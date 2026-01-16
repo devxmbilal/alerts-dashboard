@@ -2,6 +2,7 @@ import Redis from "ioredis";
 import WebSocket from "ws";
 import dotenv from "dotenv";
 import logger from "../utils/logger.js";
+import candleCache from "../utils/candleCache.js"; // 🔥 NEW: Cache candles for chart generation
 dotenv.config();
 // Redis configuration
 const redis = new Redis({
@@ -424,6 +425,22 @@ class BinanceWorker {
       // Cache in Redis (24 hours TTL)
       const cacheKey = `crypto:${data.symbol}`;
       await redis.setex(cacheKey, 86400, JSON.stringify(data));
+
+      // 🔥 NEW: Store candle data for chart generation (prevents Binance API calls for charts!)
+      // Store as 5m candle (most common timeframe for alerts)
+      const candle = {
+        timestamp: Math.floor(data.timestamp / 300000) * 300000, // Round to 5-min boundary
+        open: data.open || data.price,
+        high: data.high || data.price,
+        low: data.low || data.price,
+        close: data.price,
+        volume: data.volume24h || 0,
+      };
+
+      // Store in candle cache (async, non-blocking)
+      candleCache.storeCandle(data.symbol, "5m", candle).catch(err => {
+        // Don't log every error, just silently continue
+      });
 
       // Throttle publishing to prevent overwhelming Redis
       const now = Date.now();
