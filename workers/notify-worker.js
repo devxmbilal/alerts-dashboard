@@ -23,10 +23,13 @@ connectToMongoDB()
     process.exit(1);
   });
 
-// Create Redis client using centralized utility
-const redis = createRedisClient();
+// 🔥 FIX: Create TWO Redis clients:
+// 1. redisSubscriber - for pub/sub (subscribe mode - can't use GET/SET)
+// 2. redisClient - for regular commands (GET/SET pre-captured charts)
+const redisSubscriber = createRedisClient();
+const redisClient = createRedisClient();  // Separate client for regular commands
 
-redis.subscribe("notifications:queue", (err) => {
+redisSubscriber.subscribe("notifications:queue", (err) => {
   if (err) {
     console.error("❌ Redis subscribe error:", err);
     process.exit(1);
@@ -35,7 +38,7 @@ redis.subscribe("notifications:queue", (err) => {
   }
 });
 
-redis.on("message", async (channel, message) => {
+redisSubscriber.on("message", async (channel, message) => {
   if (channel !== "notifications:queue") return;
 
   try {
@@ -255,14 +258,15 @@ redis.on("message", async (channel, message) => {
       let chartScreenshot = null;
       try {
         // 🔥 NEW: Check for pre-captured chart in Redis FIRST (instant, no delay!)
+        // Using redisClient (not redisSubscriber) because subscriber mode can't do GET
         const preCapturedKey = `chart:alert:${historyId}`;
-        const preCapturedChart = await redis.get(preCapturedKey);
+        const preCapturedChart = await redisClient.get(preCapturedKey);
 
         if (preCapturedChart) {
           console.log(`✅ Using PRE-CAPTURED chart for ${alertData.symbol} (zero delay!)`);
           chartScreenshot = Buffer.from(preCapturedChart, 'base64');
           // Delete from Redis after use (cleanup)
-          redis.del(preCapturedKey).catch(() => { });
+          redisClient.del(preCapturedKey).catch(() => { });
         } else {
           // Fallback: Generate new chart (may have slight delay)
           console.log(`📸 No pre-captured chart found, generating new for ${alertData.symbol}...`);

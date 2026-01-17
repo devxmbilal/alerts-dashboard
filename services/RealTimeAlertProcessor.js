@@ -1894,6 +1894,11 @@ class RealTimeAlertProcessor {
 
   async checkAlertConditions(alert, priceData) {
     try {
+      // 🔥 CRITICAL FIX: Save ORIGINAL baseline BEFORE any updates (same as processAlertWithLiveData)
+      // This prevents false triggers at hour boundaries
+      const originalBaselinePrice = parseFloat(alert.baselinePrice) || 0;
+      const originalBaselineVolume = parseFloat(alert.baselineVolume) || 0;
+
       console.log(
         `🔍 Checking alert conditions for ${alert.symbol} (Alert ID: ${alert._id})`
       );
@@ -1901,7 +1906,7 @@ class RealTimeAlertProcessor {
         `📊 Live data: Price=${priceData.price}, Volume=${priceData.volume24h}, Change=${priceData.priceChangePercent}%`
       );
       console.log(
-        `📊 Baseline: Price=${alert.baselinePrice}, Volume=${alert.baselineVolume}, Timestamp=${alert.baselineTimestamp}`
+        `📊 Baseline: Price=${originalBaselinePrice}, Volume=${originalBaselineVolume}, Timestamp=${alert.baselineTimestamp}`
       );
 
       // 🔥 CRITICAL FIX: Track if baseline needs updating, but DON'T update until AFTER alert check
@@ -1946,10 +1951,10 @@ class RealTimeAlertProcessor {
         const timeRemaining = Math.max(0, lockUntil.getTime() - now.getTime());
         const minutesRemaining = Math.ceil(timeRemaining / (1000 * 60));
 
-        // Calculate current spike magnitude
+        // Calculate current spike magnitude using ORIGINAL baseline
         const requiredChange = parseFloat(alert.conditions?.changePercent?.percentage) || 0;
-        const currentChange = alert.baselinePrice && alert.baselinePrice > 0
-          ? Math.abs((priceData.price - alert.baselinePrice) / alert.baselinePrice * 100)
+        const currentChange = originalBaselinePrice && originalBaselinePrice > 0
+          ? Math.abs((priceData.price - originalBaselinePrice) / originalBaselinePrice * 100)
           : 0;
 
         // Bypass lock ONLY for massive spikes (3x+ the target)
@@ -1973,37 +1978,38 @@ class RealTimeAlertProcessor {
       }
 
       // IMPORTANT: Check price direction based on alert settings
+      // 🔥 CRITICAL: Use originalBaselinePrice, NOT alert.baselinePrice
       const direction =
         alert.conditions?.changePercent?.direction || "increase";
-      const priceChanged = priceData.price !== alert.baselinePrice;
+      const priceChanged = priceData.price !== originalBaselinePrice;
 
       console.log(
-        `📊 Direction Check: Required=${direction}, Baseline=${alert.baselinePrice}, Live=${priceData.price}`
+        `📊 Direction Check: Required=${direction}, Original Baseline=${originalBaselinePrice}, Live=${priceData.price}`
       );
 
-      if (direction === "increase" && priceData.price <= alert.baselinePrice) {
+      if (direction === "increase" && priceData.price <= originalBaselinePrice) {
         console.log(
-          `❌ Direction: INCREASE - Live price ${priceData.price} <= baseline ${alert.baselinePrice}, skipping alert`
+          `❌ Direction: INCREASE - Live price ${priceData.price} <= baseline ${originalBaselinePrice}, skipping alert`
         );
         return false;
       }
 
-      if (direction === "decrease" && priceData.price >= alert.baselinePrice) {
+      if (direction === "decrease" && priceData.price >= originalBaselinePrice) {
         console.log(
-          `❌ Direction: DECREASE - Live price ${priceData.price} >= baseline ${alert.baselinePrice}, skipping alert`
+          `❌ Direction: DECREASE - Live price ${priceData.price} >= baseline ${originalBaselinePrice}, skipping alert`
         );
         return false;
       }
 
       if (!priceChanged) {
         console.log(
-          `❌ Price hasn't changed from baseline ${alert.baselinePrice}, skipping alert`
+          `❌ Price hasn't changed from baseline ${originalBaselinePrice}, skipping alert`
         );
         return false;
       }
 
       console.log(
-        `✅ Direction condition met: ${direction.toUpperCase()} - Price moved from ${alert.baselinePrice
+        `✅ Direction condition met: ${direction.toUpperCase()} - Price moved from ${originalBaselinePrice
         } to ${priceData.price}`
       );
 
@@ -2046,8 +2052,8 @@ class RealTimeAlertProcessor {
           `📊 Checking candle change condition: ${requiredChange}% in ${timeframe}`
         );
 
-        // Check if candle meets the change requirement using baseline price
-        if (!alert.baselinePrice || alert.baselinePrice === 0) {
+        // Check if candle meets the change requirement using ORIGINAL baseline price
+        if (!originalBaselinePrice || originalBaselinePrice === 0) {
           console.log(
             `❌ Candle Change % condition FAILED: Baseline price is 0 or missing`
           );
@@ -2057,7 +2063,7 @@ class RealTimeAlertProcessor {
             alert.symbol,
             timeframe,
             requiredChange,
-            alert.baselinePrice
+            originalBaselinePrice  // 🔥 FIX: Use original baseline, not updated one
           );
 
           if (!candleChangeMet) {
