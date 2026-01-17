@@ -10,6 +10,7 @@
  * 1. Fetches ALL USDT pairs from Binance in ONE API call
  * 2. Caches them ALL to Redis instantly
  * 3. Ensures dashboard loads with ALL 437+ pairs immediately
+ * 4. 🔥 NEW: Handles IP ban (418) gracefully with fallback
  */
 
 import Redis from "ioredis";
@@ -28,83 +29,132 @@ redis.on("error", (err) => {
     console.error("❌ Redis error:", err.message);
 });
 
+// Fallback API endpoints
+const BINANCE_ENDPOINTS = [
+    "https://api.binance.com/api/v3",
+    "https://api1.binance.com/api/v3",
+    "https://api3.binance.com/api/v3",
+];
+
+// Fallback pairs list (top 200+ pairs) - used when API is blocked
+const FALLBACK_PAIRS = [
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT",
+    "AVAXUSDT", "DOTUSDT", "LINKUSDT", "MATICUSDT", "SHIBUSDT", "LTCUSDT", "ATOMUSDT",
+    "UNIUSDT", "ETCUSDT", "XLMUSDT", "BCHUSDT", "NEARUSDT", "APTUSDT", "FILUSDT",
+    "ARBUSDT", "OPUSDT", "MKRUSDT", "AAVEUSDT", "GRTUSDT", "SANDUSDT", "MANAUSDT",
+    "AXSUSDT", "FTMUSDT", "ALGOUSDT", "FLOWUSDT", "VETUSDT", "ICPUSDT", "THETAUSDT",
+    "EOSUSDT", "XTZUSDT", "CHZUSDT", "APEUSDT", "LRCUSDT", "CRVUSDT", "DYDXUSDT",
+    "ENJUSDT", "GALAUSDT", "GMTUSDT", "IMXUSDT", "LDOUSDT", "QNTUSDT", "RNDRUSDT",
+    "RUNEUSDT", "SNXUSDT", "STXUSDT", "SUIUSDT", "WOOUSDT", "ZECUSDT", "ZILUSDT",
+    "1INCHUSDT", "COMPUSDT", "DASHUSDT", "KAVAUSDT", "KSMUSDT", "MINAUSDT",
+    "NEOUSDT", "OCEANUSDT", "ONTUSDT", "PENDDLEUSDT", "SEIUSDT", "TIAUSDT",
+    "WLDUSDT", "CELOUSDT", "CFXUSDT", "COTIUSDT", "HBARUSDT", "HOTUSDT",
+    "IOSTUSDT", "IOTAUSDT", "JSTUSDT", "KNCUSDT", "MASKUSDT", "NKNUSDT",
+    "OMGUSDT", "ONEUSDT", "RVNUSDT", "SKLUSDT", "STORJUSDT", "SXPUSDT",
+    "TRXUSDT", "WAVESUSDT", "ZENUSDT", "GLMRUSDT", "JUVUSDT", "PHAUSDT"
+];
+
+async function fetchWithFallback(endpoint, options = {}) {
+    for (const baseUrl of BINANCE_ENDPOINTS) {
+        try {
+            const url = `${baseUrl}${endpoint}`;
+            console.log(`🔄 Trying: ${url}`);
+
+            const response = await fetch(url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'application/json',
+                },
+                ...options,
+            });
+
+            if (response.status === 418) {
+                console.warn(`⚠️ IP banned on ${baseUrl}, trying next endpoint...`);
+                continue;
+            }
+
+            if (!response.ok) {
+                console.warn(`⚠️ ${baseUrl} returned ${response.status}`);
+                continue;
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.warn(`⚠️ ${baseUrl} failed: ${error.message}`);
+        }
+    }
+    return null;
+}
+
 async function warmupRedis() {
     console.log("🔥 Starting Redis Warmup...");
     const startTime = Date.now();
 
     try {
-        // Step 1: Fetch exchangeInfo to get VALID trading pairs (like binance-worker does)
+        let validPairs = new Set();
+        let tickers = null;
+
+        // Step 1: Try to fetch exchangeInfo
         console.log("📡 Fetching exchangeInfo from Binance...");
+        const exchangeInfo = await fetchWithFallback("/exchangeInfo");
 
-        const exchangeResponse = await fetch("https://api.binance.com/api/v3/exchangeInfo", {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json',
-            },
-        });
+        if (exchangeInfo && exchangeInfo.symbols) {
+            // Filter for USDT spot pairs
+            validPairs = new Set(
+                exchangeInfo.symbols
+                    .filter((symbol) => {
+                        return (
+                            symbol.status === "TRADING" &&
+                            symbol.symbol.endsWith("USDT") &&
+                            symbol.isSpotTradingAllowed === true &&
+                            !symbol.symbol.includes("_") &&
+                            !symbol.symbol.includes("BULL") &&
+                            !symbol.symbol.includes("BEAR") &&
+                            !symbol.symbol.includes("3L") &&
+                            !symbol.symbol.includes("3S") &&
+                            !symbol.symbol.includes("5L") &&
+                            !symbol.symbol.includes("5S") &&
+                            symbol.baseAsset !== "BUSD" &&
+                            symbol.quoteAsset === "USDT"
+                        );
+                    })
+                    .map((symbol) => symbol.symbol)
+            );
+            console.log(`📊 Found ${validPairs.size} valid USDT pairs from API`);
+        } else {
+            // 🔥 Fallback: Use cached pairs from Redis or hardcoded list
+            console.warn("⚠️ Binance API blocked (418), using fallback...");
 
-        if (!exchangeResponse.ok) {
-            throw new Error(`Binance exchangeInfo returned ${exchangeResponse.status}`);
+            const cachedPairs = await redis.get("crypto:usdt_pairs");
+            if (cachedPairs) {
+                const parsed = JSON.parse(cachedPairs);
+                validPairs = new Set(parsed.map(p => p.toUpperCase()));
+                console.log(`📊 Using ${validPairs.size} cached pairs from Redis`);
+            } else {
+                validPairs = new Set(FALLBACK_PAIRS);
+                console.log(`📊 Using ${validPairs.size} fallback pairs`);
+            }
         }
 
-        const exchangeInfo = await exchangeResponse.json();
+        // Step 2: Try to fetch ticker data
+        console.log("📡 Fetching ticker data...");
+        tickers = await fetchWithFallback("/ticker/24hr");
 
-        // Filter for USDT spot pairs EXACTLY like binance-worker.js does
-        const validPairs = new Set(
-            exchangeInfo.symbols
-                .filter((symbol) => {
-                    return (
-                        symbol.status === "TRADING" && // Only active trading pairs
-                        symbol.symbol.endsWith("USDT") && // Only USDT pairs
-                        symbol.isSpotTradingAllowed === true && // Only spot trading allowed
-                        !symbol.symbol.includes("_") && // Exclude premium pairs
-                        !symbol.symbol.includes("BULL") && // Exclude leveraged tokens
-                        !symbol.symbol.includes("BEAR") && // Exclude leveraged tokens
-                        !symbol.symbol.includes("3L") && // Exclude leveraged tokens
-                        !symbol.symbol.includes("3S") && // Exclude leveraged tokens
-                        !symbol.symbol.includes("5L") && // Exclude leveraged tokens
-                        !symbol.symbol.includes("5S") && // Exclude leveraged tokens
-                        symbol.baseAsset !== "BUSD" && // Exclude BUSD pairs
-                        symbol.quoteAsset === "USDT" // Only USDT as quote asset
-                    );
-                })
-                .map((symbol) => symbol.symbol)
-        );
-
-        console.log(`📊 Found ${validPairs.size} valid USDT spot pairs from exchangeInfo`);
-
-        // Step 2: Now fetch ticker data
-        console.log("📡 Fetching ticker data from Binance...");
-
-        const tickerResponse = await fetch("https://api.binance.com/api/v3/ticker/24hr", {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json',
-            },
-        });
-
-        if (!tickerResponse.ok) {
-            throw new Error(`Binance ticker API returned ${tickerResponse.status}`);
+        if (!tickers || tickers.length === 0) {
+            console.warn("⚠️ Could not fetch tickers, warmup skipped");
+            console.log("ℹ️  WebSocket will populate data when binance-worker starts");
+            await redis.quit();
+            process.exit(0);
+            return;
         }
 
-        const tickers = await tickerResponse.json();
         console.log(`📊 Received ${tickers.length} tickers from Binance`);
 
-        // Step 3: Filter tickers to only include valid pairs from exchangeInfo
+        // Step 3: Filter tickers
         const filteredTickers = tickers.filter(t => validPairs.has(t.symbol));
         console.log(`📊 Filtered to ${filteredTickers.length} valid trading pairs`);
 
-        // Step 4: CLEAR OLD DATA - Remove all old crypto keys first
-        console.log("🧹 Clearing old crypto data from Redis...");
-        const oldKeys = await redis.keys("crypto:*");
-        if (oldKeys.length > 0) {
-            const deletePipeline = redis.pipeline();
-            oldKeys.forEach(key => deletePipeline.del(key));
-            await deletePipeline.exec();
-            console.log(`🧹 Deleted ${oldKeys.length} old keys`);
-        }
-
-        // Step 5: Cache ALL NEW data using Redis pipeline (super fast)
+        // Step 4: Cache ALL NEW data using Redis pipeline
         const pipeline = redis.pipeline();
         const pairsList = [];
 
@@ -129,7 +179,6 @@ async function warmupRedis() {
                 isFavorite: false,
             };
 
-            // Cache with 24h TTL
             pipeline.setex(`crypto:${t.symbol}`, 86400, JSON.stringify(processedData));
             pairsList.push(t.symbol.toLowerCase());
         }
@@ -137,7 +186,6 @@ async function warmupRedis() {
         // Also cache the pairs list
         pipeline.setex("crypto:usdt_pairs", 86400, JSON.stringify(pairsList));
 
-        // Execute all Redis commands at once
         await pipeline.exec();
 
         const duration = Date.now() - startTime;
@@ -147,7 +195,6 @@ async function warmupRedis() {
         console.log(`✅ Dashboard will now load ALL pairs instantly!`);
         console.log(`✅ ========================================\n`);
 
-        // Verify by counting keys
         const keys = await redis.keys("crypto:*");
         console.log(`📊 Total crypto keys in Redis: ${keys.length}`);
 
@@ -156,9 +203,12 @@ async function warmupRedis() {
 
     } catch (error) {
         console.error("❌ Warmup failed:", error.message);
+        console.log("\n💡 TIP: If IP is banned, wait 10 minutes or restart binance-worker");
+        console.log("   WebSocket connection is not affected by IP ban");
         await redis.quit();
         process.exit(1);
     }
 }
 
 warmupRedis();
+

@@ -491,7 +491,7 @@ class BinanceWorker {
     // Refresh pairs list every 8 hours (NOT ticker data - WebSocket handles that)
     setInterval(async () => {
       try {
-        console.log("🔄 Starting 8-hour scheduled refresh (pairs list only)...");
+        console.log("🔄 Starting 2-hour scheduled refresh (pairs list only)...");
 
         const oldPairsCount = USDT_PAIRS.length;
 
@@ -506,12 +506,12 @@ class BinanceWorker {
           this.connectWebSocket();
         }
 
-        console.log("✅ 8-hour refresh complete (WebSocket handles price updates)");
+        console.log("✅ Hourly refresh complete (WebSocket handles price updates)");
 
       } catch (error) {
         console.error("❌ Error during scheduled refresh:", error);
       }
-    }, 28800000); // Every 8 hours (faster detection of new/removed pairs)
+    }, 7200000); // 🔥 Every 2 hour (faster detection of new pairs like OMNI)
   }
 
   reconnect() {
