@@ -271,9 +271,9 @@ redisSubscriber.on("message", async (channel, message) => {
           // Fallback: Generate new chart (may have slight delay)
           console.log(`📸 No pre-captured chart found, generating new for ${alertData.symbol}...`);
 
-          const userPreferredTimeframe = user.preferredTimeframe || "5m";
-          const timeframe =
-            userPreferredTimeframe || alertData.timeframe?.toLowerCase() || "5m";
+          // 🔥 FIX: Use user's preferred timeframe from dashboard settings
+          // User selects timeframe in dashboard -> saved in User model -> used here
+          const timeframe = user.preferredTimeframe || "5m";
 
           // 🔥 FIX: Pass alertData to chart for trigger price marker
           const chartOptions = {

@@ -428,29 +428,36 @@ class CandlestickChartGenerator {
             isPositive = displayChange >= 0;
         }
 
-        // Symbol + Timeframe + Alert indicator
+        // Symbol + Timeframe (shorter for alert to prevent overlap)
         ctx.fillStyle = "#ffffff";
         ctx.font = `bold 18px ${CHART_FONT}`;
         ctx.textAlign = "left";
 
         const titleText = alertData
-            ? `⚠️ ${symbol} · ${timeframe.toUpperCase()} · ALERT`
+            ? `${symbol} · ${timeframe.toUpperCase()}`  // Removed ⚠️ ALERT to save space
             : `${symbol} · ${timeframe.toUpperCase()}`;
         ctx.fillText(titleText, this.padding.left, 30);
 
+        // 🔥 FIX: Measure title text width to position price correctly
+        const titleWidth = ctx.measureText(titleText).width;
+        const priceX = this.padding.left + titleWidth + 15; // 15px gap
+
         // Price - Show trigger price if alertData, else current price
         const displayPrice = alertData?.triggerPrice || lastPrice;
-        const priceStr = this.formatPrice(displayPrice);
+        const priceStr = `$${this.formatPrice(displayPrice)}`;  // Added $ prefix
 
         ctx.fillStyle = this.colors.text;
         ctx.font = `bold 16px ${CHART_FONT}`;
-        ctx.fillText(priceStr, this.padding.left + (alertData ? 210 : 150), 30);
+        ctx.fillText(priceStr, priceX, 30);
 
-        // Change percentage
+        // Change percentage - position after price
+        const priceWidth = ctx.measureText(priceStr).width;
+        const changeX = priceX + priceWidth + 10; // 10px gap
+
         const changeStr = `${isPositive ? "+" : ""}${displayChange.toFixed(2)}%`;
         ctx.fillStyle = isPositive ? this.colors.bullish : this.colors.bearish;
         ctx.font = `bold 14px ${CHART_FONT}`;
-        ctx.fillText(changeStr, this.padding.left + (alertData ? 330 : 280), 30);
+        ctx.fillText(changeStr, changeX, 30);
     }
 
     drawCurrentPrice(ctx, price, minPrice, maxPrice, height, width) {
