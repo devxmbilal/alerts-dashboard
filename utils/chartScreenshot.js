@@ -781,7 +781,7 @@ class ChartScreenshotService {
    * Main capture method - uses Canvas for REAL candlestick charts (FAST - no browser needed!)
    * @param {string} symbol - Trading pair symbol (e.g., VANAUSDT, BTCUSDT)
    * @param {string} timeframe - Chart timeframe (1m, 5m, 15m, 1h, 4h, 1d, 1w)
-   * @param {object} options - Options { alertData: {triggerPrice, changePercent} }
+   * @param {object} options - Options { alertData, liveData }
    * @returns {Promise<Buffer>} - Screenshot buffer
    */
   async captureChart(symbol, timeframe = "5m", options = {}) {
@@ -808,6 +808,49 @@ class ChartScreenshotService {
 
       if (!candles || candles.length === 0) {
         throw new Error("No candle data available");
+      }
+
+      // 🔥 NEW: Inject current candle from live WebSocket data (Option A fix)
+      // This ensures chart shows the CURRENT candle, not just cached historical data
+      if (options.liveData && options.liveData.price) {
+        const liveData = options.liveData;
+        const livePrice = parseFloat(liveData.price) || 0;
+
+        if (livePrice > 0) {
+          // Get last cached candle as reference
+          const lastCachedCandle = candles[candles.length - 1];
+
+          // Construct current candle from live data
+          const currentCandle = {
+            time: Date.now(),
+            open: lastCachedCandle ? lastCachedCandle.close : livePrice, // Open = previous close
+            high: Math.max(livePrice, lastCachedCandle?.close || livePrice),
+            low: Math.min(livePrice, lastCachedCandle?.close || livePrice),
+            close: livePrice,
+            volume: parseFloat(liveData.volume || liveData.volume24h || 0)
+          };
+
+          // Replace last candle if it's from same timeframe, else append
+          const timeframeMs = this.getTimeframeMs(timeframe);
+          const lastCandleAge = Date.now() - (lastCachedCandle?.time || 0);
+
+          if (lastCandleAge < timeframeMs) {
+            // Update last candle with current live data
+            candles[candles.length - 1] = {
+              ...lastCachedCandle,
+              high: Math.max(lastCachedCandle.high, livePrice),
+              low: Math.min(lastCachedCandle.low, livePrice),
+              close: livePrice
+            };
+            console.log(`📈 Updated last candle with live price: $${livePrice}`);
+          } else {
+            // New candle started, append current candle
+            candles.push(currentCandle);
+            // Keep only last 100 candles
+            if (candles.length > 100) candles = candles.slice(-100);
+            console.log(`📊 Added current candle with live price: $${livePrice}`);
+          }
+        }
       }
 
       // 🔥 FIX: Pass alertData to canvas generator for trigger price marker
@@ -960,6 +1003,24 @@ class ChartScreenshotService {
     } catch (error) {
       console.error("❌ Error cleaning up old screenshots:", error);
     }
+  }
+
+  /**
+   * Convert timeframe string to milliseconds
+   * @param {string} timeframe - Timeframe (1m, 5m, 15m, 1h, 4h, 1d, 1w)
+   * @returns {number} - Milliseconds
+   */
+  getTimeframeMs(timeframe) {
+    const tf = timeframe.toLowerCase();
+    const value = parseInt(tf) || 1;
+
+    if (tf.endsWith('w')) return value * 7 * 24 * 60 * 60 * 1000;
+    if (tf.endsWith('d')) return value * 24 * 60 * 60 * 1000;
+    if (tf.endsWith('h')) return value * 60 * 60 * 1000;
+    if (tf.endsWith('m')) return value * 60 * 1000;
+
+    // Default to 5 minutes
+    return 5 * 60 * 1000;
   }
 
   /**

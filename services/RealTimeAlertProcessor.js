@@ -1696,13 +1696,27 @@ class RealTimeAlertProcessor {
       // 🔥 NEW: Pre-capture chart at EXACT trigger moment (no delay!)
       // This ensures chart shows the correct candle, not a new one started after processing
       try {
-        const timeframe = alert.conditions?.changePercent?.timeframe?.toLowerCase() || "5m";
+        // 🔥 FIX: Fetch user's preferred timeframe from User model (dashboard setting)
+        let timeframe = "5m"; // default
+        try {
+          const User = (await import("../models/User.js")).default;
+          const user = await User.findById(alert.userId).select("preferredTimeframe").lean();
+          if (user?.preferredTimeframe) {
+            timeframe = user.preferredTimeframe;
+            console.log(`📊 Using user's preferred timeframe: ${timeframe}`);
+          }
+        } catch (userError) {
+          console.warn(`⚠️ Could not fetch user preference: ${userError.message}, using default 5m`);
+        }
+
         const chartOptions = {
           alertData: {
             triggerPrice: liveData.price,
             baselinePrice: baselinePrice,
             changePercent: changeFromBaselinePercent
-          }
+          },
+          // 🔥 NEW: Pass liveData so chart can inject current candle
+          liveData: liveData
         };
 
         console.log(`📸 Pre-capturing chart for ${alert.symbol} at trigger moment...`);
