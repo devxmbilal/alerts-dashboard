@@ -148,41 +148,11 @@ class CandlestickChartGenerator {
         // Draw title with timeframe and alert data if provided
         this.drawTitle(ctx, symbol, candles, timeframe, alertData);
 
-        // Draw current price indicator (blue)
-        this.drawCurrentPrice(ctx, candles[candles.length - 1].close, minPrice - pricePadding, maxPrice + pricePadding, priceHeight, chartWidth);
-
-        // 🔥 ENHANCED: Draw complete alert context if alertData provided
-        if (alertData && alertData.triggerPrice) {
-            // 1. Draw BASELINE price line (green dashed)
-            if (alertData.baselinePrice) {
-                this.drawBaselineLine(
-                    ctx,
-                    alertData.baselinePrice,
-                    minPrice - pricePadding,
-                    maxPrice + pricePadding,
-                    priceHeight
-                );
-            }
-
-            // 2. Draw TRIGGER price line (orange solid)
-            this.drawTriggerLine(
-                ctx,
-                alertData.triggerPrice,
-                minPrice - pricePadding,
-                maxPrice + pricePadding,
-                priceHeight
-            );
-
-            // 3. Arrow removed - user prefers clean lines only
-
-            // 4. Draw INFO BOX with alert summary
-            this.drawAlertInfoBox(
-                ctx,
-                alertData,
-                chartWidth,
-                chartHeight
-            );
-        }
+        // 🔥 REMOVED: Client doesn't want price indicator lines
+        // - drawCurrentPrice (blue)
+        // - drawBaselineLine (green)
+        // - drawTriggerLine (orange)
+        // - drawAlertInfoBox
 
         return canvas.toBuffer("image/png");
     }
