@@ -810,46 +810,24 @@ class ChartScreenshotService {
         throw new Error("No candle data available");
       }
 
-      // 🔥 NEW: Inject current candle from live WebSocket data (Option A fix)
-      // This ensures chart shows the CURRENT candle, not just cached historical data
-      if (options.liveData && options.liveData.price) {
-        const liveData = options.liveData;
-        const livePrice = parseFloat(liveData.price) || 0;
+      // 🔥 FIX: Update last candle with live price (NO new candle added!)
+      // This ensures chart shows current price without adding extra candle
+      // New candles only come from cache when timeframe naturally progresses
+      if (options.liveData && options.liveData.price && candles.length > 0) {
+        const livePrice = parseFloat(options.liveData.price) || 0;
 
         if (livePrice > 0) {
-          // Get last cached candle as reference
+          // ALWAYS update the last candle with current price (no new candle)
           const lastCachedCandle = candles[candles.length - 1];
 
-          // Construct current candle from live data
-          const currentCandle = {
-            time: Date.now(),
-            open: lastCachedCandle ? lastCachedCandle.close : livePrice, // Open = previous close
-            high: Math.max(livePrice, lastCachedCandle?.close || livePrice),
-            low: Math.min(livePrice, lastCachedCandle?.close || livePrice),
-            close: livePrice,
-            volume: parseFloat(liveData.volume || liveData.volume24h || 0)
+          candles[candles.length - 1] = {
+            ...lastCachedCandle,
+            high: Math.max(lastCachedCandle.high || livePrice, livePrice),
+            low: Math.min(lastCachedCandle.low || livePrice, livePrice),
+            close: livePrice  // Update close to current live price
           };
 
-          // Replace last candle if it's from same timeframe, else append
-          const timeframeMs = this.getTimeframeMs(timeframe);
-          const lastCandleAge = Date.now() - (lastCachedCandle?.time || 0);
-
-          if (lastCandleAge < timeframeMs) {
-            // Update last candle with current live data
-            candles[candles.length - 1] = {
-              ...lastCachedCandle,
-              high: Math.max(lastCachedCandle.high, livePrice),
-              low: Math.min(lastCachedCandle.low, livePrice),
-              close: livePrice
-            };
-            console.log(`📈 Updated last candle with live price: $${livePrice}`);
-          } else {
-            // New candle started, append current candle
-            candles.push(currentCandle);
-            // Keep only last 100 candles
-            if (candles.length > 100) candles = candles.slice(-100);
-            console.log(`📊 Added current candle with live price: $${livePrice}`);
-          }
+          console.log(`📈 Updated last candle with live price: $${livePrice}`);
         }
       }
 
