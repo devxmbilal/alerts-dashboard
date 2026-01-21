@@ -789,51 +789,69 @@ class ChartScreenshotService {
    * @returns {Promise<Buffer>} - Screenshot buffer
    */
   async captureChart(symbol, timeframe = "5m", options = {}) {
-    // Method 1: Canvas-based Candlestick (FAST - 1-2 seconds, real candlesticks!)
+    // 🔥 CACHE-FIRST: Try cached candles first (no Binance API call = no IP ban!)
     try {
-      console.log(`🕯️ Generating canvas candlestick chart for ${symbol}...`);
+      console.log(`🕯️ Generating chart for ${symbol} (${timeframe})...`);
 
-      // 🔥 FIX: Wait 2 seconds to ensure Binance API returns the latest candle data
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Step 1: Try to get candles from cache (Redis/Memory)
+      let candles = await candleCache.getCandles(symbol, timeframe, 100);
 
-      const candles = await this.getBinanceCandles(symbol, timeframe, 200); // 🔥 Zoom out: Show 100 candles (was 35)
+      if (candles && candles.length >= 50) {
+        console.log(`✅ Using CACHED candles for ${symbol} (${candles.length} candles) - NO Binance API call!`);
+      } else {
+        // Step 2: Cache miss - fetch from Binance and store in cache
+        console.log(`📡 Cache miss for ${symbol}, fetching from Binance...`);
+        candles = await this.getBinanceCandles(symbol, timeframe, 100);
 
-      if (candles.length === 0) {
-        throw new Error("No candle data available from Binance");
+        if (candles && candles.length > 0) {
+          // Store in cache for next time
+          await candleCache.storeCandles(symbol, timeframe, candles);
+          console.log(`💾 Stored ${candles.length} candles in cache for ${symbol}`);
+        }
       }
 
-      // Use canvas-based candlestick generator (TradingView style)
-      const chartBuffer = candlestickCanvas.generate(symbol, candles, timeframe);
-      console.log(`✅ Canvas candlestick chart generated (${(chartBuffer.length / 1024).toFixed(1)}KB)`);
+      if (!candles || candles.length === 0) {
+        throw new Error("No candle data available");
+      }
+
+      // 🔥 FIX: Update last candle with live price (NO new candle added!)
+      if (options.liveData && options.liveData.price && candles.length > 0) {
+        const livePrice = parseFloat(options.liveData.price) || 0;
+
+        if (livePrice > 0) {
+          const lastCachedCandle = candles[candles.length - 1];
+          candles[candles.length - 1] = {
+            ...lastCachedCandle,
+            high: Math.max(lastCachedCandle.high || livePrice, livePrice),
+            low: Math.min(lastCachedCandle.low || livePrice, livePrice),
+            close: livePrice
+          };
+          console.log(`📈 Updated last candle with live price: $${livePrice}`);
+        }
+      }
+
+      // Generate chart
+      const alertData = options.alertData || null;
+      const chartBuffer = candlestickCanvas.generate(symbol, candles, timeframe, alertData);
+      console.log(`✅ Chart generated (${(chartBuffer.length / 1024).toFixed(1)}KB)`);
       return chartBuffer;
 
     } catch (canvasError) {
       // 🔥 FIX: If rate limited or IP banned, return null instead of throwing
-      // This allows alert to be sent without chart
       if (canvasError.message === "BINANCE_IP_BANNED" || canvasError.message === "RATE_LIMIT_EXCEEDED") {
-        console.warn(`⚠️ ${canvasError.message}: Skipping chart for ${symbol}, alert will be sent without image`);
-        return null; // Return null - alert will be sent without chart
+        console.warn(`⚠️ ${canvasError.message}: Skipping chart for ${symbol}`);
+        return null;
       }
 
       console.warn(`⚠️ Canvas chart failed for ${symbol}: ${canvasError.message}`);
 
-      // Method 2: Puppeteer/TradingView (FALLBACK - slower but guaranteed candlestick)
+      // Fallback: Puppeteer/TradingView
       try {
         console.log(`📊 Falling back to Puppeteer for ${symbol}...`);
         return await this.captureChartPuppeteer(symbol, timeframe);
       } catch (puppeteerError) {
-        console.warn(`⚠️ Puppeteer also failed: ${puppeteerError.message}`);
-
-        // Method 3: QuickChart (LAST RESORT - line chart)
-        try {
-          console.log(`📊 Using QuickChart as last resort for ${symbol}...`);
-          const candles = await this.getBinanceCandles(symbol, timeframe, 50);
-          return await this.captureCandlestickChart(symbol, candles);
-        } catch (quickChartError) {
-          // 🔥 FIX: If all methods fail, return null instead of crashing
-          console.warn(`⚠️ All chart methods failed for ${symbol}, sending alert without chart`);
-          return null;
-        }
+        console.warn(`⚠️ All chart methods failed for ${symbol}`);
+        return null;
       }
     }
   }

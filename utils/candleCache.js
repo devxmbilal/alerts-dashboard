@@ -77,8 +77,16 @@ class CandleCacheService {
             );
 
             if (existingIndex >= 0) {
-                // Update existing candle
-                localCandles[existingIndex] = candle;
+                // 🔥 FIX: MERGE high/low instead of replacing entire candle
+                // This preserves the high/low from all price updates in this candle period
+                const existing = localCandles[existingIndex];
+                localCandles[existingIndex] = {
+                    ...existing,
+                    high: Math.max(existing.high || candle.high, candle.high || candle.close),
+                    low: Math.min(existing.low || candle.low, candle.low || candle.close),
+                    close: candle.close,  // Always update close to latest
+                    volume: candle.volume || existing.volume,
+                };
             } else {
                 // Add new candle
                 localCandles.push(candle);
