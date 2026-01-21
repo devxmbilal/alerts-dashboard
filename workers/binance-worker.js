@@ -170,6 +170,19 @@ class BinanceWorker {
     this.initialDataLoaded = false; // FIX: Prevent duplicate REST calls
   }
 
+  // Helper: Convert timeframe string to milliseconds
+  getTimeframeMs(timeframe) {
+    const tf = timeframe.toLowerCase();
+    const value = parseInt(tf) || 1;
+
+    if (tf.endsWith('w')) return value * 7 * 24 * 60 * 60 * 1000;
+    if (tf.endsWith('d')) return value * 24 * 60 * 60 * 1000;
+    if (tf.endsWith('h')) return value * 60 * 60 * 1000;
+    if (tf.endsWith('m')) return value * 60 * 1000;
+
+    return 5 * 60 * 1000; // Default 5 minutes
+  }
+
   async start() {
     console.log("🚀 Starting Binance Worker...");
     await this.connectToRedis();
@@ -426,21 +439,26 @@ class BinanceWorker {
       const cacheKey = `crypto:${data.symbol}`;
       await redis.setex(cacheKey, 86400, JSON.stringify(data));
 
-      // 🔥 NEW: Store candle data for chart generation (prevents Binance API calls for charts!)
-      // Store as 5m candle (most common timeframe for alerts)
-      const candle = {
-        timestamp: Math.floor(data.timestamp / 300000) * 300000, // Round to 5-min boundary
-        open: data.open || data.price,
-        high: data.high || data.price,
-        low: data.low || data.price,
-        close: data.price,
-        volume: data.volume24h || 0,
-      };
+      // 🔥 FIX: Store candle data for ALL timeframes (not just 5m!)
+      // This ensures charts for any user-selected timeframe have fresh data
+      const timeframes = ["1m", "5m", "15m", "1h", "4h", "1d"];
 
-      // Store in candle cache (async, non-blocking)
-      candleCache.storeCandle(data.symbol, "5m", candle).catch(err => {
-        // Don't log every error, just silently continue
-      });
+      for (const tf of timeframes) {
+        // Calculate timeframe boundary
+        const tfMs = this.getTimeframeMs(tf);
+        const candle = {
+          timestamp: Math.floor(data.timestamp / tfMs) * tfMs, // Round to timeframe boundary
+          open: data.open || data.price,
+          high: data.high || data.price,
+          low: data.low || data.price,
+          close: data.price,
+          volume: data.volume24h || 0,
+          time: Math.floor(data.timestamp / tfMs) * tfMs, // For chart compatibility
+        };
+
+        // Store in candle cache (async, non-blocking)
+        candleCache.storeCandle(data.symbol, tf, candle).catch(() => { });
+      }
 
       // Throttle publishing to prevent overwhelming Redis
       const now = Date.now();
