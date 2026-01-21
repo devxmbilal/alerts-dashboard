@@ -327,11 +327,15 @@ class ChartScreenshotService {
       };
       const binanceInterval = intervalMap[interval.toLowerCase()] || "5m";
 
-      const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`;
+      // 🔥 FIX: Add timestamp for cache-busting to get fresh data
+      const timestamp = Date.now();
+      const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}&_t=${timestamp}`;
       const res = await axios.get(url, {
         timeout: 15000,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache'
         }
       });
 
@@ -787,10 +791,15 @@ class ChartScreenshotService {
   async captureChart(symbol, timeframe = "5m", options = {}) {
     // 🔥 PERMANENT FIX: Try cached candles first (no Binance API call needed!)
     try {
-      console.log(`🕯️ Generating chart for ${symbol}...`);
+      console.log(`🕯️ Generating canvas candlestick chart for ${symbol}...`);
+
+      // 🔥 FIX: Wait 2 seconds to ensure Binance API returns the latest candle data
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      const candles = await this.getBinanceCandles(symbol, timeframe, 100); // 🔥 Zoom out: Show 100 candles (was 35)
 
       // Step 1: Try to get candles from cache (Redis/Memory)
-      let candles = await candleCache.getCandles(symbol, timeframe, 100);
+      //let candles = await candleCache.getCandles(symbol, timeframe, 100);
 
       if (candles && candles.length >= 50) {
         console.log(`✅ Using CACHED candles for ${symbol} (${candles.length} candles) - NO Binance API call!`);
