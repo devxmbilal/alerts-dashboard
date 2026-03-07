@@ -397,18 +397,19 @@ redisSubscriber.on("message", async (channel, message) => {
 });
 
 // Handle Redis connection errors
-redis.on("error", (err) => {
+redisSubscriber.on("error", (err) => {
   console.error("❌ Redis connection error:", err);
 });
 
-redis.on("connect", () => {
+redisSubscriber.on("connect", () => {
   console.log("✅ Redis connected for notify-worker");
 });
 
 // Setup graceful shutdown using centralized utility
 class NotifyWorker {
   stop() {
-    redis.disconnect();
+    redisSubscriber.disconnect();
+    redisClient.disconnect();
   }
 }
 const notifyWorker = new NotifyWorker();
