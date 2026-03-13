@@ -91,7 +91,8 @@ class CandlestickChartGenerator {
         // Calculate chart dimensions
         const chartWidth = this.width - this.padding.left - this.padding.right;
         const chartHeight = this.height - this.padding.top - this.padding.bottom;
-        const priceHeight = chartHeight; // 🔥 FIX: 100% for price (removed volume gap)
+        const volumeHeight = chartHeight * 0.2; // 20% for volume
+        const priceHeight = chartHeight * 0.8; // 80% for price
 
         // Calculate price range
         const prices = candles.flatMap(c => [c.high, c.low]);
@@ -99,6 +100,9 @@ class CandlestickChartGenerator {
         const maxPrice = Math.max(...prices);
         const priceRange = maxPrice - minPrice;
         const pricePadding = priceRange * 0.05;
+
+        // Calculate volume range
+        const maxVolume = Math.max(...candles.map(c => c.volume));
 
         // Candle width - use 75% of chart for candles, leave 25% empty on right
         const candleAreaWidth = chartWidth * 0.75; // 3/4 of chart width for candles
@@ -122,6 +126,17 @@ class CandlestickChartGenerator {
                 maxPrice + pricePadding,
                 priceHeight
             );
+
+            // Draw volume bar
+            this.drawVolumeBar(
+                ctx,
+                x,
+                candle,
+                candleWidth,
+                maxVolume,
+                volumeHeight,
+                priceHeight
+            );
         });
 
         // Draw price labels on Y-axis
@@ -140,6 +155,130 @@ class CandlestickChartGenerator {
         // - drawAlertInfoBox
 
         return canvas.toBuffer("image/png");
+    }
+
+    // 🔥 NEW: Draw baseline price line (green dashed)
+    drawBaselineLine(ctx, baselinePrice, minPrice, maxPrice, height) {
+        const priceRange = maxPrice - minPrice;
+        const y = this.padding.top + ((maxPrice - baselinePrice) / priceRange) * height;
+
+        // Draw green dashed line
+        ctx.strokeStyle = "#26a69a"; // Green
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8, 4]);
+        ctx.beginPath();
+        ctx.moveTo(this.padding.left, y);
+        ctx.lineTo(this.width - this.padding.right, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Draw label box on left
+        const labelText = `BASELINE ${this.formatPrice(baselinePrice)}`;
+        ctx.fillStyle = "#26a69a";
+        ctx.fillRect(this.padding.left, y - 10, 130, 20);
+
+        ctx.fillStyle = "#000000";
+        ctx.font = `bold 10px ${CHART_FONT}`;
+        ctx.textAlign = "left";
+        ctx.fillText(labelText, this.padding.left + 5, y + 4);
+    }
+
+    // 🔥 NEW: Draw trigger price line (orange solid)
+    drawTriggerLine(ctx, triggerPrice, minPrice, maxPrice, height) {
+        const priceRange = maxPrice - minPrice;
+        const y = this.padding.top + ((maxPrice - triggerPrice) / priceRange) * height;
+
+        // Draw orange SOLID line
+        ctx.strokeStyle = "#ffa500"; // Orange
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]); // Solid line
+        ctx.beginPath();
+        ctx.moveTo(this.padding.left, y);
+        ctx.lineTo(this.width - this.padding.right, y);
+        ctx.stroke();
+
+        // Draw label box on left
+        const labelText = `ALERT @ ${this.formatPrice(triggerPrice)}`;
+        ctx.fillStyle = "#ffa500";
+        ctx.fillRect(this.padding.left, y - 10, 130, 20);
+
+        ctx.fillStyle = "#000000";
+        ctx.font = `bold 10px ${CHART_FONT}`;
+        ctx.textAlign = "left";
+        ctx.fillText(labelText, this.padding.left + 5, y + 4);
+    }
+
+    // 🔥 NEW: Draw arrow pointing to trigger candle
+    drawTriggerArrow(ctx, candles, candleSpacing, triggerPrice, minPrice, maxPrice, height) {
+        // Find the candle closest to trigger price (second-last candle usually)
+        const triggerCandleIndex = candles.length - 2; // Second-last candle
+        if (triggerCandleIndex < 0) return;
+
+        const x = this.padding.left + (triggerCandleIndex * candleSpacing) + (candleSpacing / 2);
+        const priceRange = maxPrice - minPrice;
+        const y = this.padding.top + ((maxPrice - triggerPrice) / priceRange) * height;
+
+        // Draw arrow pointing down to the candle
+        const arrowY = y - 30;
+
+        // Arrow line
+        ctx.strokeStyle = "#ffa500";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(x, arrowY);
+        ctx.lineTo(x, y - 5);
+        ctx.stroke();
+
+        // Arrow head
+        ctx.fillStyle = "#ffa500";
+        ctx.beginPath();
+        ctx.moveTo(x - 8, y - 10);
+        ctx.lineTo(x + 8, y - 10);
+        ctx.lineTo(x, y);
+        ctx.closePath();
+        ctx.fill();
+
+        // Circle around trigger point
+        ctx.strokeStyle = "#ffa500";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, y, 12, 0, 2 * Math.PI);
+        ctx.stroke();
+    }
+
+    // 🔥 NEW: Draw info box with alert summary
+    drawAlertInfoBox(ctx, alertData, chartWidth, chartHeight) {
+        const boxWidth = 180;
+        const boxHeight = 70;
+        const boxX = this.width - this.padding.right - boxWidth - 10;
+        const boxY = this.height - this.padding.bottom - boxHeight - 30;
+
+        // Semi-transparent background
+        ctx.fillStyle = "rgba(30, 34, 45, 0.9)";
+        ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
+
+        // Border
+        ctx.strokeStyle = "#ffa500";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+
+        // Title
+        ctx.fillStyle = "#ffa500";
+        ctx.font = `bold 11px ${CHART_FONT}`;
+        ctx.textAlign = "left";
+        ctx.fillText("📊 Alert Summary", boxX + 10, boxY + 15);
+
+        // Content
+        ctx.fillStyle = "#d1d4dc";
+        ctx.font = `10px ${CHART_FONT}`;
+
+        const baseline = alertData.baselinePrice ? this.formatPrice(alertData.baselinePrice) : "N/A";
+        const trigger = this.formatPrice(alertData.triggerPrice);
+        const change = alertData.changePercent ? `(${alertData.changePercent >= 0 ? '+' : ''}${alertData.changePercent.toFixed(2)}%)` : "";
+
+        ctx.fillText(`Baseline: ${baseline}`, boxX + 10, boxY + 32);
+        ctx.fillText(`Trigger: ${trigger} ${change}`, boxX + 10, boxY + 47);
+        ctx.fillText(`Time: ${new Date().toLocaleTimeString()}`, boxX + 10, boxY + 62);
     }
 
     drawGrid(ctx, width, height, minPrice, maxPrice) {
@@ -191,6 +330,20 @@ class CandlestickChartGenerator {
         ctx.strokeRect(x - width / 2, bodyTop, width, bodyHeight);
     }
 
+    drawVolumeBar(ctx, x, candle, width, maxVolume, volumeHeight, priceHeight) {
+        const volumeY = this.padding.top + priceHeight;
+        const barHeight = (candle.volume / maxVolume) * volumeHeight * 0.8;
+
+        const isBullish = candle.close >= candle.open;
+        ctx.fillStyle = isBullish ? this.colors.volume.bullish : this.colors.volume.bearish;
+
+        ctx.fillRect(
+            x - width / 2,
+            volumeY + volumeHeight - barHeight,
+            width,
+            barHeight
+        );
+    }
 
     drawPriceLabels(ctx, minPrice, maxPrice, height) {
         const numLabels = 5;

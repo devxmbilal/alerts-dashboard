@@ -8,7 +8,6 @@ import AlertRedisService from "./AlertRedisService.js";
 import SafeAlertProcessor from "../utils/alertProcessor.js";
 import MicroBatchExecutionEngine from "../utils/MicroBatchEngine.js";
 import ChartScreenshotService from "../utils/chartScreenshot.js"; // 🔥 NEW: Pre-capture chart at trigger time
-import candleCacheService from "../utils/candleCache.js"; // 🔥 Ensure real-time robust candle cache is used
 import pLimit from "p-limit";
 import dotenv from "dotenv";
 import WebSocket from "ws";
@@ -3020,27 +3019,142 @@ class RealTimeAlertProcessor {
         const now = Date.now();
 
         const candlePromises = timeframes.map(async (timeframe, index) => {
-          const candles = await candleCacheService.getCandles(symbol, timeframe, 1);
+          const key = `${symbol}_${timeframe}`;
+          const cachedCandle = this.candleCache.get(key);
 
-          if (!candles || candles.length === 0) {
-            console.log(`   ⏳ [${timeframe}] CANDLE_ABOVE_OPEN: No candles available in cache`);
-            // Queue a fresh fetch via the safe queue system just in case
-            this.addCandleToQueue(symbol, timeframe);
-            return { timeframe, success: false, error: 'No candles in cache, queued fetch' };
+          // Calculate expected candle start for this timeframe
+          const timeframeMs = this.getTimeframeMs(timeframe);
+          const expectedCandleStart = Math.floor(now / timeframeMs) * timeframeMs;
+
+
+          // For D/W timeframes, allow timezone tolerance
+          const isLargeTimeframe = ['D', '1D', 'W', '1W', '12HR', '12H'].includes(timeframe.toUpperCase());
+
+          // Check if cache is FRESH and CURRENT
+          const cacheIsFresh = cachedCandle &&
+            cachedCandle.open !== null &&
+            cachedCandle.startTime >= expectedCandleStart - (isLargeTimeframe ? 3600000 : 5000);
+
+          if (cacheIsFresh) {
+            // ⚡ FAST PATH: Use cached data
+            const priceAboveOpen = currentPrice > (cachedCandle.open * EPSILON);
+            console.log(`   ⚡ [${timeframe}] CACHE HIT: Open=${cachedCandle.open.toFixed(6)}, Above=${priceAboveOpen ? '✅' : '❌'}`);
+            return {
+              timeframe,
+              success: true,
+              open: cachedCandle.open,
+              priceAboveOpen,
+              source: 'cache'
+            };
           }
 
-          const latestCandle = candles[candles.length - 1]; // The currently open forming candle
-          const priceAboveOpen = currentPrice > (latestCandle.open * EPSILON);
+          // 🔥 FIX 1: Check API ban BEFORE making direct calls (was missing!)
+          if (Date.now() < this.candleApiBanUntil) {
+            const banRemaining = Math.ceil((this.candleApiBanUntil - Date.now()) / 1000);
+            console.log(`   ⛔ [${timeframe}] CANDLE_ABOVE_OPEN: API banned (${banRemaining}s remaining), using queue system`);
+            // Use stale cache if available
+            if (cachedCandle && cachedCandle.open !== null) {
+              const priceAboveOpen = currentPrice > (cachedCandle.open * EPSILON);
+              console.log(`   ⚠️ [${timeframe}] Using stale cache during ban: Open=${cachedCandle.open}`);
+              return { timeframe, success: true, open: cachedCandle.open, priceAboveOpen, source: 'stale_cache_ban' };
+            }
+            // 🔥 FIX 2: Queue fetch instead of returning failure
+            this.addCandleToQueue(symbol, timeframe);
+            console.log(`   ⏳ [${timeframe}] CANDLE_ABOVE_OPEN: Queued fetch, will recheck on next tick`);
+            return { timeframe, success: false, error: 'API banned, queued for background fetch' };
+          }
 
-          console.log(`   ✅ [${timeframe}] CANDLE_ABOVE_OPEN: Open=${latestCandle.open.toFixed(6)}, Live=${currentPrice.toFixed(6)}, Above=${priceAboveOpen ? '✅' : '❌'}`);
+          // 🔄 SLOW PATH: Fetch fresh from Binance API
+          // Stagger requests to avoid 418
+          await new Promise(r => setTimeout(r, index * 30));
 
-          return {
-            timeframe,
-            success: true,
-            open: latestCandle.open,
-            priceAboveOpen,
-            source: 'candleCache'
-          };
+          try {
+            const binanceInterval = this.getBinanceInterval(timeframe);
+            const response = await fetch(
+              `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=1`
+            );
+
+            if (!response.ok) {
+              // 🔥 FIX 1: Set ban if rate limited
+              if (response.status === 418 || response.status === 429) {
+                console.log(`   🚨 [${timeframe}] CANDLE_ABOVE_OPEN: Rate limited (${response.status}), setting 2min ban`);
+                this.candleApiBanUntil = Date.now() + 120 * 1000;
+              }
+              // If API fails, use stale cache as fallback (if exists)
+              if (cachedCandle && cachedCandle.open !== null) {
+                const priceAboveOpen = currentPrice > (cachedCandle.open * EPSILON);
+                console.log(`   ⚠️ [${timeframe}] API ${response.status}, using stale cache: Open=${cachedCandle.open}`);
+                return { timeframe, success: true, open: cachedCandle.open, priceAboveOpen, source: 'stale_cache' };
+              }
+              // 🔥 FIX 2: Queue fetch instead of permanent failure
+              this.addCandleToQueue(symbol, timeframe);
+              console.log(`   ⏳ [${timeframe}] CANDLE_ABOVE_OPEN: API failed, queued for background fetch`);
+              return { timeframe, success: false, error: `API error ${response.status}, queued` };
+            }
+
+            const klines = await response.json();
+            if (!klines || klines.length === 0) {
+              // 🔥 FIX 2: Queue instead of failure
+              this.addCandleToQueue(symbol, timeframe);
+              return { timeframe, success: false, error: 'No data, queued' };
+            }
+
+            const kline = klines[0];
+            const candleOpen = parseFloat(kline[1]);
+            const candleStartTime = parseInt(kline[0]);
+
+            // 🔥 FIX 3: Validate API response is for CURRENT candle (not stale previous candle)
+            // At candle boundaries, Binance may briefly return the just-completed candle
+            const isLargeTF = ['D', '1D', 'W', '1W', '12HR', '12H'].includes(timeframe.toUpperCase());
+            const staleTolerance = isLargeTF ? 3600000 : 5000; // 1hr for D/W, 5s for others
+            if (candleStartTime < expectedCandleStart - staleTolerance) {
+              console.log(`   ⚠️ [${timeframe}] CANDLE_ABOVE_OPEN: API returned stale candle (start: ${new Date(candleStartTime).toISOString()}, expected: ${new Date(expectedCandleStart).toISOString()})`);
+              // Queue a fresh fetch via the safe queue system
+              this.addCandleToQueue(symbol, timeframe);
+              // Use stale cache if available, otherwise skip this tick
+              if (cachedCandle && cachedCandle.open !== null) {
+                const priceAboveOpen = currentPrice > (cachedCandle.open * EPSILON);
+                return { timeframe, success: true, open: cachedCandle.open, priceAboveOpen, source: 'stale_api_cache' };
+              }
+              return { timeframe, success: false, error: 'Stale candle from API, queued refresh' };
+            }
+
+            // Cache the fresh candle
+            this.candleCache.set(key, {
+              open: candleOpen,
+              high: parseFloat(kline[2]),
+              low: parseFloat(kline[3]),
+              close: parseFloat(kline[4]),
+              volume: parseFloat(kline[5]),
+              startTime: candleStartTime,
+              endTime: parseInt(kline[6]),
+              isComplete: false,
+              fetchedAt: now
+            });
+
+            // Check: Current Price > Open Price (with epsilon)
+            const priceAboveOpen = currentPrice > (candleOpen * EPSILON);
+            console.log(`   🔄 [${timeframe}] API FETCH: Open=${candleOpen.toFixed(6)}, Above=${priceAboveOpen ? '✅' : '❌'}`);
+
+            return {
+              timeframe,
+              success: true,
+              open: candleOpen,
+              priceAboveOpen,
+              source: 'api'
+            };
+          } catch (error) {
+            // On error, try stale cache
+            if (cachedCandle && cachedCandle.open !== null) {
+              const priceAboveOpen = currentPrice > (cachedCandle.open * EPSILON);
+              console.log(`   ⚠️ [${timeframe}] Error, using stale cache`);
+              return { timeframe, success: true, open: cachedCandle.open, priceAboveOpen, source: 'stale_cache' };
+            }
+            // 🔥 FIX 2: Queue fetch instead of permanent failure
+            this.addCandleToQueue(symbol, timeframe);
+            console.log(`   ⏳ [${timeframe}] CANDLE_ABOVE_OPEN: Error (${error.message}), queued for background fetch`);
+            return { timeframe, success: false, error: error.message + ' (queued)' };
+          }
         });
 
         // Wait for ALL timeframes
