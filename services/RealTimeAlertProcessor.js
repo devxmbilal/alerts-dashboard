@@ -3083,33 +3083,42 @@ class RealTimeAlertProcessor {
 
         console.log(`🔍 Checking HAMMER pattern for ${timeframes.length} timeframes (ALL must pass)`);
 
-        // ✅ PHASE 1: Fetch from real-time cache
+        // ✅ PHASE 1: Pre-fetch ALL timeframes first
+        let hammerDataReady = true;
+        let hammerPendingTFs = [];
+
+        for (const timeframe of timeframes) {
+          const candle = this.getCandleDataOrQueue(symbol, timeframe);
+          if (!candle || candle.open === null || candle.high === null || candle.low === null) {
+            hammerDataReady = false;
+            hammerPendingTFs.push(timeframe);
+          }
+        }
+
+        // ✅ PHASE 2: Wait until ALL data is ready
+        if (!hammerDataReady) {
+          console.log(`⏳ HAMMER: Waiting for ${hammerPendingTFs.length}/${timeframes.length} timeframes: [${hammerPendingTFs.join(', ')}]`);
+          return false;
+        }
+
+        // ✅ PHASE 3: All data ready - check conditions
+        console.log(`✅ HAMMER: All ${timeframes.length} timeframes data ready, checking pattern...`);
+
         let allHammersPassed = true;
         const hammerNow = Date.now();
 
-        await Promise.all(timeframes.map(async (timeframe) => {
-          if (!allHammersPassed) return; // Skip if already failed
-
-          const candles = await candleCacheService.getCandles(symbol, timeframe, 1);
-
-          if (!candles || candles.length === 0) {
-            console.log(`   ⏳ [${timeframe}] HAMMER: No candles in cache, queuing fetch`);
-            this.addCandleToQueue(symbol, timeframe);
-            allHammersPassed = false;
-            return;
-          }
-
-          const candle = candles[candles.length - 1]; // The latest candle
+        for (const timeframe of timeframes) {
+          const candle = this.candleCache.get(`${symbol}_${timeframe}`);
 
           // 🔥 CRITICAL FIX: Verify this is the CURRENT candle, not a stale one
           const timeframeMs = this.getTimeframeMs(timeframe);
           const expectedCandleStart = Math.floor(hammerNow / timeframeMs) * timeframeMs;
 
-          if (candle.timestamp < expectedCandleStart) {
-            console.log(`⚠️ [${timeframe}] HAMMER: STALE candle detected! Expected >= ${expectedCandleStart}, got ${candle.timestamp}`);
+          if (candle.startTime < expectedCandleStart) {
+            console.log(`⚠️ [${timeframe}] HAMMER: STALE candle detected! Forcing refresh...`);
+            this.candleCache.delete(`${symbol}_${timeframe}`);
             this.addCandleToQueue(symbol, timeframe);
-            allHammersPassed = false;
-            return;
+            return false;
           }
 
           const open = parseFloat(candle.open);
@@ -3121,7 +3130,7 @@ class RealTimeAlertProcessor {
           if (range === 0) {
             console.log(`   [${timeframe}] Hammer: Range is 0, FAIL`);
             allHammersPassed = false;
-            return;
+            break;
           }
 
           const openPositionFromLow = (open - low) / range;
@@ -3139,8 +3148,9 @@ class RealTimeAlertProcessor {
 
           if (!isHammer) {
             allHammersPassed = false;
+            break;
           }
-        }));
+        }
 
         if (allHammersPassed) {
           console.log(`🎉 HAMMER pattern PASSED for all ${timeframes.length} timeframes`);
@@ -3158,34 +3168,31 @@ class RealTimeAlertProcessor {
 
         console.log(`🔍 Checking INVERTED_HAMMER pattern for ${timeframes.length} timeframes (ALL must pass)`);
 
-        // ✅ PHASE 1: Fetch from real-time cache
+        // ✅ PHASE 1: Pre-fetch ALL timeframes first
+        let invHammerDataReady = true;
+        let invHammerPendingTFs = [];
+
+        for (const timeframe of timeframes) {
+          const candle = this.getCandleDataOrQueue(symbol, timeframe);
+          if (!candle || candle.open === null || candle.high === null || candle.low === null) {
+            invHammerDataReady = false;
+            invHammerPendingTFs.push(timeframe);
+          }
+        }
+
+        // ✅ PHASE 2: Wait until ALL data is ready
+        if (!invHammerDataReady) {
+          console.log(`⏳ INVERTED_HAMMER: Waiting for ${invHammerPendingTFs.length}/${timeframes.length} timeframes: [${invHammerPendingTFs.join(', ')}]`);
+          return false;
+        }
+
+        // ✅ PHASE 3: All data ready - check conditions
+        console.log(`✅ INVERTED_HAMMER: All ${timeframes.length} timeframes data ready, checking pattern...`);
+
         let allInvertedHammersPassed = true;
-        const invHammerNow = Date.now();
 
-        await Promise.all(timeframes.map(async (timeframe) => {
-          if (!allInvertedHammersPassed) return; // Skip if already failed
-          
-          const candles = await candleCacheService.getCandles(symbol, timeframe, 1);
-          
-          if (!candles || candles.length === 0) {
-            console.log(`   ⏳ [${timeframe}] INVERTED_HAMMER: No candles in cache, queuing fetch`);
-            this.addCandleToQueue(symbol, timeframe);
-            allInvertedHammersPassed = false;
-            return;
-          }
-          
-          const candle = candles[candles.length - 1]; // The latest candle
-
-          // 🔥 CRITICAL FIX: Verify this is the CURRENT candle, not a stale one
-          const timeframeMs = this.getTimeframeMs(timeframe);
-          const expectedCandleStart = Math.floor(invHammerNow / timeframeMs) * timeframeMs;
-
-          if (candle.timestamp < expectedCandleStart) {
-            console.log(`⚠️ [${timeframe}] INVERTED_HAMMER: STALE candle detected! Expected >= ${expectedCandleStart}, got ${candle.timestamp}`);
-            this.addCandleToQueue(symbol, timeframe);
-            allInvertedHammersPassed = false;
-            return;
-          }
+        for (const timeframe of timeframes) {
+          const candle = this.candleCache.get(`${symbol}_${timeframe}`);
 
           const openInv = parseFloat(candle.open);
           const highInv = parseFloat(candle.high);
@@ -3196,7 +3203,7 @@ class RealTimeAlertProcessor {
           if (rangeInv === 0) {
             console.log(`   [${timeframe}] Inverted Hammer: Range is 0, FAIL`);
             allInvertedHammersPassed = false;
-            return;
+            break;
           }
 
           const openPositionFromLowInv = (openInv - lowInv) / rangeInv;
@@ -3214,8 +3221,9 @@ class RealTimeAlertProcessor {
 
           if (!isInvertedHammer) {
             allInvertedHammersPassed = false;
+            break;
           }
-        }));
+        }
 
         if (allInvertedHammersPassed) {
           console.log(`🎉 INVERTED_HAMMER pattern PASSED for all ${timeframes.length} timeframes`);
@@ -3947,6 +3955,23 @@ class RealTimeAlertProcessor {
     }
   }
 
+  // 🛡️ SAFE CANDLE GETTER - Uses Queue System to Prevent 418 Ban
+  getCandleDataOrQueue(symbol, timeframe) {
+    const key = `${symbol}_${timeframe}`;
+
+    // 1. Check Cache
+    if (this.candleCache.has(key)) {
+      return this.candleCache.get(key);
+    }
+
+    // 2. Agar Cache nahi hai, aur ye request already queue mein nahi hai
+    if (!this.pendingCandleRequests.has(key)) {
+      console.log(`⏳ Queueing candle fetch for ${key}`);
+      this.addCandleToQueue(symbol, timeframe);
+    }
+
+    return null; // Abhi k liye null, background mein data aa jayega
+  }
 
   // Add to Candle Queue Logic
   addCandleToQueue(symbol, timeframe) {
@@ -4069,6 +4094,17 @@ class RealTimeAlertProcessor {
     }
   }
 
+  // Legacy method - kept for backward compatibility
+  async fetchCurrentCandleFromBinance(symbol, timeframe) {
+    // Use safe queue system instead of direct API call
+    return this.getCandleDataOrQueue(symbol, timeframe);
+  }
+
+  // Legacy method - kept for backward compatibility
+  async fetchCandleFromBinance(symbol, timeframe) {
+    return this.fetchCurrentCandleFromBinance(symbol, timeframe);
+  }
+
   // Get or create candle data for a symbol and timeframe
   getCandleData(symbol, timeframe) {
     const key = `${symbol}_${timeframe}`;
@@ -4127,32 +4163,31 @@ class RealTimeAlertProcessor {
         `🕯️ New candle started for ${symbol} (${timeframe}): Open=${candle.open} (temporary - fetching from Binance API)`
       );
 
-      // CRITICAL: Fetch actual candle open from real-time cache instead of Binance
-      candleCacheService.getCandles(symbol, timeframe, 1)
-        .then((candles) => {
-          if (candles && candles.length > 0) {
-            const cacheCandle = candles[candles.length - 1];
-            if (cacheCandle.timestamp === candleStartTime) {
-              // Update with accurate cached data
-              const currentCandle = this.getCandleData(symbol, timeframe);
-              if (currentCandle.startTime === candleStartTime) {
-                currentCandle.open = cacheCandle.open; // Real candle open
-                currentCandle.high = Math.max(currentCandle.high, parseFloat(cacheCandle.high));
-                currentCandle.low = Math.min(currentCandle.low, parseFloat(cacheCandle.low));
-                currentCandle.close = cacheCandle.close;
-                currentCandle.volume = cacheCandle.volume;
-                console.log(`✅ Updated ${symbol} (${timeframe}) with cached candle open: ${cacheCandle.open}`);
-              }
-            } else {
-              // Cache is not ready yet for the new candle, queue a safe background fetch
-              console.log(`⏳ ${symbol} (${timeframe}) cache pending for new candle, queuing sync...`);
-              this.addCandleToQueue(symbol, timeframe);
+      // CRITICAL: Fetch actual candle open from Binance klines API (this is the correct open)
+      this.fetchCandleFromBinance(symbol, timeframe)
+        .then((binanceCandle) => {
+          if (binanceCandle && binanceCandle.startTime === candleStartTime) {
+            // Update with accurate Binance data
+            const currentCandle = this.getCandleData(symbol, timeframe);
+            if (currentCandle.startTime === candleStartTime) {
+              currentCandle.open = binanceCandle.open; // This is the REAL candle open!
+              currentCandle.high = Math.max(
+                currentCandle.high,
+                binanceCandle.high
+              );
+              currentCandle.low = Math.min(
+                currentCandle.low,
+                binanceCandle.low
+              );
+              currentCandle.close = binanceCandle.close;
+              currentCandle.volume = binanceCandle.volume;
+              console.log(
+                `✅ Updated ${symbol} (${timeframe}) with Binance candle open: ${binanceCandle.open}`
+              );
             }
           }
         })
-        .catch((err) => { 
-           console.log(`⚠️ Failed to sync ${symbol} (${timeframe}) candle from cache:`, err.message);
-        });
+        .catch(() => { }); // Silent fail - non-critical
     } else {
       // OPTIMIZATION: Update existing candle with WebSocket OHLC data (if available)
       // This ensures we have accurate high/low values from Binance
@@ -4200,18 +4235,67 @@ class RealTimeAlertProcessor {
     requiredChange,
     baselinePrice
   ) {
-    console.log(`🔍 Checking candle change for ${symbol} (${timeframe}):`);
+    let candle = this.getCandleData(symbol, timeframe);
 
-    // 🔥 CRITICAL FIX: Use real-time WebSocket cache instead of Binace REST API
-    const candles = await candleCacheService.getCandles(symbol, timeframe, 1);
+    console.log(`🔍 Checking candle for ${symbol} (${timeframe}):`);
+    console.log(`   Candle complete: ${candle.isComplete}`);
+    console.log(`   Open: ${candle.open}, Close: ${candle.close}`);
+    console.log(`   Baseline Price: ${baselinePrice}`);
+    console.log(
+      `   Start time: ${candle.startTime}, End time: ${candle.endTime}`
+    );
 
-    if (!candles || candles.length === 0) {
-      console.log(`   ⏳ [${timeframe}] No candles in cache, queuing fetch...`);
-      this.addCandleToQueue(symbol, timeframe);
-      return false; // Fail safe, check next tick
+    // CRITICAL: If candle data is missing, fetch from Binance immediately
+    if (
+      !candle.open ||
+      !candle.close ||
+      candle.open === null ||
+      candle.close === null
+    ) {
+      console.log(
+        `⚠️ Candle data missing (Open=${candle.open}, Close=${candle.close}), fetching from Binance...`
+      );
+
+      const binanceCandle = await this.fetchCandleFromBinance(
+        symbol,
+        timeframe
+      );
+      if (binanceCandle) {
+        // Update candle data with Binance data
+        candle.open = binanceCandle.open;
+        candle.close = binanceCandle.close;
+        candle.high = binanceCandle.high;
+        candle.low = binanceCandle.low;
+        candle.volume = binanceCandle.volume;
+        candle.startTime = binanceCandle.startTime;
+        candle.endTime = binanceCandle.endTime;
+        candle.isComplete = binanceCandle.isComplete;
+
+        console.log(
+          `✅ Fetched candle data from Binance: Open=${candle.open}, Close=${candle.close}`
+        );
+      } else {
+        // If Binance fetch fails, use current price as fallback
+        console.log(
+          `⚠️ Binance fetch failed, using baseline price as fallback`
+        );
+        candle.open = baselinePrice;
+        candle.close = baselinePrice;
+      }
     }
 
-    const candle = candles[candles.length - 1]; // Latest live candle
+    // Check if we have valid candle data after fetch
+    if (
+      !candle.open ||
+      !candle.close ||
+      candle.open === null ||
+      candle.close === null
+    ) {
+      console.log(
+        `❌ Candle not ready: Open=${candle.open}, Close=${candle.close}`
+      );
+      return false;
+    }
 
     // Calculate change from baseline price instead of candle open
     const currentPrice = candle.close;
