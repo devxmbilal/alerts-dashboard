@@ -273,41 +273,30 @@ class ChartScreenshotService {
   }
 
   /**
-   * Fetch Binance Kline data (FREE) with 418 IP ban handling
+   * Fetch Binance Kline data (FREE)
    * @param {string} symbol - Trading pair symbol
    * @param {string} interval - Timeframe (1m, 5m, 15m, 1h, 4h, 1d, 1w)
    * @param {number} limit - Number of candles (default: 50)
    * @returns {Promise<Array>} - Array of candle objects
    */
-  async getBinanceCandles(symbol, interval = "5m", limit = 50) {
+  async getBinanceCandles(symbol, interval = "5m", limit = 100) {
+    // Normalize symbol (Binance expects uppercase, no underscores)
+    const normalizedSymbol = symbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+
     // Check if IP is banned (10-minute cooldown)
     if (Date.now() < this.binanceIpBannedUntil) {
-      const waitMs = this.binanceIpBannedUntil - Date.now();
-      console.log(`🚫 Binance IP banned, skipping candles for ${symbol}. Wait ${Math.ceil(waitMs / 60000)} more minutes...`);
       throw new Error("BINANCE_IP_BANNED");
     }
 
-    // 🔥 NEW: Rate limiting to PREVENT IP bans
+    // Rate limiting
     const now = Date.now();
-
-    // Reset counter every minute
     if (now - this.requestCountResetTime > 60000) {
       this.requestCount = 0;
       this.requestCountResetTime = now;
     }
 
-    // Check if we've exceeded requests per minute
     if (this.requestCount >= this.maxRequestsPerMinute) {
-      console.log(`⏳ Rate limit reached (${this.requestCount}/${this.maxRequestsPerMinute} requests/min), skipping chart for ${symbol}`);
       throw new Error("RATE_LIMIT_EXCEEDED");
-    }
-
-    // Ensure minimum interval between requests
-    const timeSinceLastRequest = now - this.lastBinanceRequest;
-    if (timeSinceLastRequest < this.minRequestInterval) {
-      const waitTime = this.minRequestInterval - timeSinceLastRequest;
-      console.log(`⏳ Waiting ${waitTime}ms before next Binance request...`);
-      await new Promise(resolve => setTimeout(resolve, waitTime));
     }
 
     // Update request tracking
@@ -315,33 +304,22 @@ class ChartScreenshotService {
     this.requestCount++;
 
     try {
-      // Map timeframe to Binance interval
-      const intervalMap = {
-        "1m": "1m",
-        "5m": "5m",
-        "15m": "15m",
-        "1h": "1h",
-        "4h": "4h",
-        "1d": "1d",
-        "1w": "1w",
-      };
-      const binanceInterval = intervalMap[interval.toLowerCase()] || "5m";
+      // Map timeframe robustly
+      const binanceInterval = this.mapTimeframe(interval);
 
-      // 🔥 FIX: Add timestamp for cache-busting to get fresh data
-      const timestamp = Date.now();
-      const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}&_t=${timestamp}`;
+      // 🔥 FIX: Remove _t cache-buster parameter as it causes 400 Errors on strict klines endpoint
+      const url = `https://api.binance.com/api/v3/klines?symbol=${normalizedSymbol}&interval=${binanceInterval}&limit=${limit}`;
+
+      console.log(`📡 Fetching Binance candles: ${normalizedSymbol} ${binanceInterval}...`);
       const res = await axios.get(url, {
-        timeout: 15000,
+        timeout: 10000,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache'
         }
       });
 
       return res.data.map((c) => ({
-        timestamp: c[0], // Open time in milliseconds
-        openTime: c[0],
+        timestamp: c[0],
         open: parseFloat(c[1]),
         high: parseFloat(c[2]),
         low: parseFloat(c[3]),
@@ -352,16 +330,75 @@ class ChartScreenshotService {
       // Check for 418 IP ban
       if (error.response && error.response.status === 418) {
         this.binanceIpBannedUntil = Date.now() + this.binanceBanCooldown;
-        console.error(`🚫 HTTP 418: Binance IP BANNED! Stopping candle requests for 10 minutes`);
-        console.error(`🚫 Resume at: ${new Date(this.binanceIpBannedUntil).toLocaleTimeString()}`);
+        console.error(`🚫 HTTP 418: Binance IP BANNED! Cooldown for 10 minutes`);
         throw new Error("BINANCE_IP_BANNED");
       }
 
-      console.error(
-        `❌ Error fetching Binance candles for ${symbol}:`,
-        error.message
-      );
+      console.error(`❌ Binance API Error for ${normalizedSymbol}:`, error.message);
       throw error;
+    }
+  }
+
+  /**
+   * Fetch MEXC Kline data (Fallback for delisted/non-Binance symbols)
+   */
+  async getMexcCandles(symbol, interval = "5m", limit = 100) {
+    try {
+      // MEXC V3 is Binance-compatible
+      const normalizedSymbol = symbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+      const mexcInterval = this.mapTimeframe(interval);
+      const url = `https://api.mexc.com/api/v3/klines?symbol=${normalizedSymbol}&interval=${mexcInterval}&limit=${limit}`;
+
+      console.log(`📡 Fetching MEXC candles: ${normalizedSymbol} ${mexcInterval}...`);
+      const res = await axios.get(url, { timeout: 10000 });
+
+      return res.data.map((c) => ({
+        timestamp: c[0],
+        open: parseFloat(c[1]),
+        high: parseFloat(c[2]),
+        low: parseFloat(c[3]),
+        close: parseFloat(c[4]),
+        volume: parseFloat(c[5]),
+      }));
+    } catch (error) {
+      console.error(`❌ MEXC API Error for ${symbol}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Robust timeframe mapper
+   */
+  mapTimeframe(interval) {
+    const tf = interval.toString().toLowerCase();
+    if (tf.includes('1m') || tf === '1') return '1m';
+    if (tf.includes('5m') || tf === '5' || tf.includes('5min')) return '5m';
+    if (tf.includes('15m') || tf === '15' || tf.includes('15min')) return '15m';
+    if (tf.includes('1h') || tf === '60' || tf.includes('1hr')) return '1h';
+    if (tf.includes('4h') || tf === '240' || tf.includes('4hr')) return '4h';
+    if (tf.includes('1d') || tf.includes('day')) return '1d';
+    if (tf.includes('1w') || tf.includes('week')) return '1w';
+    return '5m'; // Default
+  }
+
+  /**
+   * Multi-exchange data fetcher (Binance -> MEXC)
+   */
+  async fetchCandleData(symbol, timeframe, limit) {
+    try {
+      // Try Binance first
+      return await this.getBinanceCandles(symbol, timeframe, limit);
+    } catch (binanceError) {
+      // If Binance fails (400 symbols not found or IP ban), try MEXC
+      if (binanceError.response?.status === 400 || binanceError.message === "BINANCE_IP_BANNED") {
+        console.log(`🔍 Symbol ${symbol} not found on Binance or IP banned, trying MEXC fallback...`);
+        try {
+          return await this.getMexcCandles(symbol, timeframe, limit);
+        } catch (mexcError) {
+          throw new Error(`Data fetch failed on all exchanges for ${symbol}`);
+        }
+      }
+      throw binanceError;
     }
   }
 
@@ -797,11 +834,11 @@ class ChartScreenshotService {
       let candles = await candleCache.getCandles(symbol, timeframe, 100);
 
       if (candles && candles.length >= 50) {
-        console.log(`✅ Using CACHED candles for ${symbol} (${candles.length} candles) - NO Binance API call!`);
+        console.log(`✅ Using CACHED candles for ${symbol} (${candles.length} candles) - NO API call!`);
       } else {
-        // Step 2: Cache miss - fetch from Binance and store in cache
-        console.log(`📡 Cache miss for ${symbol}, fetching from Binance...`);
-        candles = await this.getBinanceCandles(symbol, timeframe, 100);
+        // Step 2: Cache miss - fetch from exchanges and store in cache
+        console.log(`📡 Cache miss for ${symbol}, fetching fresh data...`);
+        candles = await this.fetchCandleData(symbol, timeframe, 100);
 
         if (candles && candles.length > 0) {
           // Store in cache for next time
