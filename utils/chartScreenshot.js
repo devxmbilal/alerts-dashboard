@@ -833,22 +833,37 @@ class ChartScreenshotService {
       // Step 1: Try to get candles from cache (Redis/Memory)
       let candles = await candleCache.getCandles(symbol, timeframe, 100);
 
-      if (candles && candles.length >= 50) {
+      if (candles && candles.length >= 15) {
+        // 🔥 FIX: Lowered from 50 to 15 — use cached data whenever available
+        // After seeding, cache will have 100+ candles. During operation, at least 15+ from ticks.
         console.log(`✅ Using CACHED candles for ${symbol} (${candles.length} candles) - NO API call!`);
-      } else {
-        // Step 2: Cache miss - fetch from exchanges and store in cache
-        console.log(`📡 Cache miss for ${symbol}, fetching fresh data...`);
-        candles = await this.fetchCandleData(symbol, timeframe, 100);
-
-        if (candles && candles.length > 0) {
-          // Store in cache for next time
-          await candleCache.storeCandles(symbol, timeframe, candles);
-          console.log(`💾 Stored ${candles.length} candles in cache for ${symbol}`);
+      } else if (!candles || candles.length === 0) {
+        // Step 2: Cache completely empty — try ONE API call (only if not banned)
+        if (Date.now() < this.binanceIpBannedUntil) {
+          console.warn(`🚫 Cache empty for ${symbol} but IP banned — cannot fetch. Skipping chart.`);
+          return null;
         }
+
+        console.log(`📡 Cache empty for ${symbol}, fetching from API (one-time)...`);
+        try {
+          candles = await this.fetchCandleData(symbol, timeframe, 100);
+          if (candles && candles.length > 0) {
+            // Store in cache for next time
+            await candleCache.storeCandles(symbol, timeframe, candles);
+            console.log(`💾 Stored ${candles.length} candles in cache for ${symbol}`);
+          }
+        } catch (fetchError) {
+          console.warn(`⚠️ API fetch failed for ${symbol}: ${fetchError.message}`);
+          return null; // No chart rather than risking more API calls
+        }
+      } else {
+        // Has 1-14 candles — use what we have (partial chart is better than no chart or API ban)
+        console.log(`📊 Using partial cache for ${symbol} (${candles.length} candles) — avoiding API call`);
       }
 
       if (!candles || candles.length === 0) {
-        throw new Error("No candle data available");
+        console.warn(`⚠️ No candle data available for ${symbol}`);
+        return null;
       }
 
       // 🔥 FIX: Update last candle with live price (NO new candle added!)
@@ -863,14 +878,13 @@ class ChartScreenshotService {
             low: Math.min(lastCachedCandle.low || livePrice, livePrice),
             close: livePrice
           };
-          console.log(`📈 Updated last candle with live price: $${livePrice}`);
         }
       }
 
       // Generate chart
       const alertData = options.alertData || null;
       const chartBuffer = candlestickCanvas.generate(symbol, candles, timeframe, alertData);
-      console.log(`✅ Chart generated (${(chartBuffer.length / 1024).toFixed(1)}KB)`);
+      console.log(`✅ Chart generated for ${symbol} (${(chartBuffer.length / 1024).toFixed(1)}KB, ${candles.length} candles)`);
       return chartBuffer;
 
     } catch (canvasError) {
@@ -882,7 +896,11 @@ class ChartScreenshotService {
 
       console.warn(`⚠️ Canvas chart failed for ${symbol}: ${canvasError.message}`);
 
-      // Fallback: Puppeteer/TradingView
+      // Fallback: Puppeteer/TradingView (only if not IP banned)
+      if (Date.now() < this.binanceIpBannedUntil) {
+        return null;
+      }
+
       try {
         console.log(`📊 Falling back to Puppeteer for ${symbol}...`);
         return await this.captureChartPuppeteer(symbol, timeframe);

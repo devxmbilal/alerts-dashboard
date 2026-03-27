@@ -11,7 +11,7 @@ class CandleCacheService {
         this.redis = null;
         this.isConnected = false;
         this.localCache = new Map(); // In-memory fallback
-        this.maxCandlesPerSymbol = 150; // Store 150 candles per symbol/timeframe
+        this.maxCandlesPerSymbol = 200; // Store 200 candles per symbol/timeframe (more chart coverage)
         this.cacheExpiry = 86400; // 24 hours in Redis
     }
 
@@ -143,7 +143,7 @@ class CandleCacheService {
             // Try local cache first (fastest)
             if (this.localCache.has(key)) {
                 const candles = this.localCache.get(key);
-                if (candles && candles.length >= limit * 0.5) { // At least 50% of requested
+                if (candles && candles.length >= 10) { // 🔥 FIX: Lowered from 50% to 10 candles minimum
                     console.log(`📊 CandleCache: Using local cache for ${symbol} (${candles.length} candles)`);
                     return candles.slice(-limit);
                 }
@@ -168,6 +168,36 @@ class CandleCacheService {
             console.warn(`⚠️ CandleCache get error for ${symbol}:`, error.message);
             return null;
         }
+    }
+
+    /**
+     * Get number of cached candles for a symbol/timeframe (without loading data)
+     * @param {string} symbol - Trading pair
+     * @param {string} timeframe - Timeframe
+     * @returns {number} - Number of cached candles (0 if not cached)
+     */
+    getCandleCount(symbol, timeframe) {
+        const key = this.getCacheKey(symbol, timeframe);
+        if (this.localCache.has(key)) {
+            return this.localCache.get(key).length;
+        }
+        return 0;
+    }
+
+    /**
+     * Check if cache has been seeded with real kline data (50+ candles with unique timestamps)
+     * @param {string} symbol - Trading pair
+     * @param {string} timeframe - Timeframe
+     * @returns {boolean} - True if cache has real data
+     */
+    isCacheSeeded(symbol, timeframe) {
+        const key = this.getCacheKey(symbol, timeframe);
+        if (!this.localCache.has(key)) return false;
+        const candles = this.localCache.get(key);
+        if (!candles || candles.length < 30) return false;
+        // Check that we have unique timestamps (not all the same)
+        const uniqueTimestamps = new Set(candles.map(c => c.timestamp));
+        return uniqueTimestamps.size >= 20;
     }
 
     /**

@@ -1,6 +1,7 @@
 import Redis from "ioredis";
 import WebSocket from "ws";
 import dotenv from "dotenv";
+import axios from "axios";
 import logger from "../utils/logger.js";
 import candleCache from "../utils/candleCache.js"; // 🔥 NEW: Cache candles for chart generation
 dotenv.config();
@@ -168,6 +169,9 @@ class BinanceWorker {
     this.lastPublishTime = 0;
     this.publishThrottle = 100; // 🔥 FIX: Reduced from 500ms to catch rapid price spikes
     this.initialDataLoaded = false; // FIX: Prevent duplicate REST calls
+    // 🔥 NEW: Track live candles per symbol+timeframe for proper OHLCV construction
+    this.liveCandles = new Map(); // key: "BTCUSDT_5m" -> { open, high, low, close, volume, timestamp }
+    this.candleCacheSeeded = false; // Track if initial kline seed has been done
   }
 
   // Helper: Convert timeframe string to milliseconds
@@ -222,6 +226,13 @@ class BinanceWorker {
         console.log("⚠️ Skipping REST call on reconnect - WebSocket will handle updates");
       }
 
+      // 🔥 NEW: Seed candle cache with real kline data (one-time, rate-limited)
+      if (!this.candleCacheSeeded) {
+        this.seedCandleCache().catch((err) => {
+          console.warn("⚠️ Candle cache seeding failed, charts may use API fallback:", err.message);
+        });
+      }
+
       // ALWAYS connect to WebSocket (even if REST failed)
       // WebSocket has no rate limit issues
       this.connectWebSocket();
@@ -229,6 +240,120 @@ class BinanceWorker {
       console.error("❌ Binance connection failed:", error);
       setTimeout(() => this.connectToBinance(), this.reconnectInterval);
     }
+  }
+
+  /**
+   * 🔥 NEW: Seed candle cache with REAL kline data from Binance API
+   * Called once at startup. Fetches 100 candles per symbol for the user's preferred timeframe.
+   * Rate-limited: 1 request per 2 seconds to avoid IP bans.
+   */
+  async seedCandleCache() {
+    if (this.candleCacheSeeded) return;
+    this.candleCacheSeeded = true; // Prevent duplicate seeding
+
+    console.log("🌱 Starting candle cache seeding with real kline data...");
+
+    // Get symbols that need seeding — use favorited symbols from Redis, or top symbols
+    let symbolsToSeed = [];
+    try {
+      // Get all user favorites from Redis
+      const keys = await redis.keys("user:*:favorites");
+      const favoriteSets = new Set();
+      for (const key of keys) {
+        const favs = await redis.smembers(key);
+        favs.forEach(f => favoriteSets.add(f));
+      }
+      symbolsToSeed = Array.from(favoriteSets);
+    } catch (e) {
+      console.warn("⚠️ Could not fetch user favorites for seeding:", e.message);
+    }
+
+    // Fallback: use top popular symbols if no favorites found
+    if (symbolsToSeed.length === 0) {
+      symbolsToSeed = [
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+        "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT",
+        "MATICUSDT", "NEARUSDT", "ATOMUSDT", "UNIUSDT", "LTCUSDT",
+      ];
+    }
+
+    // Limit to prevent excessive API calls
+    const maxSymbols = Math.min(symbolsToSeed.length, 50);
+    const symbols = symbolsToSeed.slice(0, maxSymbols);
+    const timeframes = ["5m", "15m", "1h"]; // Most commonly used timeframes
+
+    console.log(`🌱 Seeding ${symbols.length} symbols × ${timeframes.length} timeframes = ${symbols.length * timeframes.length} API calls (rate-limited)`);
+
+    let seeded = 0;
+    let failed = 0;
+
+    for (const symbol of symbols) {
+      for (const tf of timeframes) {
+        // Skip if already seeded (e.g., from a previous partial run)
+        if (candleCache.isCacheSeeded(symbol, tf)) {
+          continue;
+        }
+
+        try {
+          // Check IP ban
+          if (Date.now() < ipBannedUntil) {
+            console.warn("🚫 IP banned, stopping candle seeding");
+            return;
+          }
+
+          // Rate limit: wait 2 seconds between API calls
+          await new Promise(resolve => setTimeout(resolve, 2000));
+
+          const normalizedSymbol = symbol.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+          const url = `https://api.binance.com/api/v3/klines?symbol=${normalizedSymbol}&interval=${tf}&limit=100`;
+
+          const res = await axios.get(url, {
+            timeout: 10000,
+            headers: { "User-Agent": "Mozilla/5.0" },
+          });
+
+          if (res.data && res.data.length > 0) {
+            const candles = res.data.map(c => ({
+              timestamp: c[0],
+              open: parseFloat(c[1]),
+              high: parseFloat(c[2]),
+              low: parseFloat(c[3]),
+              close: parseFloat(c[4]),
+              volume: parseFloat(c[5]),
+            }));
+
+            await candleCache.storeCandles(symbol, tf, candles);
+            seeded++;
+            console.log(`✅ Seeded ${candles.length} candles for ${symbol}/${tf}`);
+
+            // Also initialize liveCandles tracker with the last candle boundary
+            const lastCandle = candles[candles.length - 1];
+            const liveKey = `${symbol}_${tf}`;
+            this.liveCandles.set(liveKey, {
+              timestamp: lastCandle.timestamp,
+              open: lastCandle.open,
+              high: lastCandle.high,
+              low: lastCandle.low,
+              close: lastCandle.close,
+              volume: lastCandle.volume,
+            });
+          }
+        } catch (error) {
+          failed++;
+          if (error.response?.status === 418) {
+            ipBannedUntil = Date.now() + 600000;
+            console.error("🚫 HTTP 418 during seeding: IP banned! Stopping.");
+            return;
+          }
+          // Don't log every error to reduce noise
+          if (failed <= 5) {
+            console.warn(`⚠️ Seed failed for ${symbol}/${tf}: ${error.message}`);
+          }
+        }
+      }
+    }
+
+    console.log(`🌱 Candle cache seeding complete: ${seeded} seeded, ${failed} failed`);
   }
 
   async fetchAllUSDTSPairs() {
@@ -439,25 +564,43 @@ class BinanceWorker {
       const cacheKey = `crypto:${data.symbol}`;
       await redis.setex(cacheKey, 86400, JSON.stringify(data));
 
-      // 🔥 FIX: Store candle data for ALL timeframes (not just 5m!)
-      // This ensures charts for any user-selected timeframe have fresh data
-      const timeframes = ["1m", "5m", "15m", "1h", "4h", "1d"];
+      // 🔥 FIX: Build PROPER candles from tick data (not 24h OHLCV!)
+      // Track open price per boundary, update high/low/close from ticks
+      const timeframes = ["5m", "15m", "1h", "4h", "1d"];
 
       for (const tf of timeframes) {
-        // Calculate timeframe boundary
         const tfMs = this.getTimeframeMs(tf);
-        const candle = {
-          timestamp: Math.floor(data.timestamp / tfMs) * tfMs, // Round to timeframe boundary
-          open: data.open || data.price,
-          high: data.high || data.price,
-          low: data.low || data.price,
-          close: data.price,
-          volume: data.volume24h || 0,
-          time: Math.floor(data.timestamp / tfMs) * tfMs, // For chart compatibility
-        };
+        const candleTimestamp = Math.floor(data.timestamp / tfMs) * tfMs;
+        const liveKey = `${data.symbol}_${tf}`;
+        const existing = this.liveCandles.get(liveKey);
 
-        // Store in candle cache (async, non-blocking)
-        candleCache.storeCandle(data.symbol, tf, candle).catch(() => { });
+        if (existing && existing.timestamp === candleTimestamp) {
+          // SAME candle boundary — update high/low/close only
+          existing.high = Math.max(existing.high, data.price);
+          existing.low = Math.min(existing.low, data.price);
+          existing.close = data.price;
+          // Don't overwrite volume with 24h volume — keep existing
+        } else {
+          // NEW candle boundary — save old candle to cache, start new one
+          if (existing && existing.timestamp !== candleTimestamp) {
+            // Flush the completed candle to cache
+            candleCache.storeCandle(data.symbol, tf, { ...existing }).catch(() => {});
+          }
+
+          // Start a fresh candle with tick price as OHLC
+          this.liveCandles.set(liveKey, {
+            timestamp: candleTimestamp,
+            open: data.price,
+            high: data.price,
+            low: data.price,
+            close: data.price,
+            volume: 0, // Will accumulate from ticks
+          });
+        }
+
+        // Store current state to cache (updates the "in-progress" candle)
+        const currentCandle = this.liveCandles.get(liveKey);
+        candleCache.storeCandle(data.symbol, tf, { ...currentCandle }).catch(() => {});
       }
 
       // Throttle publishing to prevent overwhelming Redis
