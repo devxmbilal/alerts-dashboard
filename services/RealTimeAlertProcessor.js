@@ -526,6 +526,8 @@ class RealTimeAlertProcessor {
   // ============================================
 
   // Start WebSocket connection to Binance for real-time price updates
+  // 🔥 FIX: Uses data-stream.binance.vision with per-symbol streams
+  // because !ticker@arr broadcast is blocked on this AWS Singapore IP
   startWebSocketPriceFeed() {
     if (this.isWebSocketRunning) {
       console.log("⚠️ WebSocket already running");
@@ -535,83 +537,156 @@ class RealTimeAlertProcessor {
     console.log("🚀 Starting Binance WebSocket price feed...");
 
     try {
-      // Connect to Binance !ticker@arr stream (all tickers)
-      const wsUrl = "wss://stream.binance.com:9443/ws/!ticker@arr";
-      this.binanceWebSocket = new WebSocket(wsUrl);
+      // Build streams list from active symbols
+      const activeSymbols = Array.from(this.microBatchEngine.activeSymbolsSet);
+      if (activeSymbols.length === 0) {
+        console.log("⚠️ No active symbols, retrying in 5 seconds...");
+        setTimeout(() => this.startWebSocketPriceFeed(), 5000);
+        return;
+      }
 
-      this.binanceWebSocket.on("open", () => {
-        console.log("✅ Binance WebSocket connected");
-        this.isWebSocketRunning = true;
-      });
+      // Binance limits combined streams to ~200 per connection
+      // Split into chunks and connect to each
+      const CHUNK_SIZE = 200;
+      const symbolChunks = [];
+      for (let i = 0; i < activeSymbols.length; i += CHUNK_SIZE) {
+        symbolChunks.push(activeSymbols.slice(i, i + CHUNK_SIZE));
+      }
 
-      this.binanceWebSocket.on("message", (data) => {
-        try {
-          const tickers = JSON.parse(data.toString());
-          if (tickers && Array.isArray(tickers)) {
-            // 🚀 MICRO-BATCH EXECUTION ENGINE - Ultra High Performance Processing
-            const startTime = performance.now();
+      console.log(`📊 Subscribing to ${activeSymbols.length} symbols in ${symbolChunks.length} WebSocket connection(s)`);
 
-            console.log(
-              `📊 WebSocket: Received ${tickers.length} ticker updates`
-            );
+      // Store all connections for cleanup
+      this.binanceWebSockets = this.binanceWebSockets || [];
 
-            // Step 1: Ultra-fast symbol filtering (O(1) lookup)
-            const relevantUpdates =
-              this.microBatchEngine.filterRelevantSymbols(tickers);
+      // Close any existing connections
+      for (const ws of this.binanceWebSockets) {
+        try { ws.close(); } catch (e) { /* ignore */ }
+      }
+      this.binanceWebSockets = [];
 
-            if (relevantUpdates.size === 0) {
-              console.log(
-                `😴 No alerts for any of the ${tickers.length} ticker updates, 100% CPU saved!`
-              );
-              return;
-            }
+      let connectedCount = 0;
+      let msgCount = 0;
 
-            // Step 2: Update live prices cache for all symbols (background task)
-            this.updateLivePricesCache(tickers);
+      for (let chunkIdx = 0; chunkIdx < symbolChunks.length; chunkIdx++) {
+        const chunk = symbolChunks[chunkIdx];
+        const streams = chunk.map(s => `${s.toLowerCase()}@ticker`).join('/');
+        const wsUrl = `wss://data-stream.binance.vision/stream?streams=${streams}`;
 
-            // Step 3: Add relevant symbols to micro-batch queue
+        const ws = new WebSocket(wsUrl);
+        this.binanceWebSockets.push(ws);
+
+        ws.on("open", () => {
+          connectedCount++;
+          console.log(`✅ WebSocket ${chunkIdx + 1}/${symbolChunks.length} connected (${chunk.length} symbols)`);
+          if (connectedCount === symbolChunks.length) {
+            this.isWebSocketRunning = true;
+            console.log(`🚀 All ${symbolChunks.length} WebSocket connections established - LIVE`);
+          }
+        });
+
+        ws.on("message", (data) => {
+          try {
+            const parsed = JSON.parse(data.toString());
+            // Combined streams format: { stream: "btcusdt@ticker", data: { ... } }
+            const ticker = parsed.data || parsed;
+
+            if (!ticker || !ticker.s) return;
+
+            msgCount++;
+
+            // Build array format compatible with existing micro-batch engine
+            const tickerArray = [ticker];
+
+            // Direct processing - all incoming symbols are relevant (pre-filtered by subscription)
+            const priceData = {
+              symbol: ticker.s,
+              price: parseFloat(ticker.c),
+              change: parseFloat(ticker.P),
+              priceChangePercent: parseFloat(ticker.P),
+              priceChange: parseFloat(ticker.p),
+              volume: parseFloat(ticker.q),
+              volume24h: parseFloat(ticker.q),
+              high: parseFloat(ticker.h),
+              low: parseFloat(ticker.l),
+              open: parseFloat(ticker.o),
+              close: parseFloat(ticker.c),
+              timestamp: Date.now(),
+              rawTicker: ticker,
+            };
+
+            // Update in-memory price cache directly
+            this.livePrices[ticker.s] = priceData;
+
+            // Update Redis cache via pipeline (batched every 5 seconds)
+            this._pendingRedisUpdates = this._pendingRedisUpdates || new Map();
+            this._pendingRedisUpdates.set(ticker.s, priceData);
+            this._scheduleRedisFlush();
+
+            // Add directly to micro-batch queue
+            const relevantUpdates = new Map();
+            relevantUpdates.set(ticker.s, priceData);
             this.microBatchEngine.addToBatch(relevantUpdates);
 
-            const processingTime = performance.now() - startTime;
-            const efficiency = (relevantUpdates.size / tickers.length) * 100;
-
-            console.log(
-              `⚡ Micro-Batch: ${relevantUpdates.size}/${tickers.length
-              } relevant (${efficiency.toFixed(
-                1
-              )}% efficiency) queued in ${processingTime.toFixed(2)}ms`
-            );
+            // Log stats every 60 seconds (not every message)
+            if (msgCount % 1000 === 0) {
+              console.log(`📊 WebSocket stats: ${msgCount} messages processed`);
+            }
+          } catch (error) {
+            console.error("❌ Error parsing WebSocket message:", error.message);
           }
-        } catch (error) {
-          console.error("❌ Error parsing WebSocket message:", error);
-        }
-      });
+        });
 
-      this.binanceWebSocket.on("error", (error) => {
-        console.error("❌ Binance WebSocket error:", error.message);
-        this.isWebSocketRunning = false;
-      });
+        ws.on("error", (error) => {
+          console.error(`❌ WebSocket ${chunkIdx + 1} error:`, error.message);
+        });
 
-      this.binanceWebSocket.on("close", () => {
-        console.log(
-          "⚠️ Binance WebSocket closed, reconnecting in 3 seconds..."
-        );
-        this.isWebSocketRunning = false;
-        this.binanceWebSocket = null;
+        ws.on("close", () => {
+          console.log(`⚠️ WebSocket ${chunkIdx + 1} closed, reconnecting in 3 seconds...`);
+          this.isWebSocketRunning = false;
+          // Remove from array
+          const idx = this.binanceWebSockets.indexOf(ws);
+          if (idx > -1) this.binanceWebSockets.splice(idx, 1);
+          // Full reconnect if all connections lost
+          if (this.binanceWebSockets.length === 0) {
+            this.binanceWebSocket = null;
+            setTimeout(() => this.startWebSocketPriceFeed(), 3000);
+          }
+        });
+      }
 
-        // Reconnect after 3 seconds
-        setTimeout(() => {
-          this.startWebSocketPriceFeed();
-        }, 3000);
-      });
+      // Keep reference for backward compatibility
+      this.binanceWebSocket = this.binanceWebSockets[0] || null;
     } catch (error) {
       console.error("❌ Error starting WebSocket:", error);
       this.isWebSocketRunning = false;
+      setTimeout(() => this.startWebSocketPriceFeed(), 3000);
+    }
+  }
 
-      // Retry after 3 seconds
-      setTimeout(() => {
-        this.startWebSocketPriceFeed();
-      }, 3000);
+  // Batch Redis updates (flush every 5 seconds instead of per-message)
+  _scheduleRedisFlush() {
+    if (this._redisFlushTimer) return;
+    this._redisFlushTimer = setTimeout(() => {
+      this._redisFlushTimer = null;
+      this._flushRedisUpdates();
+    }, 5000);
+  }
+
+  async _flushRedisUpdates() {
+    if (!this._pendingRedisUpdates || this._pendingRedisUpdates.size === 0) return;
+    if (!this.redisClient) return;
+
+    const updates = this._pendingRedisUpdates;
+    this._pendingRedisUpdates = new Map();
+
+    try {
+      const pipeline = this.redisClient.pipeline();
+      for (const [symbol, priceData] of updates) {
+        pipeline.setex(`crypto:${symbol}`, 300, JSON.stringify(priceData));
+      }
+      await pipeline.exec();
+    } catch (err) {
+      console.error("❌ Redis flush error:", err.message);
     }
   }
 
@@ -702,40 +777,46 @@ class RealTimeAlertProcessor {
   async startWebSocketProcessing() {
     // Step 1: Initialize Redis clients
     await this.initRedisClient();
-    await this.initDbQueueClient(); // Initialize DB queue client
+    await this.initDbQueueClient();
 
-    // Step 2: Load all alerts from DB and cache in Redis (initial load only)
+    // Step 2: Load all alerts from DB and cache in Redis
     await this.loadAlertsToRedisCache();
 
-    // Step 3: Start WebSocket connection
-    this.startWebSocketPriceFeed();
-
-    // Step 4: Subscribe to alert management events
-    // Cache is updated automatically when alerts are created/updated/deleted
-    // No periodic reload needed - events handle all cache updates
-    await this.subscribeToAlertManagement();
-
-    // Step 5: Start heartbeat for health monitoring
-    this.startHeartbeat();
-
-    // Step 6: Subscribe to system control messages
-    await this.subscribeToSystemControl();
-
-    // Step 7: Setup micro-batch processing
+    // Step 3: Setup micro-batch processing BEFORE WebSocket
     this.setupMicroBatchEngine();
 
-    // Step 8: Load active symbols for micro-batch filtering
+    // Step 4: Load active symbols (needed for WebSocket subscription)
     await this.updateMicroBatchActiveSymbols();
+
+    // Step 5: Start WebSocket connection (uses active symbols list)
+    this.startWebSocketPriceFeed();
+
+    // Step 6: Subscribe to alert management events
+    await this.subscribeToAlertManagement();
+
+    // Step 7: Start heartbeat for health monitoring
+    this.startHeartbeat();
+
+    // Step 8: Subscribe to system control messages
+    await this.subscribeToSystemControl();
   }
 
-  // Stop WebSocket connection
+  // Stop WebSocket connections
   async stopWebSocketPriceFeed() {
-    if (this.binanceWebSocket) {
-      console.log("🛑 Stopping Binance WebSocket...");
-      this.binanceWebSocket.close();
-      this.binanceWebSocket = null;
-      this.isWebSocketRunning = false;
+    console.log("🛑 Stopping Binance WebSocket(s)...");
+
+    // Close all WebSocket connections
+    if (this.binanceWebSockets && this.binanceWebSockets.length > 0) {
+      for (const ws of this.binanceWebSockets) {
+        try { ws.close(); } catch (e) { /* ignore */ }
+      }
+      this.binanceWebSockets = [];
     }
+    if (this.binanceWebSocket) {
+      try { this.binanceWebSocket.close(); } catch (e) { /* ignore */ }
+      this.binanceWebSocket = null;
+    }
+    this.isWebSocketRunning = false;
 
     // Stop heartbeat
     this.stopHeartbeat();
