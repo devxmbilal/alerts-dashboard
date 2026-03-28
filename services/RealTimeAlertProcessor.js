@@ -803,6 +803,9 @@ class RealTimeAlertProcessor {
     // This is a fire-and-forget background task - don't block micro-batch processing
     setImmediate(async () => {
       try {
+        const pipeline = this.redisClient ? this.redisClient.pipeline() : null;
+        let pipelineCount = 0;
+
         for (const ticker of tickers) {
           const symbol = ticker.s;
           const priceData = {
@@ -823,16 +826,18 @@ class RealTimeAlertProcessor {
           // Update in-memory cache
           this.livePrices[symbol] = priceData;
 
-          // Update Redis cache (fire-and-forget)
-          if (this.redisClient) {
-            this.redisClient
-              .setex(
-                `crypto:${symbol}`,
-                300, // 5 minutes TTL
-                JSON.stringify(priceData)
-              )
-              .catch(() => { }); // Silent fail - non-critical
+          // Add to Redis pipeline instead of firing individual requests
+          if (pipeline) {
+            pipeline.setex(`crypto:${symbol}`, 300, JSON.stringify(priceData));
+            pipelineCount++;
           }
+        }
+
+        // Execute pipeline (one TCP request instead of 3000)
+        if (pipeline && pipelineCount > 0) {
+          pipeline.exec().catch((err) => {
+            console.error("❌ Error executing Redis pipeline:", err.message);
+          });
         }
       } catch (error) {
         console.error("❌ Error updating live prices cache:", error);
