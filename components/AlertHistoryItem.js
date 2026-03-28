@@ -68,7 +68,7 @@ const AlertHistoryItem = ({ alert, onClear, onEmail }) => {
         variant="body2"
         sx={{ color: "#888", mb: 1, fontSize: "0.85rem" }}
       >
-        Target: {alert.targetValue || 1} | Actual 24h change :{" "}
+        Target: {alert.targetValue || 1} | Actual Change ({alert.timeframe || "5MIN"}) :{" "}
         {alert.price24hChange
           ? `${parseFloat(alert.price24hChange).toFixed(3)}%`
           : "N/A"}{" "}

@@ -698,15 +698,13 @@ class RealTimeAlertProcessor {
 
       // Only fallback to Redis if in-memory cache is empty
       if (alerts.length === 0) {
-        alerts = await this.getAlertsFromCache(symbol);
-        // Update in-memory cache for next time
-        if (alerts.length > 0) {
-          this.activeAlerts.set(symbol, alerts);
-        } else if (alerts.length === 0) {
-          alerts = await this.loadAllActiveAlerts();
-        }
-        if (alerts.length > 0) {
-          this.activeAlerts.set(symbol, alerts);
+        await this.getAlertsFromCache(symbol); // Just update cache, don't assign result yet
+        alerts = this.activeAlerts.get(symbol) || [];
+
+        // If still empty, reload all from DB (safest fallback)
+        if (alerts.length === 0) {
+          await this.loadAllActiveAlerts();
+          alerts = this.activeAlerts.get(symbol) || [];
         }
       }
 
@@ -990,6 +988,15 @@ class RealTimeAlertProcessor {
           alert.baselinePrice = liveData.price;
           alert.baselineTimestamp = new Date(currentCandleStart); // Set to candle start for accurate tracking
 
+          // 🔥 CRITICAL FIX: Update originalBaselinePrice so we don't trigger
+          // based on the previous candle's performance at the junction.
+          // This ensures the 2% check is FRESH for the new candle.
+          const freshBaseline = parseFloat(liveData.price) || originalBaselinePrice;
+          
+          // Re-evaluate the local variable used for the main check
+          // So the very first tick of a new candle starts at 0% change.
+          const effectiveBaseline = freshBaseline; 
+
           // Update baseline volume based on smallest volume timeframe (if volume condition exists)
           let updatedVolume = liveData.volume || liveData.volume24h;
           if (alert.conditions?.volume?.timeframes?.length > 0) {
@@ -1141,9 +1148,13 @@ class RealTimeAlertProcessor {
         alert.conditions?.changePercent?.direction || "increase";
 
       // 🛡️ Calculate actual change percentage FIRST
+      // 🔥 CRITICAL FIX: Use the potentially updated baseline from junction logic
+      // If the baseline was reset (EffectiveBaseline is current price), the change is 0.
       const livePrice = parseFloat(liveData.price) || 0;
-      const actualChangePercent = originalBaselinePrice > 0
-        ? ((livePrice - originalBaselinePrice) / originalBaselinePrice) * 100
+      const calcBaseline = (typeof effectiveBaseline !== 'undefined') ? effectiveBaseline : originalBaselinePrice;
+      
+      const actualChangePercent = calcBaseline > 0
+        ? ((livePrice - calcBaseline) / calcBaseline) * 100
         : 0;
 
       // 🛡️ MINIMUM CHANGE THRESHOLD - Prevent 0% change alerts
@@ -1169,11 +1180,11 @@ class RealTimeAlertProcessor {
         return { triggered: false, reason: "price_unchanged" };
       }
 
-      // Check alert conditions - pass original baseline for Change Percent calculation
+      // Check alert conditions - pass correct baseline for Change Percent calculation
       const conditionsMet = await this.checkAlertConditionsWithLiveData(
         alert,
         liveData,
-        originalBaselinePrice // 🔥 CRITICAL: Use original baseline for % change calc
+        calcBaseline // 🔥 CRITICAL: Use the same baseline we used for our pre-check
       );
 
       if (conditionsMet) {
@@ -1199,7 +1210,7 @@ class RealTimeAlertProcessor {
       // 🔥 CRITICAL: Use original baseline if provided, otherwise use alert's baseline
       const baselinePriceForCheck = originalBaselinePrice || alert.baselinePrice;
 
-      console.log(`📋 Checking conditions for ${alert.symbol}:`);
+      // console.log(`📋 Checking conditions for ${alert.symbol}:`);
 
       // OPTIMIZATION 1: Create array of only SET conditions for hierarchical checking
       const activeConditions = this.getActiveConditions(
@@ -1329,6 +1340,12 @@ class RealTimeAlertProcessor {
           const changeFromBaseline =
             ((liveData.price - effectiveBaseline) / effectiveBaseline) *
             100;
+          
+          // 🛡️ NaN Protection
+          if (Number.isNaN(changeFromBaseline)) {
+            return { passed: false, reason: "Calculation error (NaN)" };
+          }
+
           const absoluteChange = Math.abs(changeFromBaseline);
 
           // Check direction first (fastest)

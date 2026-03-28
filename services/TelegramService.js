@@ -151,7 +151,7 @@ class TelegramService {
 *${symbol || "Unknown"}*
 ━━━━━━━━━━━━━━━
 
-📊 Actual 24h change: \`${safeNumber(actualValue)}%\`
+📊 Actual Change (${alertData.timeframe || "5MIN"}): \`${safeNumber(actualValue)}%\`
 💵 Current Price: \`$${safePrice(triggeredPrice)}\`
 📍 Last Price: \`$${safePrice(baselinePrice)}\`
 ${changeEmoji} Change: \`${safeNumber(changeFromBaselinePercent)}%\`

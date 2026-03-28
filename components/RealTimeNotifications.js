@@ -617,7 +617,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                             }}
                           >
                             <strong>Target:</strong> {alert.targetValue || 1} |{" "}
-                            <strong>Actual 24h change:</strong>{" "}
+                            <strong>Actual Change ({alert.timeframe || "5MIN"}):</strong>{" "}
                             <span
                               style={{
                                 color: getChangeColor(
