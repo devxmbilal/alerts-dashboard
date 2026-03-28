@@ -75,10 +75,10 @@ module.exports = {
         MONGODB_URI: "mongodb://127.0.0.1:27017/crypto-alerts",
         LOG_LEVEL: "error",
       },
-      // Minimal logging - only errors
+      // Enable logging for debugging
       error_file: "./logs/alert-worker-error.log",
-      out_file: "/dev/null",
-      log_file: "/dev/null",
+      out_file: "./logs/alert-worker-out.log",
+      log_file: "./logs/alert-worker.log",
       time: true,
     },
     {
@@ -94,10 +94,10 @@ module.exports = {
         CLEANUP_WORKER_AUTOSTART: "true",
         LOG_LEVEL: "error",
       },
-      // Minimal logging - only errors
+      // Enable logging for debugging
       error_file: "./logs/cleanup-worker-error.log",
-      out_file: "/dev/null",
-      log_file: "/dev/null",
+      out_file: "./logs/cleanup-worker-out.log",
+      log_file: "./logs/cleanup-worker.log",
       time: true,
     },
     {
@@ -116,10 +116,10 @@ module.exports = {
         MONGODB_URI: "mongodb://127.0.0.1:27017/crypto-alerts",
         LOG_LEVEL: "error",
       },
-      // Minimal logging - only errors
+      // Enable logging for debugging
       error_file: "./logs/notify-worker-error.log",
-      out_file: "/dev/null",
-      log_file: "/dev/null",
+      out_file: "./logs/notify-worker-out.log",
+      log_file: "./logs/notify-worker.log",
       time: true,
     },
     {
@@ -138,10 +138,10 @@ module.exports = {
         MONGODB_URI: "mongodb://127.0.0.1:27017/crypto-alerts",
         LOG_LEVEL: "error",
       },
-      // Minimal logging - only errors
+      // Enable logging for debugging
       error_file: "./logs/db-queue-worker-error.log",
-      out_file: "/dev/null",
-      log_file: "/dev/null",
+      out_file: "./logs/db-queue-worker-out.log",
+      log_file: "./logs/db-queue-worker.log",
       time: true,
     },
   ],
