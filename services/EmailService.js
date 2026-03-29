@@ -159,7 +159,7 @@ class EmailService {
           <span class="info-value">${targetValue || "N/A"}%</span>
         </div>
         <div class="info-row">
-          <span class="info-label">Actual 24h change:</span>
+          <span class="info-label">Actual Change (${alertData.timeframe || "5MIN"}):</span>
           <span class="info-value ${actualValue >= 0 ? "change-positive" : "change-negative"}">${actualValue ? actualValue.toFixed(3) : "N/A"}%</span>
         </div>
         <div class="info-row">

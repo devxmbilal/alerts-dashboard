@@ -13,6 +13,23 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+// 🔥 Helper: Map alert timeframe format (5MIN, 15MIN, 1HR) to Binance format (5m, 15m, 1h)
+function mapAlertTimeframe(timeframe) {
+  if (!timeframe) return null;
+  const tf = timeframe.toString().toUpperCase();
+  const map = {
+    "1MIN": "1m", "1M": "1m",
+    "5MIN": "5m", "5M": "5m",
+    "15MIN": "15m", "15M": "15m",
+    "30MIN": "30m", "30M": "30m",
+    "1HR": "1h", "1H": "1h",
+    "4HR": "4h", "4H": "4h",
+    "1D": "1d", "D": "1d",
+    "1W": "1w", "W": "1w",
+  };
+  return map[tf] || timeframe.toLowerCase();
+}
+
 // Connect to MongoDB
 connectToMongoDB()
   .then(() => {
@@ -125,10 +142,10 @@ redisSubscriber.on("message", async (channel, message) => {
             // Screenshot and Telegram logic (same as below)
             let chartScreenshot = null;
             try {
-              const timeframe =
-                userByString.preferredTimeframe ||
-                alertData.timeframe?.toLowerCase() ||
-                "5m";
+              // 🔥 FIX: Use ALERT's timeframe first (so chart shows the candles that triggered it)
+              // Map alert timeframe format (5MIN → 5m) to Binance format
+              const alertTimeframe = mapAlertTimeframe(alertData.timeframe);
+              const timeframe = alertTimeframe || userByString.preferredTimeframe || "5m";
 
               // 🔥 FIX: Pass alertData to chart for trigger price marker
               const chartOptions = {
@@ -271,9 +288,9 @@ redisSubscriber.on("message", async (channel, message) => {
           // Fallback: Generate new chart (may have slight delay)
           console.log(`📸 No pre-captured chart found, generating new for ${alertData.symbol}...`);
 
-          const userPreferredTimeframe = user.preferredTimeframe || "5m";
-          const timeframe =
-            userPreferredTimeframe || alertData.timeframe?.toLowerCase() || "5m";
+          // 🔥 FIX: Use ALERT's timeframe first (so chart shows the candles that triggered it)
+          const alertTimeframe = mapAlertTimeframe(alertData.timeframe);
+          const timeframe = alertTimeframe || user.preferredTimeframe || "5m";
 
           // 🔥 FIX: Pass alertData to chart for trigger price marker
           const chartOptions = {

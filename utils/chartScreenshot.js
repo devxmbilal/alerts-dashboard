@@ -826,39 +826,40 @@ class ChartScreenshotService {
    * @returns {Promise<Buffer>} - Screenshot buffer
    */
   async captureChart(symbol, timeframe = "5m", options = {}) {
-    // 🔥 CACHE-FIRST: Try cached candles first (no Binance API call = no IP ban!)
     try {
       console.log(`🕯️ Generating chart for ${symbol} (${timeframe})...`);
 
-      // Step 1: Try to get candles from cache (Redis/Memory)
-      let candles = await candleCache.getCandles(symbol, timeframe, 100);
+      let candles = null;
 
-      if (candles && candles.length >= 15) {
-        // 🔥 FIX: Lowered from 50 to 15 — use cached data whenever available
-        // After seeding, cache will have 100+ candles. During operation, at least 15+ from ticks.
-        console.log(`✅ Using CACHED candles for ${symbol} (${candles.length} candles) - NO API call!`);
-      } else if (!candles || candles.length === 0) {
-        // Step 2: Cache completely empty — try ONE API call (only if not banned)
-        if (Date.now() < this.binanceIpBannedUntil) {
-          console.warn(`🚫 Cache empty for ${symbol} but IP banned — cannot fetch. Skipping chart.`);
-          return null;
-        }
-
-        console.log(`📡 Cache empty for ${symbol}, fetching from API (one-time)...`);
+      // 🔥 STRATEGY: ALWAYS fetch fresh klines from Binance API for alert charts.
+      // Reason: notify-worker runs in a SEPARATE process from binance-worker,
+      // so its local candleCache is EMPTY. Redis only has data for ~15 seeded symbols.
+      // Alert triggers are infrequent (<50/min), so fresh API calls won't cause IP bans.
+      
+      // Step 1: Try fresh API data (most accurate, most up-to-date)
+      if (Date.now() < this.binanceIpBannedUntil) {
+        console.warn(`🚫 IP banned — falling back to cache for ${symbol}`);
+      } else {
         try {
+          console.log(`📡 Fetching FRESH klines for ${symbol}/${timeframe}...`);
           candles = await this.fetchCandleData(symbol, timeframe, 100);
           if (candles && candles.length > 0) {
-            // Store in cache for next time
-            await candleCache.storeCandles(symbol, timeframe, candles);
-            console.log(`💾 Stored ${candles.length} candles in cache for ${symbol}`);
+            console.log(`✅ Fresh klines fetched for ${symbol} (${candles.length} candles)`);
+            // Also update cache for future use
+            await candleCache.storeCandles(symbol, timeframe, candles).catch(() => {});
           }
         } catch (fetchError) {
-          console.warn(`⚠️ API fetch failed for ${symbol}: ${fetchError.message}`);
-          return null; // No chart rather than risking more API calls
+          console.warn(`⚠️ Fresh API fetch failed for ${symbol}: ${fetchError.message}`);
+          candles = null; // Will fall back to cache below
         }
-      } else {
-        // Has 1-14 candles — use what we have (partial chart is better than no chart or API ban)
-        console.log(`📊 Using partial cache for ${symbol} (${candles.length} candles) — avoiding API call`);
+      }
+
+      // Step 2: Fall back to cache if API failed
+      if (!candles || candles.length === 0) {
+        candles = await candleCache.getCandles(symbol, timeframe, 100);
+        if (candles && candles.length >= 10) {
+          console.log(`📊 Using CACHED candles for ${symbol} (${candles.length} candles)`);
+        }
       }
 
       if (!candles || candles.length === 0) {
