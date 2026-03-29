@@ -22,7 +22,7 @@ class RealTimeAlertProcessor {
     this.redisSubscribed = false; // Track Redis subscription status
     this.candleData = new Map(); // Track candle data for timeframe-based changes
     // Concurrency limit for parallel alert processing - INCREASED for 95% accuracy
-    this.processLimit = pLimit(100); // Was 50, now 100 for faster processing
+    this.processLimit = pLimit(200); // 🔥 SPEED: 200 concurrent (was 100)
     // Initialize SafeAlertProcessor for race condition protection
     this.safeProcessor = new SafeAlertProcessor();
     // Initialize Micro-Batch Execution Engine - OPTIMIZED for 95% accuracy
@@ -628,8 +628,8 @@ class RealTimeAlertProcessor {
             this.microBatchEngine.addToBatch(relevantUpdates);
 
             // Log stats every 60 seconds (not every message)
-            if (msgCount % 1000 === 0) {
-              console.log(`📊 WebSocket stats: ${msgCount} messages processed`);
+            if (msgCount % 5000 === 0) {
+              console.log(`📊 WS: ${msgCount} messages processed`);
             }
           } catch (error) {
             console.error("❌ Error parsing WebSocket message:", error.message);
@@ -950,9 +950,7 @@ class RealTimeAlertProcessor {
         return { triggered: false, reason: "baseline_initialized" };
       }
 
-      console.log(
-        `📊 Baseline: ${originalBaselinePrice}, Live: ${liveData.price}`
-      );
+      // Baseline logged only on significant events now
 
       // CRITICAL: Check if baseline needs to be updated based on timeframe
       // 🔥 FIX: Update baseline at CANDLE CLOSE boundaries, not time since last update
@@ -1133,14 +1131,10 @@ class RealTimeAlertProcessor {
         const timeRemaining = Math.max(0, lockUntil.getTime() - now.getTime());
         const minutesRemaining = Math.ceil(timeRemaining / (1000 * 60));
 
-        console.log(
-          `🔒 Alert ${alert._id} for ${alert.symbol
-          } is LOCKED until ${lockUntil.toISOString()}`
-        );
         return { triggered: false, reason: "alert_locked" };
       }
 
-      console.log(`✅ Alert ${alert._id} for ${alert.symbol} is NOT locked, proceeding...`);
+      // Alert not locked - proceed (silent)
 
       // 🔥 CRITICAL FIX: Use ORIGINAL baseline for direction check
       // This ensures we compare against the baseline BEFORE it was updated
@@ -1162,7 +1156,6 @@ class RealTimeAlertProcessor {
       const hasMinimumChange = Math.abs(actualChangePercent) >= MIN_CHANGE_THRESHOLD;
 
       if (!hasMinimumChange) {
-        console.log(`⏸️ Alert ${alert._id}: Change ${actualChangePercent.toFixed(4)}% below threshold ${MIN_CHANGE_THRESHOLD}%`);
         return { triggered: false, reason: "change_below_threshold" };
       }
 
@@ -1221,7 +1214,6 @@ class RealTimeAlertProcessor {
       );
 
       if (activeConditions.length === 0) {
-        console.log(`⚠️ No active conditions found for ${alert.symbol}`);
         return false;
       }
 
@@ -1244,8 +1236,7 @@ class RealTimeAlertProcessor {
         const conditionCheck = activeConditions[i];
 
         if (!result.passed) {
-          console.log(`❌ ${conditionCheck.name} FAILED: ${result.reason}`);
-          return false; // Early exit
+          return false; // Early exit (silent - hot path)
         }
         console.log(`✅ ${conditionCheck.name} PASSED: ${result.reason}`);
       }

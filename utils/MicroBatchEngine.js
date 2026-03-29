@@ -6,8 +6,8 @@ export class MicroBatchExecutionEngine {
   constructor(options = {}) {
     // Configuration
     this.batchSize = options.batchSize || 100; // Process 100 symbols per batch
-    this.batchInterval = options.batchInterval || 30; // 🔥 Conservative Fix: 30ms (was 50ms) for better spike detection
-    this.maxConcurrentBatches = options.maxConcurrentBatches || 20; // 20 parallel batches
+    this.batchInterval = options.batchInterval || 10; // 🔥 SPEED: 10ms (was 30ms) for instant alert detection
+    this.maxConcurrentBatches = options.maxConcurrentBatches || 30; // 🔥 SPEED: 30 parallel batches (was 20)
     this.targetThroughput = options.targetThroughput || 50000; // 50k alerts per minute
 
     // Active symbols cache (only symbols with alerts)
@@ -121,11 +121,12 @@ export class MicroBatchExecutionEngine {
       totalReceived > 0 ? (relevantFound / totalReceived) * 100 : 0;
     this.metrics.cpuEfficiency = efficiency;
 
-    console.log(
-      `⚡ Symbol Filter: ${relevantFound}/${totalReceived} relevant (${efficiency.toFixed(
-        1
-      )}% efficiency) in ${processingTime.toFixed(2)}ms`
-    );
+    // Log only every 50th batch to reduce I/O overhead
+    if (this.metrics.batchesProcessed % 50 === 0 && relevantFound > 0) {
+      console.log(
+        `⚡ Filter: ${relevantFound}/${totalReceived} relevant (${efficiency.toFixed(1)}%) in ${processingTime.toFixed(2)}ms`
+      );
+    }
 
     return relevantUpdates;
   }
@@ -188,7 +189,10 @@ export class MicroBatchExecutionEngine {
     const batchSize = batch.size;
 
     try {
-      console.log(`🔥 Processing batch ${batchId}: ${batchSize} symbols`);
+      // Log only every 20th batch
+      if (this.metrics.batchesProcessed % 20 === 0) {
+        console.log(`🔥 Batch: ${batchSize} symbols (batch #${this.metrics.batchesProcessed})`);
+      }
 
       // Sort symbols by priority (more alerts = higher priority)
       const sortedSymbols = Array.from(batch.entries()).sort(
@@ -227,11 +231,12 @@ export class MicroBatchExecutionEngine {
       // Update metrics
       this.updateMetrics(batchSize, batchTime, successCount);
 
-      console.log(
-        `✅ Batch ${batchId} completed: ${successCount}/${batchSize} success in ${batchTime.toFixed(
-          2
-        )}ms`
-      );
+      // Only log slow batches or every 20th batch
+      if (batchTime > 100 || this.metrics.batchesProcessed % 20 === 0) {
+        console.log(
+          `✅ Batch: ${successCount}/${batchSize} in ${batchTime.toFixed(1)}ms`
+        );
+      }
 
       if (errorCount > 0) {
         console.log(`⚠️ Batch ${batchId} had ${errorCount} errors`);

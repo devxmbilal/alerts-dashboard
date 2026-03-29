@@ -122,11 +122,11 @@ export class SafeAlertProcessor {
           symbol: symbol,
         });
 
-        console.log(`🔒 Acquired processing lock for alert ${alertId}`);
+        // Lock acquired (silent - hot path)
         return { acquired: true, lockValue: lockValue };
       }
 
-      console.log(`⏸️ Processing lock already exists for alert ${alertId}`);
+      // Lock exists, skip (silent)
       return { acquired: false, lockValue: null };
     } catch (error) {
       console.error(`❌ Error acquiring lock for alert ${alertId}:`, error.message);
@@ -165,12 +165,10 @@ export class SafeAlertProcessor {
       const result = await this.redis.eval(script, 1, lockKey, lockValue);
 
       if (result === 1) {
-        console.log(`🔓 Released processing lock for alert ${alertId}`);
+        // Lock released (silent)
         return true;
       } else {
-        console.log(
-          `⚠️ Lock for alert ${alertId} was already released or expired`
-        );
+        // Lock already expired (silent)
         return false;
       }
     } catch (error) {
@@ -209,22 +207,18 @@ export class SafeAlertProcessor {
       // Step 1: Check if alert is locked (business logic lock - alertCount)
       // NOTE: Removed 1 minute wait check - alertCount lock is sufficient
       if (isAlertLocked(alert)) {
-        console.log(`🔒 Alert ${alertId} is locked, skipping`);
         return { success: false, reason: "alert_locked" };
       }
 
       // Step 2: Acquire processing lock (prevent race conditions)
       const lock = await this.acquireProcessingLock(alertId, alert.symbol);
       if (!lock.acquired) {
-        console.log(
-          `⏸️ Alert ${alertId} is being processed by another instance, skipping`
-        );
         return { success: false, reason: "processing_lock_exists" };
       }
 
       try {
         // Step 3: Process the alert using provided function
-        console.log(`🚀 Processing alert ${alertId} for ${alert.symbol}`);
+        // Process alert (silent - hot path)
         const result = await processingFunction(alert, liveData);
 
         // Step 4: Mark as processed if successful (for statistics only)
@@ -239,7 +233,6 @@ export class SafeAlertProcessor {
           console.log(`✅ Alert ${alertId} processed successfully`);
           return { success: true, result: result };
         } else {
-          console.log(`ℹ️ Alert ${alertId} processed but not triggered`);
           return { success: true, result: result };
         }
       } finally {
