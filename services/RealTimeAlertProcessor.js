@@ -3550,138 +3550,150 @@ class RealTimeAlertProcessor {
       return false;
     }
 
+    // 🔥 CORE LOGIC: Only check the SMALLEST timeframe
+    // Reason: If 1MIN volume is increasing, then 5MIN/15MIN/1HR automatically include it
+    // So checking all timeframes individually is redundant and causes false negatives
+    const timeframeOrder = {
+      '1MIN': 1, '1M': 1,
+      '3MIN': 2, '3M': 2,
+      '5MIN': 3, '5M': 3,
+      '15MIN': 4, '15M': 4,
+      '30MIN': 5, '30M': 5,
+      '1HR': 6, '1H': 6,
+      '2HR': 7, '2H': 7,
+      '4HR': 8, '4H': 8,
+      '6HR': 9, '6H': 9,
+      '8HR': 10, '8H': 10,
+      '12HR': 11, '12H': 11,
+      '1D': 12, '1DAY': 12, 'D': 12,
+      '1W': 13, '1WEEK': 13, 'W': 13,
+      '1MONTH': 14, 'MONTH': 14,
+    };
+
+    // Find the smallest timeframe from user's selection
+    let smallestTF = timeframes[0];
+    let smallestRank = timeframeOrder[timeframes[0].toUpperCase()] || 99;
+
+    for (const tf of timeframes) {
+      const rank = timeframeOrder[tf.toUpperCase()] || 99;
+      if (rank < smallestRank) {
+        smallestRank = rank;
+        smallestTF = tf;
+      }
+    }
+
+    const tf = smallestTF.toUpperCase();
+    const binanceInterval = this.getBinanceInterval(tf);
+
     console.log(
-      `📉 Volume Check: ${symbol} | ${condition} ≥ ${requiredPercentage}% | TFs: [${timeframes.join(", ")}]`
+      `📉 Volume Check: ${symbol} | ${condition} ≥ ${requiredPercentage}% | Selected TFs: [${timeframes.join(", ")}] → Checking smallest: [${tf}]`
     );
 
-    // 🔥 FIX: Check volume per-TIMEFRAME using candle data
-    // For each timeframe, compare current candle volume vs previous candle volume
-    // ALL selected timeframes must pass for the condition to be met
+    let currentCandleVolume = 0;
+    let previousCandleVolume = 0;
+    let dataSource = "none";
 
-    for (const timeframe of timeframes) {
-      const tf = timeframe.toUpperCase();
-      const binanceInterval = this.getBinanceInterval(tf);
-      
-      // Try to get volume data from candle cache first
-      const key = `${symbol}_${tf}`;
-      let currentCandleVolume = 0;
-      let previousCandleVolume = 0;
-      let dataSource = "none";
+    // Check if we have cached volume comparison data
+    const volumeKey = `vol:${symbol}_${tf}`;
 
-      // Strategy: Fetch 2 candles from Binance API to compare current vs previous
-      // Use the volume queue system to avoid IP bans
-      const volumeKey = `vol:${symbol}_${tf}`;
-      
-      // Check if we have cached volume comparison data
-      if (this.volumeCompareCache && this.volumeCompareCache.has(volumeKey)) {
-        const cached = this.volumeCompareCache.get(volumeKey);
-        const timeframeMs = this.getTimeframeMs(tf);
-        const currentBoundary = Math.floor(Date.now() / timeframeMs) * timeframeMs;
-        
-        // Use cache if it's from the current candle period
-        if (cached.boundary === currentBoundary) {
-          currentCandleVolume = cached.currentVolume;
-          previousCandleVolume = cached.previousVolume;
-          dataSource = "cache";
-        }
+    if (this.volumeCompareCache && this.volumeCompareCache.has(volumeKey)) {
+      const cached = this.volumeCompareCache.get(volumeKey);
+      const timeframeMs = this.getTimeframeMs(tf);
+      const currentBoundary = Math.floor(Date.now() / timeframeMs) * timeframeMs;
+
+      // Use cache if it's from the current candle period
+      if (cached.boundary === currentBoundary) {
+        currentCandleVolume = cached.currentVolume;
+        previousCandleVolume = cached.previousVolume;
+        dataSource = "cache";
       }
+    }
 
-      // If no cached data, queue a fetch
-      if (dataSource === "none") {
-        // Try to fetch 2 candles for comparison
-        try {
-          // Check for API ban
-          if (Date.now() < (this.candleApiBanUntil || 0)) {
-            console.log(`   ⛔ [${tf}] API banned, skipping volume check`);
-            return false;
-          }
-
-          const response = await fetch(
-            `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=2`
-          );
-
-          if (response.status === 418 || response.status === 429) {
-            this.candleApiBanUntil = Date.now() + 120000;
-            console.warn(`   🚫 [${tf}] Volume API rate limited, skipping`);
-            return false;
-          }
-
-          if (!response.ok) {
-            console.warn(`   ⚠️ [${tf}] Volume API error: ${response.status}`);
-            return false;
-          }
-
-          const klines = await response.json();
-          if (klines && klines.length >= 2) {
-            // klines[0] = previous candle, klines[1] = current candle
-            previousCandleVolume = parseFloat(klines[0][7]); // Quote volume (USDT) of previous candle
-            currentCandleVolume = parseFloat(klines[1][7]);   // Quote volume (USDT) of current candle
-            dataSource = "api";
-
-            // Cache the result
-            if (!this.volumeCompareCache) this.volumeCompareCache = new Map();
-            const timeframeMs = this.getTimeframeMs(tf);
-            const currentBoundary = Math.floor(Date.now() / timeframeMs) * timeframeMs;
-            this.volumeCompareCache.set(volumeKey, {
-              currentVolume: currentCandleVolume,
-              previousVolume: previousCandleVolume,
-              boundary: currentBoundary,
-              fetchedAt: Date.now(),
-            });
-          } else if (klines && klines.length === 1) {
-            // Only 1 candle available — no comparison possible
-            console.log(`   ⚠️ [${tf}] Only 1 candle available, cannot compare volume`);
-            return false;
-          }
-        } catch (error) {
-          console.warn(`   ⚠️ [${tf}] Volume fetch error: ${error.message}`);
+    // If no cached data, fetch from Binance API
+    if (dataSource === "none") {
+      try {
+        // Check for API ban
+        if (Date.now() < (this.candleApiBanUntil || 0)) {
+          console.log(`   ⛔ [${tf}] API banned, skipping volume check`);
           return false;
         }
-      }
 
-      // Skip if no data
-      if (previousCandleVolume === 0 || currentCandleVolume === 0) {
-        console.log(`   ⚠️ [${tf}] Volume data missing (prev: ${previousCandleVolume}, curr: ${currentCandleVolume})`);
-        return false;
-      }
+        const response = await fetch(
+          `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=2`
+        );
 
-      // Calculate volume change percentage: current candle vs previous candle
-      const volumeChangePercent = ((currentCandleVolume - previousCandleVolume) / previousCandleVolume) * 100;
+        if (response.status === 418 || response.status === 429) {
+          this.candleApiBanUntil = Date.now() + 120000;
+          console.warn(`   🚫 [${tf}] Volume API rate limited, skipping`);
+          return false;
+        }
 
-      // Check condition
-      let conditionMet = false;
+        if (!response.ok) {
+          console.warn(`   ⚠️ [${tf}] Volume API error: ${response.status}`);
+          return false;
+        }
 
-      switch (condition) {
-        case "INCREASING":
-          conditionMet = volumeChangePercent >= requiredPercentage;
-          break;
-        case "DECREASING":
-          conditionMet = volumeChangePercent <= -requiredPercentage;
-          break;
-        case "ABOVE":
-          conditionMet = currentCandleVolume > requiredPercentage;
-          break;
-        case "BELOW":
-          conditionMet = currentCandleVolume < requiredPercentage;
-          break;
-        default:
-          conditionMet = false;
-      }
+        const klines = await response.json();
+        if (klines && klines.length >= 2) {
+          // klines[0] = previous completed candle, klines[1] = current ongoing candle
+          previousCandleVolume = parseFloat(klines[0][7]); // Quote volume (USDT) of previous candle
+          currentCandleVolume = parseFloat(klines[1][7]);   // Quote volume (USDT) of current candle
+          dataSource = "api";
 
-      console.log(
-        `   ${conditionMet ? '✅' : '❌'} [${tf}] Vol: ${currentCandleVolume.toFixed(0)} vs prev: ${previousCandleVolume.toFixed(0)} | Change: ${volumeChangePercent.toFixed(2)}% | Required: ${condition} ${requiredPercentage}% (${dataSource})`
-      );
-
-      // ALL timeframes must pass
-      if (!conditionMet) {
-        console.log(`   ❌ Volume FAILED on [${tf}] — not all timeframes passed`);
+          // Cache the result
+          if (!this.volumeCompareCache) this.volumeCompareCache = new Map();
+          const timeframeMs = this.getTimeframeMs(tf);
+          const currentBoundary = Math.floor(Date.now() / timeframeMs) * timeframeMs;
+          this.volumeCompareCache.set(volumeKey, {
+            currentVolume: currentCandleVolume,
+            previousVolume: previousCandleVolume,
+            boundary: currentBoundary,
+            fetchedAt: Date.now(),
+          });
+        } else if (klines && klines.length === 1) {
+          console.log(`   ⚠️ [${tf}] Only 1 candle available, cannot compare volume`);
+          return false;
+        }
+      } catch (error) {
+        console.warn(`   ⚠️ [${tf}] Volume fetch error: ${error.message}`);
         return false;
       }
     }
 
-    // All timeframes passed!
-    console.log(`   🎉 Volume: ALL ${timeframes.length} timeframes PASSED ${condition} ${requiredPercentage}%`);
-    return true;
+    // Skip if no previous data (can't calculate percentage change)
+    if (previousCandleVolume === 0) {
+      console.log(`   ⚠️ [${tf}] Previous volume is 0, cannot calculate change`);
+      return false;
+    }
+
+    // Calculate volume change percentage: current candle vs previous candle
+    const volumeChangePercent = ((currentCandleVolume - previousCandleVolume) / previousCandleVolume) * 100;
+
+    // Check condition
+    let conditionMet = false;
+
+    switch (condition) {
+      case "INCREASING":
+        conditionMet = volumeChangePercent >= requiredPercentage;
+        break;
+      case "DECREASING":
+        conditionMet = volumeChangePercent <= -requiredPercentage;
+        break;
+      case "ABOVE":
+        conditionMet = currentCandleVolume > requiredPercentage;
+        break;
+      case "BELOW":
+        conditionMet = currentCandleVolume < requiredPercentage;
+        break;
+      default:
+        conditionMet = false;
+    }
+
+    console.log(
+      `   ${conditionMet ? '✅' : '❌'} [${tf}] Vol: ${currentCandleVolume.toFixed(0)} vs prev: ${previousCandleVolume.toFixed(0)} | Change: ${volumeChangePercent.toFixed(2)}% | Required: ${condition} ${requiredPercentage}% (${dataSource})`
+    );
+
+    return conditionMet;
   }
 
 
