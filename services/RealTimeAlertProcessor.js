@@ -57,6 +57,7 @@ class RealTimeAlertProcessor {
     this.pendingCandleRequests = new Set(); // Prevent duplicate requests
     this.candleCache = new Map(); // Cache for fetched candles
     this.candleApiBanUntil = 0; // Candle API ban timestamp
+    this.volumeCompareCache = new Map(); // 🔥 Cache for per-timeframe volume comparison
 
     // 🛡️ CIRCUIT BREAKER - Prevent infinite retry loops
     this.rsiFailures = new Map(); // Track RSI calculation failures
@@ -3541,81 +3542,146 @@ class RealTimeAlertProcessor {
     const { condition, percentage, timeframes } = volumeConditions;
     const requiredPercentage = parseFloat(percentage) || 0;
 
+    if (!alert || !symbol) {
+      return false;
+    }
+
+    if (!timeframes || timeframes.length === 0) {
+      return false;
+    }
+
     console.log(
-      `📉 Volume Evaluation: ${condition} by ${requiredPercentage}% | Timeframes: ${timeframes?.join(", ") || "N/A"}`
+      `📉 Volume Check: ${symbol} | ${condition} ≥ ${requiredPercentage}% | TFs: [${timeframes.join(", ")}]`
     );
 
-    if (!alert) {
-      console.log(`   ⚠️ No alert object, skipping volume check`);
-      return false;
+    // 🔥 FIX: Check volume per-TIMEFRAME using candle data
+    // For each timeframe, compare current candle volume vs previous candle volume
+    // ALL selected timeframes must pass for the condition to be met
+
+    for (const timeframe of timeframes) {
+      const tf = timeframe.toUpperCase();
+      const binanceInterval = this.getBinanceInterval(tf);
+      
+      // Try to get volume data from candle cache first
+      const key = `${symbol}_${tf}`;
+      let currentCandleVolume = 0;
+      let previousCandleVolume = 0;
+      let dataSource = "none";
+
+      // Strategy: Fetch 2 candles from Binance API to compare current vs previous
+      // Use the volume queue system to avoid IP bans
+      const volumeKey = `vol:${symbol}_${tf}`;
+      
+      // Check if we have cached volume comparison data
+      if (this.volumeCompareCache && this.volumeCompareCache.has(volumeKey)) {
+        const cached = this.volumeCompareCache.get(volumeKey);
+        const timeframeMs = this.getTimeframeMs(tf);
+        const currentBoundary = Math.floor(Date.now() / timeframeMs) * timeframeMs;
+        
+        // Use cache if it's from the current candle period
+        if (cached.boundary === currentBoundary) {
+          currentCandleVolume = cached.currentVolume;
+          previousCandleVolume = cached.previousVolume;
+          dataSource = "cache";
+        }
+      }
+
+      // If no cached data, queue a fetch
+      if (dataSource === "none") {
+        // Try to fetch 2 candles for comparison
+        try {
+          // Check for API ban
+          if (Date.now() < (this.candleApiBanUntil || 0)) {
+            console.log(`   ⛔ [${tf}] API banned, skipping volume check`);
+            return false;
+          }
+
+          const response = await fetch(
+            `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=2`
+          );
+
+          if (response.status === 418 || response.status === 429) {
+            this.candleApiBanUntil = Date.now() + 120000;
+            console.warn(`   🚫 [${tf}] Volume API rate limited, skipping`);
+            return false;
+          }
+
+          if (!response.ok) {
+            console.warn(`   ⚠️ [${tf}] Volume API error: ${response.status}`);
+            return false;
+          }
+
+          const klines = await response.json();
+          if (klines && klines.length >= 2) {
+            // klines[0] = previous candle, klines[1] = current candle
+            previousCandleVolume = parseFloat(klines[0][7]); // Quote volume (USDT) of previous candle
+            currentCandleVolume = parseFloat(klines[1][7]);   // Quote volume (USDT) of current candle
+            dataSource = "api";
+
+            // Cache the result
+            if (!this.volumeCompareCache) this.volumeCompareCache = new Map();
+            const timeframeMs = this.getTimeframeMs(tf);
+            const currentBoundary = Math.floor(Date.now() / timeframeMs) * timeframeMs;
+            this.volumeCompareCache.set(volumeKey, {
+              currentVolume: currentCandleVolume,
+              previousVolume: previousCandleVolume,
+              boundary: currentBoundary,
+              fetchedAt: Date.now(),
+            });
+          } else if (klines && klines.length === 1) {
+            // Only 1 candle available — no comparison possible
+            console.log(`   ⚠️ [${tf}] Only 1 candle available, cannot compare volume`);
+            return false;
+          }
+        } catch (error) {
+          console.warn(`   ⚠️ [${tf}] Volume fetch error: ${error.message}`);
+          return false;
+        }
+      }
+
+      // Skip if no data
+      if (previousCandleVolume === 0 || currentCandleVolume === 0) {
+        console.log(`   ⚠️ [${tf}] Volume data missing (prev: ${previousCandleVolume}, curr: ${currentCandleVolume})`);
+        return false;
+      }
+
+      // Calculate volume change percentage: current candle vs previous candle
+      const volumeChangePercent = ((currentCandleVolume - previousCandleVolume) / previousCandleVolume) * 100;
+
+      // Check condition
+      let conditionMet = false;
+
+      switch (condition) {
+        case "INCREASING":
+          conditionMet = volumeChangePercent >= requiredPercentage;
+          break;
+        case "DECREASING":
+          conditionMet = volumeChangePercent <= -requiredPercentage;
+          break;
+        case "ABOVE":
+          conditionMet = currentCandleVolume > requiredPercentage;
+          break;
+        case "BELOW":
+          conditionMet = currentCandleVolume < requiredPercentage;
+          break;
+        default:
+          conditionMet = false;
+      }
+
+      console.log(
+        `   ${conditionMet ? '✅' : '❌'} [${tf}] Vol: ${currentCandleVolume.toFixed(0)} vs prev: ${previousCandleVolume.toFixed(0)} | Change: ${volumeChangePercent.toFixed(2)}% | Required: ${condition} ${requiredPercentage}% (${dataSource})`
+      );
+
+      // ALL timeframes must pass
+      if (!conditionMet) {
+        console.log(`   ❌ Volume FAILED on [${tf}] — not all timeframes passed`);
+        return false;
+      }
     }
 
-    // Get current 24h volume from live data
-    const currentVolume = parseFloat(priceData.quoteVolume || priceData.volume24h || priceData.volume) || 0;
-
-    // Get baseline volume from alert (saved when alert created or last triggered)
-    const baselineVolume = parseFloat(alert.baselineVolume) || 0;
-
-    console.log(`   📊 Current Volume: ${currentVolume.toLocaleString()} USDT`);
-    console.log(`   📏 Baseline Volume: ${baselineVolume.toLocaleString()} USDT`);
-
-    // If no baseline, cannot check - need to initialize
-    if (baselineVolume === 0) {
-      console.log(`   ⚠️ No baseline volume set, skipping (will be set on first trigger)`);
-      return false;
-    }
-
-    if (currentVolume === 0) {
-      console.log(`   ⚠️ Current volume is 0, skipping`);
-      return false;
-    }
-
-    // ✅ Calculate volume change percentage from baseline
-    const volumeChangePercent = ((currentVolume - baselineVolume) / baselineVolume) * 100;
-    console.log(`   📈 Volume Change: ${volumeChangePercent.toFixed(2)}% (Required: ${condition} ${requiredPercentage}%)`);
-
-    // ✅ Check condition based on type
-    let conditionMet = false;
-
-    switch (condition) {
-      case "INCREASING":
-        // Volume increased by X% or more from baseline
-        conditionMet = volumeChangePercent >= requiredPercentage;
-        console.log(`   ${conditionMet ? '✅' : '❌'} INCREASING: ${volumeChangePercent.toFixed(2)}% >= ${requiredPercentage}%? ${conditionMet}`);
-        break;
-
-      case "DECREASING":
-        // Volume decreased by X% or more from baseline (negative change)
-        conditionMet = volumeChangePercent <= -requiredPercentage;
-        console.log(`   ${conditionMet ? '✅' : '❌'} DECREASING: ${volumeChangePercent.toFixed(2)}% <= -${requiredPercentage}%? ${conditionMet}`);
-        break;
-
-      case "ABOVE":
-        // Current volume above absolute threshold
-        conditionMet = currentVolume > requiredPercentage;
-        console.log(`   ${conditionMet ? '✅' : '❌'} ABOVE: ${currentVolume.toLocaleString()} > ${requiredPercentage.toLocaleString()}? ${conditionMet}`);
-        break;
-
-      case "BELOW":
-        // Current volume below absolute threshold
-        conditionMet = currentVolume < requiredPercentage;
-        console.log(`   ${conditionMet ? '✅' : '❌'} BELOW: ${currentVolume.toLocaleString()} < ${requiredPercentage.toLocaleString()}? ${conditionMet}`);
-        break;
-
-      default:
-        console.log(`   ❌ Unknown volume condition: ${condition}`);
-        conditionMet = false;
-    }
-
-    // ✅ NOTE: Baseline update happens in processAlert when alert triggers
-    // Timeframes determine the baseline update interval (smallest timeframe used)
-    // This is handled by the Alert Count lock mechanism based on selected timeframes
-
-    if (conditionMet) {
-      console.log(`   🎉 Volume condition MET - Alert will trigger`);
-    }
-
-    return conditionMet;
+    // All timeframes passed!
+    console.log(`   🎉 Volume: ALL ${timeframes.length} timeframes PASSED ${condition} ${requiredPercentage}%`);
+    return true;
   }
 
 
