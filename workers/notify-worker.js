@@ -122,6 +122,7 @@ redisSubscriber.on("message", async (channel, message) => {
             changeFromBaselinePercent:
               history.baselineData?.changeFromBaselinePercent,
             volume: history.triggerData?.volume24h,
+            priceChangePercent: history.triggerData?.priceChangePercent,
             triggeredAt: history.triggeredAt,
           };
 
@@ -232,6 +233,7 @@ redisSubscriber.on("message", async (channel, message) => {
       changeFromBaselinePercent:
         history.baselineData?.changeFromBaselinePercent,
       volume: history.triggerData?.volume24h,
+      priceChangePercent: history.triggerData?.priceChangePercent,
       triggeredAt: history.triggeredAt,
     };
 

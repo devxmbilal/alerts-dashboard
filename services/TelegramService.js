@@ -104,16 +104,17 @@ class TelegramService {
       triggeredPrice,
       baselinePrice,
       changeFromBaselinePercent,
+      priceChangePercent,
       volume,
       triggeredAt,
       isUpdate,
     } = alertData;
 
     const changeEmoji =
-      changeFromBaselinePercent === undefined ||
-        changeFromBaselinePercent === null
+      priceChangePercent === undefined ||
+        priceChangePercent === null
         ? "📊"
-        : changeFromBaselinePercent >= 0
+        : priceChangePercent >= 0
           ? "📈"
           : "📉";
 
@@ -154,7 +155,7 @@ class TelegramService {
 📊 Actual Change (${alertData.timeframe || "5MIN"}): \`${safeNumber(actualValue)}%\`
 💵 Current Price: \`$${safePrice(triggeredPrice)}\`
 📍 Last Price: \`$${safePrice(baselinePrice)}\`
-${changeEmoji} Change: \`${safeNumber(changeFromBaselinePercent)}%\`
+${changeEmoji} 24h Change: \`${safeNumber(priceChangePercent)}%\`
 📊 24h Volume: \`${safeVolume}\`
 ⏰ Time: \`${timeStr}\`
 📅 Date: \`${dateStr}\`
