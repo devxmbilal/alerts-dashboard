@@ -44,7 +44,7 @@ module.exports = {
       instances: 1,
       autorestart: true,
       watch: false,
-      max_memory_restart: "500M",
+      max_memory_restart: "1G",
       env_file: ".env.local",
       env: {
         NODE_ENV: "production",
@@ -66,7 +66,7 @@ module.exports = {
       instances: 1,
       autorestart: true,
       watch: false,
-      max_memory_restart: "500M",
+      max_memory_restart: "1G",
       env_file: ".env",
       env: {
         NODE_ENV: "production",
@@ -88,7 +88,7 @@ module.exports = {
       instances: 1,
       autorestart: true,
       watch: false,
-      max_memory_restart: "200M",
+      max_memory_restart: "1G",
       env: {
         NODE_ENV: "production",
         CLEANUP_WORKER_AUTOSTART: "true",
@@ -107,7 +107,7 @@ module.exports = {
       instances: 1,
       autorestart: true,
       watch: false,
-      max_memory_restart: "500M",
+      max_memory_restart: "1G",
       env_file: ".env",
       env: {
         NODE_ENV: "production",
@@ -129,7 +129,7 @@ module.exports = {
       instances: 1,
       autorestart: true,
       watch: false,
-      max_memory_restart: "500M",
+      max_memory_restart: "1G",
       env_file: ".env",
       env: {
         NODE_ENV: "production",
