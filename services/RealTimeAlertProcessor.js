@@ -3123,7 +3123,7 @@ class RealTimeAlertProcessor {
 
 
           // For D/W timeframes, allow timezone tolerance
-          const isLargeTimeframe = ['D', '1D', 'W', '1W', '12HR', '12H'].includes(timeframe.toUpperCase());
+          const isLargeTimeframe = ['D', '1D', 'W', '1W', '12HR', '12H', 'M', 'MONTH', 'MONTHLY', '1MONTH'].includes(timeframe.toUpperCase());
 
           // Check if cache is FRESH and CURRENT
           const cacheIsFresh = cachedCandle &&
@@ -3200,7 +3200,7 @@ class RealTimeAlertProcessor {
 
             // 🔥 FIX 3: Validate API response is for CURRENT candle (not stale previous candle)
             // At candle boundaries, Binance may briefly return the just-completed candle
-            const isLargeTF = ['D', '1D', 'W', '1W', '12HR', '12H'].includes(timeframe.toUpperCase());
+            const isLargeTF = ['D', '1D', 'W', '1W', '12HR', '12H', 'M', 'MONTH', 'MONTHLY', '1MONTH'].includes(timeframe.toUpperCase());
             const staleTolerance = isLargeTF ? 3600000 : 5000; // 1hr for D/W, 5s for others
             if (candleStartTime < expectedCandleStart - staleTolerance) {
               console.log(`   ⚠️ [${timeframe}] CANDLE_ABOVE_OPEN: API returned stale candle (start: ${new Date(candleStartTime).toISOString()}, expected: ${new Date(expectedCandleStart).toISOString()})`);

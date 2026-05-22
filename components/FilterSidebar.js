@@ -660,6 +660,7 @@ const FilterSidebar = forwardRef(
       { value: "12HR", label: "12HR" },
       { value: "D", label: "D" },
       { value: "W", label: "W" },
+      { value: "MONTHLY", label: "M" },
     ];
 
     // Candle condition options - only 3 options
