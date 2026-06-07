@@ -953,6 +953,9 @@ class RealTimeAlertProcessor {
 
       // Baseline logged only on significant events now
 
+      // Declared here so it's accessible for the change% check below (set inside candle boundary block)
+      let effectiveBaseline;
+
       // CRITICAL: Check if baseline needs to be updated based on timeframe
       // 🔥 FIX: Update baseline at CANDLE CLOSE boundaries, not time since last update
       // Example: For 5MIN, update at 10:00, 10:05, 10:10, etc.
@@ -992,9 +995,9 @@ class RealTimeAlertProcessor {
           // This ensures the 2% check is FRESH for the new candle.
           const freshBaseline = parseFloat(liveData.price) || originalBaselinePrice;
           
-          // Re-evaluate the local variable used for the main check
-          // So the very first tick of a new candle starts at 0% change.
-          const effectiveBaseline = freshBaseline; 
+          // Set effectiveBaseline so the change% check below uses the NEW (reset) baseline
+          // This ensures the very first tick of a new candle starts at 0% change.
+          effectiveBaseline = freshBaseline;
 
           // Update baseline volume based on smallest volume timeframe (if volume condition exists)
           let updatedVolume = liveData.volume || liveData.volume24h;
@@ -1458,6 +1461,10 @@ class RealTimeAlertProcessor {
             liveData,
             alert.symbol
           );
+          // null = data still loading, skip this condition (don't fail alert)
+          if (rsiMatch === null) {
+            return { passed: true, reason: "RSI data loading — skipped this tick" };
+          }
           return {
             passed: rsiMatch,
             reason: rsiMatch ? "RSI condition met" : "RSI condition not met",
@@ -1489,6 +1496,10 @@ class RealTimeAlertProcessor {
             alert.symbol,
             alert
           );
+          // null = data unavailable, skip this condition (don't fail alert)
+          if (volumeMatch === null) {
+            return { passed: true, reason: "Volume data unavailable — skipped this tick" };
+          }
           return {
             passed: volumeMatch,
             reason: volumeMatch
@@ -2018,8 +2029,6 @@ class RealTimeAlertProcessor {
         `📊 Baseline: Price=${originalBaselinePrice}, Volume=${originalBaselineVolume}, Timestamp=${alert.baselineTimestamp}`
       );
 
-      // 🔥 CRITICAL FIX: Track if baseline needs updating, but DON'T update until AFTER alert check
-      // This prevents the "Change in price: 0.000%" bug at timeframe boundaries
       let shouldUpdateBaseline = false;
       let newBaselinePrice = null;
       let newBaselineVolume = null;
@@ -2033,16 +2042,54 @@ class RealTimeAlertProcessor {
         const currentTime = Date.now();
         const timeSinceBaseline = currentTime - baselineTimestamp;
 
-        // Check if timeframe interval has passed
+        // New candle boundary detected — apply baseline reset NOW (before alert check)
+        // Deferring it causes false alerts: lock expires + old baseline still in memory
+        // = previous candle's accumulated change% triggers immediately on new candle open
         if (timeSinceBaseline >= timeframeMs) {
           console.log(
-            `⏰ Timeframe interval passed for ${alert.symbol}, will update baseline from ${alert.baselinePrice} to ${priceData.price} AFTER alert check`
+            `🕯️ New candle boundary for ${alert.symbol} (${timeframe}): resetting baseline from ${alert.baselinePrice} → ${priceData.price} (skipping alert check this tick)`
           );
 
-          // 🔥 FIX: Store new baseline values but DON'T apply them yet
           shouldUpdateBaseline = true;
           newBaselinePrice = priceData.price;
           newBaselineVolume = priceData.volume || priceData.volume24h;
+
+          // Apply baseline update immediately so next tick starts fresh
+          alert.baselinePrice = newBaselinePrice;
+          alert.baselineVolume = newBaselineVolume;
+          alert.baselineTimestamp = new Date();
+
+          // Persist to DB (non-blocking)
+          Alert.findByIdAndUpdate(alert._id, {
+            baselinePrice: newBaselinePrice,
+            baselineVolume: newBaselineVolume,
+            baselineTimestamp: new Date(),
+          }).catch((err) => console.error(`❌ Baseline reset DB error ${alert.symbol}:`, err.message));
+
+          // Update in-memory cache
+          const alertsForSymbol = this.activeAlerts.get(alert.symbol);
+          if (alertsForSymbol) {
+            const alertIndex = alertsForSymbol.findIndex((a) => a._id.toString() === alert._id.toString());
+            if (alertIndex !== -1) {
+              alertsForSymbol[alertIndex] = {
+                ...alertsForSymbol[alertIndex],
+                baselinePrice: newBaselinePrice,
+                baselineVolume: newBaselineVolume,
+                baselineTimestamp: new Date(),
+              };
+            }
+          }
+
+          // Update Redis cache (non-blocking)
+          this.updateAlertInCache({
+            ...alert,
+            baselinePrice: newBaselinePrice,
+            baselineVolume: newBaselineVolume,
+            baselineTimestamp: new Date(),
+          }).catch(() => {});
+
+          // Skip alert check this tick — next tick will evaluate with the fresh baseline
+          return false;
         } else {
           const remainingMs = timeframeMs - timeSinceBaseline;
           const remainingMinutes = Math.ceil(remainingMs / (1000 * 60));
@@ -2224,7 +2271,8 @@ class RealTimeAlertProcessor {
           priceData,
           alert.symbol
         );
-        if (!rsiMatch) {
+        if (rsiMatch === false) {
+          // null means data still loading — skip check, don't fail alert
           conditionsMet = false;
         }
       }
@@ -2242,7 +2290,8 @@ class RealTimeAlertProcessor {
           alert.symbol,
           alert
         );
-        if (!volumeMatch) {
+        if (volumeMatch === false) {
+          // null means data unavailable — skip check, don't fail alert
           conditionsMet = false;
         }
       }
@@ -2278,81 +2327,6 @@ class RealTimeAlertProcessor {
       } else {
         console.log(
           `❌ CONDITIONS NOT MET for ${alert.symbol} - Alert will NOT trigger`
-        );
-      }
-
-      // 🔥 CRITICAL FIX: Apply deferred baseline update AFTER alert processing
-      // This ensures alert was triggered with the OLD baseline (correct change calculation)
-      // Now we update to the NEW baseline for the next alert cycle
-      if (shouldUpdateBaseline && newBaselinePrice !== null) {
-        console.log(
-          `🔄 NOW updating baseline for ${alert.symbol} from ${alert.baselinePrice} to ${newBaselinePrice} (deferred from earlier)`
-        );
-
-        // Update in-memory alert
-        alert.baselinePrice = newBaselinePrice;
-        alert.baselineVolume = newBaselineVolume;
-        alert.baselineTimestamp = new Date();
-
-        // Queue baseline update to database (non-blocking)
-        await this.enqueueDbOperation({
-          type: "update_baseline",
-          alertId: alert._id.toString(),
-          data: {
-            baselinePrice: newBaselinePrice,
-            baselineVolume: newBaselineVolume,
-            baselineTimestamp: new Date(),
-          },
-          priority: "normal",
-        }).catch((error) => {
-          console.error(
-            `❌ Error enqueueing deferred baseline update:`,
-            error.message
-          );
-          // Fallback: Try direct DB update if queue fails
-          Alert.findByIdAndUpdate(alert._id, {
-            baselinePrice: newBaselinePrice,
-            baselineVolume: newBaselineVolume,
-            baselineTimestamp: new Date(),
-          }).catch((dbError) => {
-            console.error(
-              `❌ Error updating deferred baseline (fallback):`,
-              dbError.message
-            );
-          });
-        });
-
-        // Update in-memory cache
-        const alertsForSymbol = this.activeAlerts.get(alert.symbol);
-        if (alertsForSymbol) {
-          const alertIndex = alertsForSymbol.findIndex(
-            (a) => a._id.toString() === alert._id.toString()
-          );
-          if (alertIndex !== -1) {
-            alertsForSymbol[alertIndex] = {
-              ...alertsForSymbol[alertIndex],
-              baselinePrice: newBaselinePrice,
-              baselineVolume: newBaselineVolume,
-              baselineTimestamp: new Date(),
-            };
-          }
-        }
-
-        // Update Redis cache (non-blocking)
-        await this.updateAlertInCache({
-          ...alert,
-          baselinePrice: newBaselinePrice,
-          baselineVolume: newBaselineVolume,
-          baselineTimestamp: new Date(),
-        }).catch((error) => {
-          console.error(
-            `❌ Error updating deferred baseline in Redis cache:`,
-            error.message
-          );
-        });
-
-        console.log(
-          `✅ Deferred baseline update applied for ${alert.symbol}: ${newBaselinePrice}`
         );
       }
 
@@ -2795,9 +2769,13 @@ class RealTimeAlertProcessor {
       return;
     }
 
-    // CRITICAL FIX: Limit queue size to prevent memory issues
-    if (this.rsiQueue.length >= 500) {
+    // Limit queue size to prevent memory issues
+    if (this.rsiQueue.length >= 2000) {
+      console.warn(`⚠️ RSI queue at capacity (2000), dropping fetch for ${symbol} ${timeframe}`);
       return;
+    }
+    if (this.rsiQueue.length > 500 && this.rsiQueue.length % 100 === 0) {
+      console.warn(`⚠️ RSI queue high pressure: ${this.rsiQueue.length} items pending`);
     }
 
     // Add to queue with timestamp for timeout tracking
@@ -2847,10 +2825,12 @@ class RealTimeAlertProcessor {
       const task = this.rsiQueue[0];
       const taskAge = Date.now() - (task.queuedAt || 0);
 
-      // CRITICAL FIX: Remove tasks older than 10 minutes
+      // Re-queue tasks older than 10 minutes with fresh timestamp instead of discarding
       if (taskAge > 10 * 60 * 1000) {
-        console.log(`⏰ Removing stale RSI task for ${task.key} (age: ${Math.round(taskAge / 1000)}s)`);
-        this.rsiQueue.shift();
+        const staleTask = this.rsiQueue.shift();
+        staleTask.queuedAt = Date.now();
+        this.rsiQueue.push(staleTask);
+        console.log(`♻️ Re-queued stale RSI task for ${staleTask.key} (was ${Math.round(taskAge / 1000)}s old)`);
         continue;
       }
 
@@ -3479,9 +3459,8 @@ class RealTimeAlertProcessor {
 
     // ✅ PHASE 2: Wait until ALL data is ready
     if (!allDataReady) {
-      console.log(`   ⏳ RSI: Waiting for ${pendingTimeframes.length}/${timeframes.length} timeframes: [${pendingTimeframes.join(', ')}]`);
-      console.log(`   Data will be fetched by queue system, will recheck on next price update...`);
-      return false;
+      console.log(`   ⏳ RSI: Data loading for ${symbol} [${pendingTimeframes.join(', ')}] — skipping RSI check this tick (alert not failed)`);
+      return null; // null = data not ready, skip this condition (don't fail the alert)
     }
 
     // ✅ PHASE 3: All data ready - NOW check conditions
@@ -3612,58 +3591,84 @@ class RealTimeAlertProcessor {
     // If no cached data, fetch from Binance API
     if (dataSource === "none") {
       try {
-        // Check for API ban
+        // Check for API ban — try stale cache as fallback before skipping
         if (Date.now() < (this.candleApiBanUntil || 0)) {
-          console.log(`   ⛔ [${tf}] API banned, skipping volume check`);
-          return false;
+          const staleCached = this.volumeCompareCache && this.volumeCompareCache.get(volumeKey);
+          if (staleCached) {
+            console.log(`   📦 [${tf}] API banned — using stale cached volume data`);
+            currentCandleVolume = staleCached.currentVolume;
+            previousCandleVolume = staleCached.previousVolume;
+            dataSource = "stale-cache";
+          } else {
+            console.log(`   ⛔ [${tf}] API banned and no cache — skipping volume check this tick`);
+            return null; // null = skip, don't fail the alert
+          }
         }
 
-        const response = await fetch(
-          `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=2`
-        );
+        if (dataSource === "none") {
+          const response = await fetch(
+            `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=2`
+          );
 
-        if (response.status === 418 || response.status === 429) {
-          this.candleApiBanUntil = Date.now() + 120000;
-          console.warn(`   🚫 [${tf}] Volume API rate limited, skipping`);
-          return false;
-        }
+          if (response.status === 418 || response.status === 429) {
+            this.candleApiBanUntil = Date.now() + 120000;
+            // Try stale cache before giving up
+            const staleCached = this.volumeCompareCache && this.volumeCompareCache.get(volumeKey);
+            if (staleCached) {
+              console.log(`   📦 [${tf}] Rate limited — using stale cached volume data`);
+              currentCandleVolume = staleCached.currentVolume;
+              previousCandleVolume = staleCached.previousVolume;
+              dataSource = "stale-cache";
+            } else {
+              console.warn(`   🚫 [${tf}] Volume API rate limited, no cache — skipping this tick`);
+              return null; // null = skip, don't fail the alert
+            }
+          } else if (!response.ok) {
+            console.warn(`   ⚠️ [${tf}] Volume API error: ${response.status} — skipping this tick`);
+            return null; // null = skip, don't fail the alert
+          } else {
+            const klines = await response.json();
+            if (klines && klines.length >= 2) {
+              // klines[0] = previous completed candle, klines[1] = current ongoing candle
+              previousCandleVolume = parseFloat(klines[0][7]); // Quote volume (USDT) of previous candle
+              currentCandleVolume = parseFloat(klines[1][7]);   // Quote volume (USDT) of current candle
+              dataSource = "api";
 
-        if (!response.ok) {
-          console.warn(`   ⚠️ [${tf}] Volume API error: ${response.status}`);
-          return false;
-        }
-
-        const klines = await response.json();
-        if (klines && klines.length >= 2) {
-          // klines[0] = previous completed candle, klines[1] = current ongoing candle
-          previousCandleVolume = parseFloat(klines[0][7]); // Quote volume (USDT) of previous candle
-          currentCandleVolume = parseFloat(klines[1][7]);   // Quote volume (USDT) of current candle
-          dataSource = "api";
-
-          // Cache the result
-          if (!this.volumeCompareCache) this.volumeCompareCache = new Map();
-          const timeframeMs = this.getTimeframeMs(tf);
-          const currentBoundary = Math.floor(Date.now() / timeframeMs) * timeframeMs;
-          this.volumeCompareCache.set(volumeKey, {
-            currentVolume: currentCandleVolume,
-            previousVolume: previousCandleVolume,
-            boundary: currentBoundary,
-            fetchedAt: Date.now(),
-          });
-        } else if (klines && klines.length === 1) {
-          console.log(`   ⚠️ [${tf}] Only 1 candle available, cannot compare volume`);
-          return false;
+              // Cache the result
+              if (!this.volumeCompareCache) this.volumeCompareCache = new Map();
+              const timeframeMs = this.getTimeframeMs(tf);
+              const currentBoundary = Math.floor(Date.now() / timeframeMs) * timeframeMs;
+              this.volumeCompareCache.set(volumeKey, {
+                currentVolume: currentCandleVolume,
+                previousVolume: previousCandleVolume,
+                boundary: currentBoundary,
+                fetchedAt: Date.now(),
+              });
+            } else if (klines && klines.length === 1) {
+              console.log(`   ⚠️ [${tf}] Only 1 candle available — skipping volume check this tick`);
+              return null; // null = skip, don't fail the alert
+            }
+          }
         }
       } catch (error) {
-        console.warn(`   ⚠️ [${tf}] Volume fetch error: ${error.message}`);
-        return false;
+        // Try stale cache as fallback on any network error
+        const staleCached = this.volumeCompareCache && this.volumeCompareCache.get(volumeKey);
+        if (staleCached) {
+          console.log(`   📦 [${tf}] Fetch error — using stale cached volume data: ${error.message}`);
+          currentCandleVolume = staleCached.currentVolume;
+          previousCandleVolume = staleCached.previousVolume;
+          dataSource = "stale-cache";
+        } else {
+          console.warn(`   ⚠️ [${tf}] Volume fetch error, no cache — skipping this tick: ${error.message}`);
+          return null; // null = skip, don't fail the alert
+        }
       }
     }
 
-    // Skip if no previous data (can't calculate percentage change)
+    // Previous volume is 0 at candle boundaries — skip this tick, don't fail the alert
     if (previousCandleVolume === 0) {
-      console.log(`   ⚠️ [${tf}] Previous volume is 0, cannot calculate change`);
-      return false;
+      console.log(`   ⏭️ [${tf}] Previous candle volume=0 (candle boundary) — skipping volume check this tick`);
+      return null; // null = skip, don't fail the alert
     }
 
     // Calculate volume change percentage: current candle vs previous candle

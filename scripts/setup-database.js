@@ -1,7 +1,9 @@
-const { connectToMongoDB } = require("../utils/mongodb");
-const Alert = require("../models/Alert");
-const AlertHistory = require("../models/AlertHistory");
-const User = require("../models/User");
+import { connectToMongoDB } from "../utils/mongodb.js";
+import Alert from "../models/Alert.js";
+import AlertHistory from "../models/AlertHistory.js";
+import User from "../models/User.js";
+import { resolve } from "path";
+import { fileURLToPath, pathToFileURL } from "url";
 
 async function setupDatabase() {
   try {
@@ -11,24 +13,10 @@ async function setupDatabase() {
     await connectToMongoDB();
 
     // Create indexes for better performance
-    console.log("📊 Creating indexes...");
-
-    // Alert indexes
-    await Alert.collection.createIndex({ symbol: 1, status: 1 });
-    await Alert.collection.createIndex({ userId: 1, status: 1 });
-    await Alert.collection.createIndex({ createdAt: -1 });
-    await Alert.collection.createIndex({ triggeredAt: -1 });
-
-    // AlertHistory indexes
-    await AlertHistory.collection.createIndex({ userId: 1, createdAt: -1 });
-    await AlertHistory.collection.createIndex({ symbol: 1, createdAt: -1 });
-    await AlertHistory.collection.createIndex({ alertId: 1 });
-    await AlertHistory.collection.createIndex({ status: 1, createdAt: -1 });
-
-    // User indexes
-    await User.collection.createIndex({ username: 1 });
-    await User.collection.createIndex({ email: 1 });
-    await User.collection.createIndex({ isActive: 1 });
+    console.log("📊 Creating indexes from schemas...");
+    await Alert.createIndexes();
+    await AlertHistory.createIndexes();
+    await User.createIndexes();
 
     console.log("✅ Database setup completed successfully");
 
@@ -46,7 +34,10 @@ async function setupDatabase() {
 }
 
 // Run setup if called directly
-if (require.main === module) {
+const isMainModule =
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+
+if (isMainModule) {
   setupDatabase()
     .then(() => {
       console.log("✅ Setup completed");
@@ -58,4 +49,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = setupDatabase;
+export default setupDatabase;
