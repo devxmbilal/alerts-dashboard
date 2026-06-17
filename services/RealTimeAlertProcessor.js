@@ -2742,8 +2742,9 @@ class RealTimeAlertProcessor {
     const livePrice = this.livePrices[symbol]?.price;
     let calculationCloses = [...closes];
 
-    if (livePrice) {
-      calculationCloses.push(livePrice);
+    if (livePrice && calculationCloses.length > 0) {
+      // OVERWRITE the last candle's close (which is the ongoing candle) instead of pushing a new phantom candle
+      calculationCloses[calculationCloses.length - 1] = livePrice;
     }
 
     // 3. Calculate RSI locally (no API call)
@@ -2887,7 +2888,8 @@ class RealTimeAlertProcessor {
   // Fetch RSI history from Binance API (actual API call)
   async fetchAndStoreRsiHistory(symbol, timeframe, period) {
     const binanceInterval = this.getBinanceInterval(timeframe);
-    const limit = period + 10; // Extra buffer
+    // Fetch at least 250 candles to allow Wilder's smoothing to converge properly
+    const limit = Math.max(period * 10, 250);
 
     const response = await fetch(
       `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`
@@ -3671,8 +3673,19 @@ class RealTimeAlertProcessor {
       return null; // null = skip, don't fail the alert
     }
 
-    // Calculate volume change percentage: current candle vs previous candle
-    const volumeChangePercent = ((currentCandleVolume - previousCandleVolume) / previousCandleVolume) * 100;
+    // Project current volume to end of candle for fair comparison
+    const timeframeMs = this.getTimeframeMs(tf);
+    const currentBoundary = Math.floor(Date.now() / timeframeMs) * timeframeMs;
+    const elapsedMs = Date.now() - currentBoundary;
+    
+    let projectedVolume = currentCandleVolume;
+    // Only project if at least 1% of the candle has formed (avoids wild spikes right at the start)
+    if (elapsedMs > 0 && (elapsedMs / timeframeMs) > 0.01) {
+      projectedVolume = currentCandleVolume * (timeframeMs / Math.min(elapsedMs, timeframeMs));
+    }
+
+    // Calculate volume change percentage: projected current candle vs previous candle
+    const volumeChangePercent = ((projectedVolume - previousCandleVolume) / previousCandleVolume) * 100;
 
     // Check condition
     let conditionMet = false;
@@ -3695,7 +3708,7 @@ class RealTimeAlertProcessor {
     }
 
     console.log(
-      `   ${conditionMet ? '✅' : '❌'} [${tf}] Vol: ${currentCandleVolume.toFixed(0)} vs prev: ${previousCandleVolume.toFixed(0)} | Change: ${volumeChangePercent.toFixed(2)}% | Required: ${condition} ${requiredPercentage}% (${dataSource})`
+      `   ${conditionMet ? '✅' : '❌'} [${tf}] Vol: ${currentCandleVolume.toFixed(0)} (Projected: ${projectedVolume.toFixed(0)}) vs prev: ${previousCandleVolume.toFixed(0)} | Change: ${volumeChangePercent.toFixed(2)}% | Required: ${condition} ${requiredPercentage}% (${dataSource})`
     );
 
     return conditionMet;
