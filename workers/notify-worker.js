@@ -46,10 +46,12 @@ connectToMongoDB()
 const redisSubscriber = createRedisClient();
 const redisClient = createRedisClient();  // Separate client for regular commands
 
+// Initial subscribe — reconnect handler also re-subscribes on each reconnect
 redisSubscriber.subscribe("notifications:queue", (err) => {
   if (err) {
     console.error("❌ Redis subscribe error:", err);
-    process.exit(1);
+    // Don't exit — let reconnect handler retry
+    console.warn("⚠️ Will retry subscription on next reconnect");
   } else {
     console.log("✅ Subscribed to notifications:queue");
   }
@@ -415,13 +417,29 @@ redisSubscriber.on("message", async (channel, message) => {
   }
 });
 
-// Handle Redis connection errors
+// Handle Redis connection errors with auto-reconnect + re-subscribe
 redisSubscriber.on("error", (err) => {
-  console.error("❌ Redis connection error:", err);
+  console.error("❌ Redis subscriber connection error:", err.message);
+});
+
+redisSubscriber.on("end", () => {
+  console.warn("⚠️ Redis subscriber disconnected — will reconnect automatically");
+});
+
+redisSubscriber.on("reconnecting", () => {
+  console.log("🔄 Redis subscriber reconnecting...");
 });
 
 redisSubscriber.on("connect", () => {
-  console.log("✅ Redis connected for notify-worker");
+  console.log("✅ Redis subscriber connected — re-subscribing to notifications:queue");
+  // Re-subscribe after every reconnect (subscription is lost on disconnect)
+  redisSubscriber.subscribe("notifications:queue", (err) => {
+    if (err) {
+      console.error("❌ Redis re-subscribe error:", err.message);
+    } else {
+      console.log("✅ Re-subscribed to notifications:queue");
+    }
+  });
 });
 
 // Setup graceful shutdown using centralized utility

@@ -13,8 +13,12 @@ class TelegramService {
     // 🔁 Queue + Rate-limit state
     this.queue = [];
     this.isProcessing = false;
+    this.processingStartedAt = null; // watchdog: detect stuck queue
     this.minDelayMs = 800; // ≈0.8s per message (safe for Telegram, faster than 1.2s)
     this.lastSentAt = 0;
+    this.MAX_FETCH_TIMEOUT_MS = 15000;  // 15s per Telegram API call
+    this.MAX_PROCESSING_STUCK_MS = 5 * 60 * 1000; // 5 minutes — force reset if stuck
+    this.MAX_RETRY_AFTER_MS = 30000;    // cap 429 wait to 30s max
   }
 
   // Get API URL for a specific token (user token or fallback to global)
@@ -47,6 +51,16 @@ class TelegramService {
   // =============== QUEUE CORE ===============
 
   enqueueJob(job) {
+    // Watchdog: if queue has been stuck for > 5 minutes, force reset
+    if (this.isProcessing && this.processingStartedAt) {
+      const stuckMs = Date.now() - this.processingStartedAt;
+      if (stuckMs > this.MAX_PROCESSING_STUCK_MS) {
+        console.warn(`⚠️ Telegram queue stuck for ${Math.round(stuckMs / 1000)}s — force resetting isProcessing`);
+        this.isProcessing = false;
+        this.processingStartedAt = null;
+      }
+    }
+
     this.queue.push(job);
     this.processQueue().catch((e) =>
       console.error("❌ Error in Telegram queue:", e.message)
@@ -60,6 +74,7 @@ class TelegramService {
     if (this.queue.length === 0) return;
 
     this.isProcessing = true;
+    this.processingStartedAt = Date.now();
 
     try {
       while (this.queue.length > 0) {
@@ -92,6 +107,7 @@ class TelegramService {
       }
     } finally {
       this.isProcessing = false;
+      this.processingStartedAt = null;
     }
   }
 
@@ -181,17 +197,25 @@ ${changeEmoji} 24h Change: \`${safeNumber(priceChangePercent)}%\`
       const apiUrl = this.getApiUrlForToken(customBotToken);
       const message = this.formatAlertMessage(alertData);
 
-      const response = await fetch(`${apiUrl}/sendMessage`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: message,
-          parse_mode: "Markdown",
-        }),
-      });
+      // Timeout prevents hung fetch from locking the queue forever
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.MAX_FETCH_TIMEOUT_MS);
+
+      let response;
+      try {
+        response = await fetch(`${apiUrl}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: message,
+            parse_mode: "Markdown",
+          }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       const data = await response.json();
 
@@ -201,17 +225,22 @@ ${changeEmoji} 24h Change: \`${safeNumber(priceChangePercent)}%\`
       } else {
         console.error("❌ Telegram API error:", data.description);
 
-        // Basic handling for rate limit
+        // Cap retry_after to avoid blocking queue for too long
         if (data.error_code === 429 && data.parameters?.retry_after) {
-          const wait = (data.parameters.retry_after + 1) * 1000;
-          console.warn(`⏳ Rate limited, waiting ${wait}ms...`);
+          const requested = (data.parameters.retry_after + 1) * 1000;
+          const wait = Math.min(requested, this.MAX_RETRY_AFTER_MS);
+          console.warn(`⏳ Rate limited, waiting ${wait}ms (capped from ${requested}ms)...`);
           await this.sleep(wait);
         }
 
         return false;
       }
     } catch (error) {
-      console.error("❌ Error sending Telegram message:", error.message);
+      if (error.name === "AbortError") {
+        console.error(`❌ Telegram sendMessage timed out after ${this.MAX_FETCH_TIMEOUT_MS / 1000}s — skipping job`);
+      } else {
+        console.error("❌ Error sending Telegram message:", error.message);
+      }
       return false;
     }
   }
@@ -327,8 +356,9 @@ ${changeEmoji} 24h Change: \`${safeNumber(priceChangePercent)}%\`
           response.data.error_code === 429 &&
           response.data.parameters?.retry_after
         ) {
-          const wait = (response.data.parameters.retry_after + 1) * 1000;
-          console.warn(`⏳ Rate limited (photo), waiting ${wait}ms...`);
+          const requested = (response.data.parameters.retry_after + 1) * 1000;
+          const wait = Math.min(requested, this.MAX_RETRY_AFTER_MS);
+          console.warn(`⏳ Rate limited (photo), waiting ${wait}ms (capped from ${requested}ms)...`);
           await this.sleep(wait);
         }
 
