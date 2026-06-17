@@ -24,7 +24,8 @@ class TelegramService {
   // Get API URL for a specific token (user token or fallback to global)
   getApiUrlForToken(customToken) {
     const token = customToken || this.botToken;
-    return `https://api.telegram.org/bot${token}`;
+    const baseUrl = process.env.TELEGRAM_API_BASE_URL || "https://api.telegram.org";
+    return `${baseUrl}/bot${token}`;
   }
 
   initialize() {
@@ -68,9 +69,14 @@ class TelegramService {
   }
 
   async processQueue() {
+    console.log("processQueue called. isProcessing:", this.isProcessing, "queue length:", this.queue.length);
     if (this.isProcessing) return;
+    console.log("botToken exists?", !!this.botToken);
     // Check if we have any valid token (global or per-job)
-    if (!this.botToken && this.queue.every(job => !job.customBotToken)) return;
+    if (!this.botToken && this.queue.every(job => !job.customBotToken)) {
+      console.log("No bot token available, returning.");
+      return;
+    }
     if (this.queue.length === 0) return;
 
     this.isProcessing = true;
@@ -203,6 +209,7 @@ ${changeEmoji} 24h Change: \`${safeNumber(priceChangePercent)}%\`
 
       let response;
       try {
+        console.log("Sending fetch to:", `${apiUrl}/sendMessage`);
         response = await fetch(`${apiUrl}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -213,6 +220,7 @@ ${changeEmoji} 24h Change: \`${safeNumber(priceChangePercent)}%\`
           }),
           signal: controller.signal,
         });
+        console.log("Fetch response received, status:", response.status);
       } finally {
         clearTimeout(timeoutId);
       }
