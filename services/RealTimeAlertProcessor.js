@@ -1510,7 +1510,39 @@ class RealTimeAlertProcessor {
       });
     }
 
-    // Priority 7: Open Interest (highest cost)
+    // Priority 7: MACD (Fast EMA vs Slow EMA)
+    if (this.isConditionSet(conditions.macd?.timeframes)) {
+      activeConditions.push({
+        name: "MACD",
+        priority: 7,
+        check: async () => {
+          if (
+            !conditions.macd.timeframes ||
+            conditions.macd.timeframes.length === 0
+          ) {
+            return {
+              passed: false,
+              reason: "No timeframes configured for MACD condition",
+            };
+          }
+
+          const macdMatch = await this.evaluateMACDConditions(
+            conditions.macd,
+            liveData,
+            alert.symbol
+          );
+          if (macdMatch === null) {
+            return { passed: true, reason: "MACD data loading — skipped this tick" };
+          }
+          return {
+            passed: macdMatch,
+            reason: macdMatch ? "MACD condition met" : "MACD condition not met",
+          };
+        },
+      });
+    }
+
+    // Priority 8: Open Interest (highest cost)
     if (this.isConditionSet(conditions.openInterest?.timeframes)) {
       activeConditions.push({
         name: "Open Interest",
@@ -2292,6 +2324,23 @@ class RealTimeAlertProcessor {
         );
         if (volumeMatch === false) {
           // null means data unavailable — skip check, don't fail alert
+          conditionsMet = false;
+        }
+      }
+
+      // Check MACD conditions (optional)
+      if (
+        conditionsMet &&
+        conditions.macd &&
+        conditions.macd.timeframes &&
+        conditions.macd.timeframes.length > 0
+      ) {
+        const macdMatch = await this.evaluateMACDConditions(
+          conditions.macd,
+          priceData,
+          alert.symbol
+        );
+        if (macdMatch === false) {
           conditionsMet = false;
         }
       }
@@ -3513,6 +3562,146 @@ class RealTimeAlertProcessor {
     console.log(`   🎉 RSI: All ${timeframes.length} timeframes PASSED ${condition} ${targetLevel}`);
     return true;
   }
+
+  // ==================== MACD (Fast EMA vs Slow EMA) ====================
+
+  computeEMA(closes, period) {
+    if (!closes || closes.length < period) return null;
+    const multiplier = 2 / (period + 1);
+    let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    for (let i = period; i < closes.length; i++) {
+      ema = (closes[i] - ema) * multiplier + ema;
+    }
+    return ema;
+  }
+
+  computeMACDFromCloses(closes, fastPeriod, slowPeriod) {
+    if (!closes || closes.length < slowPeriod + 1) return null;
+    const allCloses = closes;
+    const allButLast = closes.slice(0, -1);
+
+    const fastEMA = this.computeEMA(allCloses, fastPeriod);
+    const slowEMA = this.computeEMA(allCloses, slowPeriod);
+    const prevFastEMA = this.computeEMA(allButLast, fastPeriod);
+    const prevSlowEMA = this.computeEMA(allButLast, slowPeriod);
+
+    if (fastEMA === null || slowEMA === null || prevFastEMA === null || prevSlowEMA === null) {
+      return null;
+    }
+
+    return { fastEMA, slowEMA, prevFastEMA, prevSlowEMA };
+  }
+
+  async getMACD(symbol, timeframe, fastPeriod = 12, slowPeriod = 26) {
+    const key = `${symbol}_${timeframe}_${fastPeriod}_${slowPeriod}`;
+
+    // Check in-memory cache
+    if (!this.macdData) this.macdData = new Map();
+    const cached = this.macdData.get(key);
+    const timeframeMs = this.getTimeframeMs(timeframe);
+    const cacheTTL = Math.max(timeframeMs / 2, 10000);
+
+    if (cached && (Date.now() - cached.timestamp) < cacheTTL) {
+      return cached;
+    }
+
+    // Reuse RSI history data (same closes needed)
+    const historyKey = `${symbol}_${timeframe}`;
+    let closes = this.rsiHistory ? this.rsiHistory.get(historyKey) : null;
+
+    if (!closes || closes.length < slowPeriod + 1) {
+      // Queue background fetch (reuse RSI queue system)
+      const alreadyQueued = this.rsiQueue.some(item => item.key === historyKey);
+      if (!alreadyQueued && this.rsiQueue.length < 2000) {
+        this.queueRsiHistoryFetch(symbol, timeframe, slowPeriod);
+      }
+      return null;
+    }
+
+    // Add current live price for real-time calculation
+    const livePrice = this.lastPrices ? this.lastPrices.get(symbol) : null;
+    let closesForCalc = [...closes];
+    if (livePrice) {
+      closesForCalc.push(parseFloat(livePrice));
+    }
+
+    const result = this.computeMACDFromCloses(closesForCalc, fastPeriod, slowPeriod);
+    if (!result) return null;
+
+    const macdResult = {
+      ...result,
+      timestamp: Date.now(),
+    };
+
+    this.macdData.set(key, macdResult);
+    return macdResult;
+  }
+
+  async evaluateMACDConditions(macdConditions, priceData, symbol = null) {
+    const { condition, fastPeriod, slowPeriod, timeframes } = macdConditions;
+    const fast = parseInt(fastPeriod) || 12;
+    const slow = parseInt(slowPeriod) || 26;
+
+    console.log(`📊 MACD Check: ${symbol} | Condition: ${condition} | Fast: ${fast} | Slow: ${slow}`);
+    console.log(`   🔍 Checking ${timeframes.length} timeframes (ALL must pass)`);
+
+    let allDataReady = true;
+    let pendingTimeframes = [];
+    const macdValues = new Map();
+
+    for (const timeframe of timeframes) {
+      const macdData = await this.getMACD(symbol, timeframe, fast, slow);
+      if (!macdData) {
+        allDataReady = false;
+        pendingTimeframes.push(timeframe);
+      } else {
+        macdValues.set(timeframe, macdData);
+      }
+    }
+
+    if (!allDataReady) {
+      console.log(`   ⏳ MACD: Data loading for ${symbol} [${pendingTimeframes.join(', ')}] — skipping this tick`);
+      return null;
+    }
+
+    for (const timeframe of timeframes) {
+      const data = macdValues.get(timeframe);
+      const { fastEMA, slowEMA, prevFastEMA, prevSlowEMA } = data;
+
+      let conditionMet = false;
+
+      switch (condition) {
+        case "ABOVE":
+          conditionMet = fastEMA > slowEMA;
+          break;
+        case "BELOW":
+          conditionMet = fastEMA < slowEMA;
+          break;
+        case "CROSSING_UP":
+          conditionMet = prevFastEMA <= prevSlowEMA && fastEMA > slowEMA;
+          break;
+        case "CROSSING_DOWN":
+          conditionMet = prevFastEMA >= prevSlowEMA && fastEMA < slowEMA;
+          break;
+        default:
+          conditionMet = false;
+      }
+
+      console.log(
+        `   ${conditionMet ? '✅' : '❌'} [${timeframe}] FastEMA: ${fastEMA.toFixed(6)} | SlowEMA: ${slowEMA.toFixed(6)} | Condition: ${condition}`
+      );
+
+      if (!conditionMet) {
+        console.log(`   ❌ MACD: Timeframe ${timeframe} FAILED ${condition}`);
+        return false;
+      }
+    }
+
+    console.log(`   🎉 MACD: All ${timeframes.length} timeframes PASSED ${condition}`);
+    return true;
+  }
+
+  // ==================== END MACD ====================
 
   async evaluateVolumeConditions(
     volumeConditions,

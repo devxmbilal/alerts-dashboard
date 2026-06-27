@@ -57,6 +57,7 @@ export async function POST(request) {
             alertCount: { enabled: false },
             candle: { enabled: false, timeframes: [] },
             rsiRange: { enabled: false, timeframes: [] },
+            macd: { enabled: false, timeframes: [] },
             volume: { enabled: false, timeframes: [] },
             minDaily: { enabled: false },
         };
@@ -93,6 +94,16 @@ export async function POST(request) {
                 level: conditions.rsiRange.level,
                 period: conditions.rsiRange.period,
                 timeframes: conditions.rsiRange.timeframes || [],
+            };
+        }
+
+        if (conditions.macd) {
+            conditionData.macd = {
+                enabled: true,
+                condition: conditions.macd.condition,
+                fastPeriod: conditions.macd.fastPeriod,
+                slowPeriod: conditions.macd.slowPeriod,
+                timeframes: conditions.macd.timeframes || [],
             };
         }
 

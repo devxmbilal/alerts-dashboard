@@ -34,6 +34,14 @@ const conditionSchema = new mongoose.Schema(
             period: { type: String },
             timeframes: [{ type: String }],
         },
+        // MACD Condition (Fast EMA vs Slow EMA)
+        macd: {
+            enabled: { type: Boolean, default: false },
+            condition: { type: String }, // ABOVE, BELOW, CROSSING_UP, CROSSING_DOWN
+            fastPeriod: { type: String },
+            slowPeriod: { type: String },
+            timeframes: [{ type: String }],
+        },
         // Volume Condition
         volume: {
             enabled: { type: Boolean, default: false },

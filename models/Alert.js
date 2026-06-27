@@ -67,6 +67,21 @@ const alertSchema = new mongoose.Schema(
           default: "ABOVE",
         },
       },
+      macd: {
+        timeframes: [String],
+        fastPeriod: {
+          type: String,
+          default: "12",
+        },
+        slowPeriod: {
+          type: String,
+          default: "26",
+        },
+        condition: {
+          type: String,
+          default: "ABOVE",
+        },
+      },
       volume: {
         timeframes: [String],
         condition: {

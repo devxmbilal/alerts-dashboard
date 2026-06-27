@@ -135,6 +135,7 @@ const FilterSidebar = forwardRef(
       // Technical filters
       candle: {},
       rsiRange: {},
+      macd: {},
       volume: {},
     });
 
@@ -251,6 +252,16 @@ const FilterSidebar = forwardRef(
                 loadedFilters.rsiRange.period = saved.rsiRange.period || 14;
                 loadedFilters.rsiRange.level = saved.rsiRange.level || 50;
                 loadedFilters.rsiRange.condition = saved.rsiRange.condition || "ABOVE";
+              }
+
+              // MACD
+              if (saved.macd?.enabled && saved.macd?.timeframes?.length > 0) {
+                saved.macd.timeframes.forEach(tf => {
+                  loadedFilters.macd[tf] = true;
+                });
+                loadedFilters.macd.fastPeriod = saved.macd.fastPeriod || "12";
+                loadedFilters.macd.slowPeriod = saved.macd.slowPeriod || "26";
+                loadedFilters.macd.condition = saved.macd.condition || "ABOVE";
               }
 
               // Volume
@@ -401,6 +412,9 @@ const FilterSidebar = forwardRef(
         const hasRsiRange = Object.values(filters.rsiRange).some(
           (value) => value === true
         );
+        const hasMacd = filters.macd && Object.values(filters.macd).some(
+          (value) => value === true
+        );
         const hasVolume = Object.values(filters.volume).some(
           (value) => value === true
         );
@@ -443,6 +457,20 @@ const FilterSidebar = forwardRef(
             period: filters.rsiRange.period || "14",
             level: filters.rsiRange.level, // No default - user must set it
             condition: filters.rsiRange.condition || "ABOVE",
+          };
+        }
+
+        if (hasMacd) {
+          const macdTimeframes = Object.keys(filters.macd).filter(
+            (key) =>
+              !["fastPeriod", "slowPeriod", "condition"].includes(key) &&
+              filters.macd[key] === true
+          );
+          alertConditions.macd = {
+            timeframes: macdTimeframes,
+            fastPeriod: filters.macd.fastPeriod || "12",
+            slowPeriod: filters.macd.slowPeriod || "26",
+            condition: filters.macd.condition || "ABOVE",
           };
         }
 
@@ -682,6 +710,24 @@ const FilterSidebar = forwardRef(
 
     // RSI Range condition options - matching the image
     const rsiConditionOptions = [
+      { value: "ABOVE", label: "ABOVE" },
+      { value: "BELOW", label: "BELOW" },
+      { value: "CROSSING_UP", label: "CROSSING UP" },
+      { value: "CROSSING_DOWN", label: "CROSSING DOWN" },
+    ];
+
+    // MACD timeframe options
+    const macdTimeframeOptions = [
+      { value: "5MIN", label: "5MIN" },
+      { value: "15MIN", label: "15MIN" },
+      { value: "1HR", label: "1HR" },
+      { value: "4HR", label: "4HR" },
+      { value: "12HR", label: "12HR" },
+      { value: "D", label: "D" },
+    ];
+
+    // MACD condition options
+    const macdConditionOptions = [
       { value: "ABOVE", label: "ABOVE" },
       { value: "BELOW", label: "BELOW" },
       { value: "CROSSING_UP", label: "CROSSING UP" },
@@ -1077,6 +1123,99 @@ const FilterSidebar = forwardRef(
                 }
               >
                 {rsiConditionOptions.map((option) => (
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuItem>
+                ))}
+              </CustomTextField>
+            </AccordionDetails>
+          </DarkAccordion>
+
+          {/* MACD Filter */}
+          <DarkAccordion>
+            <AccordionSummary
+              expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
+            >
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <ShowChartIcon sx={{ color: "#ff9800" }} />
+                <Typography sx={{ color: "text.primary" }}>MACD</Typography>
+              </Box>
+            </AccordionSummary>
+            <AccordionDetails>
+              {/* Timeframe checkboxes */}
+              <Grid container spacing={1} sx={{ mb: 2 }}>
+                {macdTimeframeOptions.map((option) => (
+                  <Grid item xs={4} key={option.value}>
+                    <FormControlLabel
+                      control={
+                        <CustomCheckbox
+                          checked={filters.macd[option.value] || false}
+                          onChange={() =>
+                            handleCheckboxChange("macd", option.value)
+                          }
+                          size="small"
+                        />
+                      }
+                      label={option.label}
+                      sx={{
+                        color: "text.primary",
+                        "& .MuiTypography-root": {
+                          fontSize: "14px",
+                        },
+                      }}
+                    />
+                  </Grid>
+                ))}
+              </Grid>
+
+              {/* Input fields */}
+              <Grid container spacing={1} sx={{ mb: 2 }}>
+                <Grid item xs={6}>
+                  <CustomTextField
+                    fullWidth
+                    size="small"
+                    type="number"
+                    label="Fast Period"
+                    value={filters.macd.fastPeriod || ""}
+                    onChange={(e) =>
+                      handleInputChange("macd", "fastPeriod", e.target.value)
+                    }
+                    inputProps={{ min: 1, max: 200 }}
+                    InputLabelProps={{ shrink: true }}
+                    placeholder="12"
+                  />
+                </Grid>
+                <Grid item xs={6}>
+                  <CustomTextField
+                    fullWidth
+                    size="small"
+                    type="number"
+                    label="Slow Period"
+                    value={filters.macd.slowPeriod || ""}
+                    onChange={(e) =>
+                      handleInputChange("macd", "slowPeriod", e.target.value)
+                    }
+                    inputProps={{ min: 1, max: 200 }}
+                    InputLabelProps={{ shrink: true }}
+                    placeholder="26"
+                  />
+                </Grid>
+              </Grid>
+
+              {/* Condition dropdown */}
+              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+                Condition:
+              </Typography>
+              <CustomTextField
+                select
+                fullWidth
+                size="small"
+                value={filters.macd.condition || "ABOVE"}
+                onChange={(e) =>
+                  handleInputChange("macd", "condition", e.target.value)
+                }
+              >
+                {macdConditionOptions.map((option) => (
                   <MenuItem key={option.value} value={option.value}>
                     {option.label}
                   </MenuItem>
