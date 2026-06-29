@@ -162,6 +162,7 @@ const FilterSidebar = forwardRef(
           alertCount: {},
           candle: {},
           rsiRange: {},
+          macd: {},
           volume: {},
         });
 
@@ -212,6 +213,7 @@ const FilterSidebar = forwardRef(
                 alertCount: {},
                 candle: {},
                 rsiRange: {},
+                macd: {},
                 volume: {},
               };
 
@@ -596,6 +598,7 @@ const FilterSidebar = forwardRef(
             alertCount: {},
             candle: {},
             rsiRange: {},
+            macd: {},
             volume: {},
           });
 
