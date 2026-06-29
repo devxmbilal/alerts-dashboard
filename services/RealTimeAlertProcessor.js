@@ -3592,16 +3592,21 @@ class RealTimeAlertProcessor {
     return { fastEMA, slowEMA, prevFastEMA, prevSlowEMA };
   }
 
-  async getMACD(symbol, timeframe, fastPeriod = 12, slowPeriod = 26) {
+  async getMACD(symbol, timeframe, fastPeriod = 12, slowPeriod = 26, currentPrice = null) {
     const key = `${symbol}_${timeframe}_${fastPeriod}_${slowPeriod}`;
 
-    // Check in-memory cache
     if (!this.macdData) this.macdData = new Map();
     const cached = this.macdData.get(key);
     const timeframeMs = this.getTimeframeMs(timeframe);
-    const cacheTTL = Math.max(timeframeMs / 2, 10000);
 
-    if (cached && (Date.now() - cached.timestamp) < cacheTTL) {
+    // Invalidate cache at candle boundaries — MACD crossovers are timing-sensitive
+    const currentCandleStart = Math.floor(Date.now() / timeframeMs) * timeframeMs;
+    const cacheFromSameCandle = cached && cached.candleStart === currentCandleStart;
+
+    // Short cache TTL: max 5 seconds (not half-timeframe like RSI)
+    // MACD crossovers need fresh calculations on every tick near boundaries
+    const cacheTTL = 5000;
+    if (cached && cacheFromSameCandle && (Date.now() - cached.timestamp) < cacheTTL) {
       return cached;
     }
 
@@ -3609,8 +3614,9 @@ class RealTimeAlertProcessor {
     const historyKey = `${symbol}_${timeframe}`;
     let closes = this.rsiHistory ? this.rsiHistory.get(historyKey) : null;
 
-    if (!closes || closes.length < slowPeriod + 1) {
-      // Queue background fetch (reuse RSI queue system)
+    // Require extra history for EMA warmup (2x slowPeriod minimum)
+    const minRequired = Math.max(slowPeriod * 2, slowPeriod + 10);
+    if (!closes || closes.length < minRequired) {
       const alreadyQueued = this.rsiQueue.some(item => item.key === historyKey);
       if (!alreadyQueued && this.rsiQueue.length < 2000) {
         this.queueRsiHistoryFetch(symbol, timeframe, slowPeriod);
@@ -3619,10 +3625,15 @@ class RealTimeAlertProcessor {
     }
 
     // Add current live price for real-time calculation
-    const livePrice = this.lastPrices ? this.lastPrices.get(symbol) : null;
+    // Use passed priceData first, then fall back to livePrices cache
+    let livePrice = currentPrice;
+    if (!livePrice && this.livePrices && this.livePrices[symbol]) {
+      livePrice = parseFloat(this.livePrices[symbol].price);
+    }
+
     let closesForCalc = [...closes];
-    if (livePrice) {
-      closesForCalc.push(parseFloat(livePrice));
+    if (livePrice && !isNaN(livePrice)) {
+      closesForCalc.push(livePrice);
     }
 
     const result = this.computeMACDFromCloses(closesForCalc, fastPeriod, slowPeriod);
@@ -3630,6 +3641,7 @@ class RealTimeAlertProcessor {
 
     const macdResult = {
       ...result,
+      candleStart: currentCandleStart,
       timestamp: Date.now(),
     };
 
@@ -3642,7 +3654,10 @@ class RealTimeAlertProcessor {
     const fast = parseInt(fastPeriod) || 12;
     const slow = parseInt(slowPeriod) || 26;
 
-    console.log(`📊 MACD Check: ${symbol} | Condition: ${condition} | Fast: ${fast} | Slow: ${slow}`);
+    // Extract current price from priceData for real-time MACD calculation
+    const currentPrice = priceData ? parseFloat(priceData.price || priceData.c || 0) : null;
+
+    console.log(`📊 MACD Check: ${symbol} | Condition: ${condition} | Fast: ${fast} | Slow: ${slow} | Price: ${currentPrice}`);
     console.log(`   🔍 Checking ${timeframes.length} timeframes (ALL must pass)`);
 
     let allDataReady = true;
@@ -3650,7 +3665,7 @@ class RealTimeAlertProcessor {
     const macdValues = new Map();
 
     for (const timeframe of timeframes) {
-      const macdData = await this.getMACD(symbol, timeframe, fast, slow);
+      const macdData = await this.getMACD(symbol, timeframe, fast, slow, currentPrice);
       if (!macdData) {
         allDataReady = false;
         pendingTimeframes.push(timeframe);
