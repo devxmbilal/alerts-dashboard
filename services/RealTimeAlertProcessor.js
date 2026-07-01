@@ -1532,7 +1532,7 @@ class RealTimeAlertProcessor {
             alert.symbol
           );
           if (macdMatch === null) {
-            return { passed: true, reason: "MACD data loading — skipped this tick" };
+            return { passed: false, reason: "MACD data loading — blocked until ready" };
           }
           return {
             passed: macdMatch,
@@ -2340,7 +2340,7 @@ class RealTimeAlertProcessor {
           priceData,
           alert.symbol
         );
-        if (macdMatch === false) {
+        if (macdMatch === false || macdMatch === null) {
           conditionsMet = false;
         }
       }
@@ -3614,8 +3614,8 @@ class RealTimeAlertProcessor {
     const historyKey = `${symbol}_${timeframe}`;
     let closes = this.rsiHistory ? this.rsiHistory.get(historyKey) : null;
 
-    // Require extra history for EMA warmup (2x slowPeriod minimum)
-    const minRequired = Math.max(slowPeriod * 2, slowPeriod + 10);
+    // Require extra history for EMA warmup (need 200+ candles for accurate convergence)
+    const minRequired = Math.max(slowPeriod * 8, 200);
     if (!closes || closes.length < minRequired) {
       const alreadyQueued = this.rsiQueue.some(item => item.key === historyKey);
       if (!alreadyQueued && this.rsiQueue.length < 2000) {
@@ -3632,8 +3632,9 @@ class RealTimeAlertProcessor {
     }
 
     let closesForCalc = [...closes];
-    if (livePrice && !isNaN(livePrice)) {
-      closesForCalc.push(livePrice);
+    if (livePrice && !isNaN(livePrice) && closesForCalc.length > 0) {
+      // OVERWRITE the last candle (which is the ongoing/forming candle) instead of pushing a phantom extra candle
+      closesForCalc[closesForCalc.length - 1] = livePrice;
     }
 
     const result = this.computeMACDFromCloses(closesForCalc, fastPeriod, slowPeriod);
