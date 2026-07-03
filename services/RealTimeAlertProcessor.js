@@ -3565,31 +3565,58 @@ class RealTimeAlertProcessor {
 
   // ==================== MACD (Fast EMA vs Slow EMA) ====================
 
-  computeEMA(closes, period) {
-    if (!closes || closes.length < period) return null;
+  computeEMAArray(values, period) {
+    if (!values || values.length < period) return null;
     const multiplier = 2 / (period + 1);
-    let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
-    for (let i = period; i < closes.length; i++) {
-      ema = (closes[i] - ema) * multiplier + ema;
+    const emaArray = new Array(values.length).fill(null);
+    
+    // SMA for the first valid period
+    let ema = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    emaArray[period - 1] = ema;
+    
+    // EMA for the rest of the array
+    for (let i = period; i < values.length; i++) {
+      ema = (values[i] - ema) * multiplier + ema;
+      emaArray[i] = ema;
     }
-    return ema;
+    return emaArray;
   }
 
-  computeMACDFromCloses(closes, fastPeriod, slowPeriod) {
-    if (!closes || closes.length < slowPeriod + 1) return null;
-    const allCloses = closes;
-    const allButLast = closes.slice(0, -1);
-
-    const fastEMA = this.computeEMA(allCloses, fastPeriod);
-    const slowEMA = this.computeEMA(allCloses, slowPeriod);
-    const prevFastEMA = this.computeEMA(allButLast, fastPeriod);
-    const prevSlowEMA = this.computeEMA(allButLast, slowPeriod);
-
-    if (fastEMA === null || slowEMA === null || prevFastEMA === null || prevSlowEMA === null) {
-      return null;
+  computeMACDFromCloses(closes, fastPeriod, slowPeriod, signalPeriod = 9) {
+    if (!closes || closes.length < slowPeriod + signalPeriod) return null;
+    
+    // 1. Calculate Fast and Slow EMAs for the entire closes array
+    const fastEMAs = this.computeEMAArray(closes, fastPeriod);
+    const slowEMAs = this.computeEMAArray(closes, slowPeriod);
+    
+    if (!fastEMAs || !slowEMAs) return null;
+    
+    // 2. Calculate the MACD Line array (Fast EMA - Slow EMA)
+    const validMacdValues = [];
+    const startIndex = slowPeriod - 1; // Index where slowEMA starts having values
+    
+    for (let i = startIndex; i < closes.length; i++) {
+      validMacdValues.push(fastEMAs[i] - slowEMAs[i]);
     }
-
-    return { fastEMA, slowEMA, prevFastEMA, prevSlowEMA };
+    
+    // 3. Calculate Signal Line (EMA of MACD Line)
+    const signalEMAs = this.computeEMAArray(validMacdValues, signalPeriod);
+    
+    if (!signalEMAs) return null;
+    
+    // 4. Get the current and previous values
+    const currentMacdLine = validMacdValues[validMacdValues.length - 1];
+    const currentSignalLine = signalEMAs[signalEMAs.length - 1];
+    
+    const prevMacdLine = validMacdValues[validMacdValues.length - 2];
+    const prevSignalLine = signalEMAs[signalEMAs.length - 2];
+    
+    return {
+      macdLine: currentMacdLine,
+      signalLine: currentSignalLine,
+      prevMacdLine: prevMacdLine,
+      prevSignalLine: prevSignalLine
+    };
   }
 
   async getMACD(symbol, timeframe, fastPeriod = 12, slowPeriod = 26, currentPrice = null) {
@@ -3682,29 +3709,29 @@ class RealTimeAlertProcessor {
 
     for (const timeframe of timeframes) {
       const data = macdValues.get(timeframe);
-      const { fastEMA, slowEMA, prevFastEMA, prevSlowEMA } = data;
+      const { macdLine, signalLine, prevMacdLine, prevSignalLine } = data;
 
       let conditionMet = false;
 
       switch (condition) {
         case "ABOVE":
-          conditionMet = fastEMA > slowEMA;
+          conditionMet = macdLine > signalLine;
           break;
         case "BELOW":
-          conditionMet = fastEMA < slowEMA;
+          conditionMet = macdLine < signalLine;
           break;
         case "CROSSING_UP":
-          conditionMet = prevFastEMA <= prevSlowEMA && fastEMA > slowEMA;
+          conditionMet = prevMacdLine <= prevSignalLine && macdLine > signalLine;
           break;
         case "CROSSING_DOWN":
-          conditionMet = prevFastEMA >= prevSlowEMA && fastEMA < slowEMA;
+          conditionMet = prevMacdLine >= prevSignalLine && macdLine < signalLine;
           break;
         default:
           conditionMet = false;
       }
 
       console.log(
-        `   ${conditionMet ? '✅' : '❌'} [${timeframe}] FastEMA: ${fastEMA.toFixed(6)} | SlowEMA: ${slowEMA.toFixed(6)} | Condition: ${condition}`
+        `   ${conditionMet ? '✅' : '❌'} [${timeframe}] MACD: ${macdLine.toFixed(6)} | Signal: ${signalLine.toFixed(6)} | Condition: ${condition}`
       );
 
       if (!conditionMet) {
