@@ -3623,6 +3623,8 @@ class RealTimeAlertProcessor {
     const key = `${symbol}_${timeframe}_${fastPeriod}_${slowPeriod}`;
 
     if (!this.macdData) this.macdData = new Map();
+    if (!this.macdHistory) this.macdHistory = new Map();
+
     const cached = this.macdData.get(key);
     const timeframeMs = this.getTimeframeMs(timeframe);
 
@@ -3630,29 +3632,63 @@ class RealTimeAlertProcessor {
     const currentCandleStart = Math.floor(Date.now() / timeframeMs) * timeframeMs;
     const cacheFromSameCandle = cached && cached.candleStart === currentCandleStart;
 
-    // Short cache TTL: max 5 seconds (not half-timeframe like RSI)
-    // MACD crossovers need fresh calculations on every tick near boundaries
+    // Short cache TTL: max 5 seconds
     const cacheTTL = 5000;
     if (cached && cacheFromSameCandle && (Date.now() - cached.timestamp) < cacheTTL) {
       return cached;
     }
 
-    // Reuse RSI history data (same closes needed)
+    // ═══════════════════════════════════════════════════════════════
+    // MACD needs FRESH candle data — NOT the stale rsiHistory cache.
+    // rsiHistory is fetched once and never refreshed, so after a few
+    // candles it becomes stale and EMAs diverge from TradingView.
+    // We fetch fresh klines directly and cache per-candle-boundary.
+    // ═══════════════════════════════════════════════════════════════
     const historyKey = `${symbol}_${timeframe}`;
-    let closes = this.rsiHistory ? this.rsiHistory.get(historyKey) : null;
+    let historyEntry = this.macdHistory.get(historyKey);
 
-    // Require extra history for EMA warmup (need 200+ candles for accurate convergence)
-    const minRequired = Math.max(slowPeriod * 8, 200);
-    if (!closes || closes.length < minRequired) {
-      const alreadyQueued = this.rsiQueue.some(item => item.key === historyKey);
-      if (!alreadyQueued && this.rsiQueue.length < 2000) {
-        this.queueRsiHistoryFetch(symbol, timeframe, slowPeriod);
+    // Re-fetch klines if: no data, or a new candle has started since last fetch
+    const needsFresh = !historyEntry || historyEntry.candleStart !== currentCandleStart;
+
+    if (needsFresh) {
+      // Check API ban
+      if (Date.now() < this.apiBanUntil) return null;
+
+      try {
+        const binanceInterval = this.getBinanceInterval(timeframe);
+        const limit = Math.max(slowPeriod * 8, 250);
+        const response = await fetch(
+          `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`
+        );
+
+        if (response.status === 418 || response.status === 429) {
+          this.apiBanUntil = Date.now() + 120 * 1000;
+          return null;
+        }
+
+        if (!response.ok) return null;
+
+        const klines = await response.json();
+        const closes = klines.map(k => parseFloat(k[4]));
+
+        historyEntry = {
+          closes,
+          candleStart: currentCandleStart,
+          fetchedAt: Date.now(),
+        };
+        this.macdHistory.set(historyKey, historyEntry);
+      } catch (err) {
+        console.error(`❌ MACD klines fetch failed for ${symbol} ${timeframe}: ${err.message}`);
+        // Fall back to existing entry if available
+        if (!historyEntry) return null;
       }
-      return null;
     }
 
-    // Add current live price for real-time calculation
-    // Use passed priceData first, then fall back to livePrices cache
+    let closes = historyEntry.closes;
+    const minRequired = Math.max(slowPeriod * 8, 200);
+    if (!closes || closes.length < minRequired) return null;
+
+    // Overwrite the last candle (the forming one) with the live price
     let livePrice = currentPrice;
     if (!livePrice && this.livePrices && this.livePrices[symbol]) {
       livePrice = parseFloat(this.livePrices[symbol].price);
@@ -3660,7 +3696,6 @@ class RealTimeAlertProcessor {
 
     let closesForCalc = [...closes];
     if (livePrice && !isNaN(livePrice) && closesForCalc.length > 0) {
-      // OVERWRITE the last candle (which is the ongoing/forming candle) instead of pushing a phantom extra candle
       closesForCalc[closesForCalc.length - 1] = livePrice;
     }
 
