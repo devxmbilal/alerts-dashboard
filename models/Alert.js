@@ -21,11 +21,9 @@ const alertSchema = new mongoose.Schema(
       changePercent: {
         timeframe: {
           type: String,
-          required: true,
         },
         percentage: {
           type: String,
-          required: true,
         },
         direction: {
           type: String,
