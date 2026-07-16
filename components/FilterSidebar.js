@@ -344,21 +344,25 @@ const FilterSidebar = forwardRef(
         return;
       }
 
-      // Check if Min Daily and Change % conditions are set (required)
-      const hasMinDaily = Object.values(filters.minDaily).some(
-        (value) => value === true
-      );
-      const hasChangePercent =
-        Object.values(filters.changePercent).some((value) => value === true) &&
-        filters.changePercent.percentage;
+      // Check for all condition selections
+      const hasMinDaily = Object.values(filters.minDaily).some((value) => value === true);
+      const hasChangePercent = Object.values(filters.changePercent).some((value) => value === true) && filters.changePercent.percentage;
+      const hasAlertCount = Object.values(filters.alertCount).some((value) => value === true);
+      const hasCandle = Object.values(filters.candle).some((value) => value === true);
+      const hasRsiRange = Object.values(filters.rsiRange).some((value) => value === true);
+      const hasMacd = filters.macd && Object.values(filters.macd).some((value) => value === true);
+      const hasVolume = Object.values(filters.volume).some((value) => value === true);
 
-      if (!hasMinDaily || !hasChangePercent) {
-        let missingConditions = [];
-        if (!hasMinDaily) missingConditions.push("Min Daily volume");
-        if (!hasChangePercent)
-          missingConditions.push("Change % timeframe and percentage");
+      // Validation 1: Min Daily is required
+      if (!hasMinDaily) {
+        setErrorMessage("Please set: Min Daily volume");
+        setIsCreating(false);
+        return;
+      }
 
-        setErrorMessage(`Please set: ${missingConditions.join(", ")}`);
+      // Validation 2: At least one other condition must be set
+      if (!hasChangePercent && !hasAlertCount && !hasCandle && !hasRsiRange && !hasMacd && !hasVolume) {
+        setErrorMessage("Please set at least one condition (Change %, MACD, Volume, etc.)");
         setIsCreating(false);
         return;
       }
@@ -373,53 +377,37 @@ const FilterSidebar = forwardRef(
           return;
         }
 
-        // Create alert conditions - Min Daily and Change % are mandatory
         const minDailyKey = Object.keys(filters.minDaily).find(
           (key) => filters.minDaily[key] === true
         );
-        const changePercentKey = Object.keys(filters.changePercent).find(
-          (key) => key !== "percentage" && filters.changePercent[key] === true
-        );
 
-        // Validate that required conditions are properly set
         if (!minDailyKey) {
           setErrorMessage("Please select a Min Daily value");
           setIsCreating(false);
           return;
         }
 
-        if (!changePercentKey || !filters.changePercent.percentage) {
-          setErrorMessage("Please set Change % timeframe and percentage");
-          setIsCreating(false);
-          return;
-        }
-
         const alertConditions = {
-          // Basic conditions (required)
           minDaily: minDailyKey,
-          changePercent: {
-            timeframe: changePercentKey,
-            percentage: filters.changePercent.percentage,
-            direction: filters.changePercent.direction || "increase", // Include direction
-          },
         };
 
-        // Check for optional conditions
-        const hasAlertCount = Object.values(filters.alertCount).some(
-          (value) => value === true
-        );
-        const hasCandle = Object.values(filters.candle).some(
-          (value) => value === true
-        );
-        const hasRsiRange = Object.values(filters.rsiRange).some(
-          (value) => value === true
-        );
-        const hasMacd = filters.macd && Object.values(filters.macd).some(
-          (value) => value === true
-        );
-        const hasVolume = Object.values(filters.volume).some(
-          (value) => value === true
-        );
+        if (hasChangePercent) {
+          const changePercentKey = Object.keys(filters.changePercent).find(
+            (key) => key !== "percentage" && filters.changePercent[key] === true
+          );
+          if (!changePercentKey || !filters.changePercent.percentage) {
+            setErrorMessage("Please set Change % timeframe and percentage");
+            setIsCreating(false);
+            return;
+          }
+          alertConditions.changePercent = {
+            timeframe: changePercentKey,
+            percentage: filters.changePercent.percentage,
+            direction: filters.changePercent.direction || "increase",
+          };
+        }
+
+        // Optional conditions are evaluated below
 
         if (hasAlertCount) {
           const alertCountKey = Object.keys(filters.alertCount).find(

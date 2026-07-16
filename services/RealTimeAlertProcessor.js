@@ -3688,22 +3688,47 @@ class RealTimeAlertProcessor {
     const minRequired = Math.max(slowPeriod * 8, 200);
     if (!closes || closes.length < minRequired) return null;
 
-    // Overwrite the last candle (the forming one) with the live price
+    // ═══════════════════════════════════════════════════════════════
+    // FIX: Compute MACD TWO ways:
+    //   1. closedResult — from ONLY closed candles (drop the last/forming candle)
+    //      Used for CROSSING_UP / CROSSING_DOWN (matches TradingView behavior)
+    //   2. liveResult — with live price injected into the forming candle
+    //      Used for ABOVE / BELOW (real-time state check)
+    //
+    // The last kline from Binance is always the still-forming candle.
+    // Using it for crossover detection causes phantom crosses when
+    // the live price briefly crosses then reverts before candle close.
+    // ═══════════════════════════════════════════════════════════════
+
+    // 1. CLOSED-ONLY: exclude the last (forming) candle
+    const closedCloses = closes.slice(0, -1);
+    const closedResult = this.computeMACDFromCloses(closedCloses, fastPeriod, slowPeriod);
+
+    // 2. WITH LIVE PRICE: replace forming candle close with live price
     let livePrice = currentPrice;
     if (!livePrice && this.livePrices && this.livePrices[symbol]) {
       livePrice = parseFloat(this.livePrices[symbol].price);
     }
 
-    let closesForCalc = [...closes];
-    if (livePrice && !isNaN(livePrice) && closesForCalc.length > 0) {
-      closesForCalc[closesForCalc.length - 1] = livePrice;
+    let closesForLive = [...closes];
+    if (livePrice && !isNaN(livePrice) && closesForLive.length > 0) {
+      closesForLive[closesForLive.length - 1] = livePrice;
     }
+    const liveResult = this.computeMACDFromCloses(closesForLive, fastPeriod, slowPeriod);
 
-    const result = this.computeMACDFromCloses(closesForCalc, fastPeriod, slowPeriod);
-    if (!result) return null;
+    if (!closedResult && !liveResult) return null;
 
     const macdResult = {
-      ...result,
+      // Live MACD values (for ABOVE/BELOW — includes forming candle with live price)
+      macdLine: liveResult ? liveResult.macdLine : (closedResult ? closedResult.macdLine : 0),
+      signalLine: liveResult ? liveResult.signalLine : (closedResult ? closedResult.signalLine : 0),
+      prevMacdLine: liveResult ? liveResult.prevMacdLine : (closedResult ? closedResult.prevMacdLine : 0),
+      prevSignalLine: liveResult ? liveResult.prevSignalLine : (closedResult ? closedResult.prevSignalLine : 0),
+      // Closed-candle MACD values (for CROSSING — only uses confirmed closed candles)
+      closedMacdLine: closedResult ? closedResult.macdLine : 0,
+      closedSignalLine: closedResult ? closedResult.signalLine : 0,
+      closedPrevMacdLine: closedResult ? closedResult.prevMacdLine : 0,
+      closedPrevSignalLine: closedResult ? closedResult.prevSignalLine : 0,
       candleStart: currentCandleStart,
       timestamp: Date.now(),
     };
@@ -3744,35 +3769,51 @@ class RealTimeAlertProcessor {
 
     for (const timeframe of timeframes) {
       const data = macdValues.get(timeframe);
+      // Live values (includes forming candle with live price) — for ABOVE/BELOW
       const { macdLine, signalLine, prevMacdLine, prevSignalLine } = data;
+      // Closed-candle values (only confirmed closed candles) — for CROSSING
+      const {
+        closedMacdLine, closedSignalLine,
+        closedPrevMacdLine, closedPrevSignalLine
+      } = data;
 
       let conditionMet = false;
 
       switch (condition) {
         case "ABOVE":
+          // Use LIVE values — real-time check against forming candle
           conditionMet = macdLine > signalLine;
           break;
         case "BELOW":
+          // Use LIVE values — real-time check against forming candle
           conditionMet = macdLine < signalLine;
           break;
         case "CROSSING_UP":
-          conditionMet = prevMacdLine <= prevSignalLine && macdLine > signalLine;
+          // Use CLOSED-CANDLE values only — crossover must be confirmed
+          // by a closed candle, matching TradingView behavior.
+          // prev = second-to-last closed candle, current = last closed candle
+          conditionMet = closedPrevMacdLine <= closedPrevSignalLine && closedMacdLine > closedSignalLine;
           break;
         case "CROSSING_DOWN":
-          conditionMet = prevMacdLine >= prevSignalLine && macdLine < signalLine;
+          // Use CLOSED-CANDLE values only — crossover must be confirmed
+          conditionMet = closedPrevMacdLine >= closedPrevSignalLine && closedMacdLine < closedSignalLine;
           break;
         default:
           conditionMet = false;
       }
 
+      const isCrossing = condition === "CROSSING_UP" || condition === "CROSSING_DOWN";
+      const displayMacd = isCrossing ? closedMacdLine : macdLine;
+      const displaySignal = isCrossing ? closedSignalLine : signalLine;
       console.log(
-        `   ${conditionMet ? '✅' : '❌'} [${timeframe}] MACD: ${macdLine.toFixed(6)} | Signal: ${signalLine.toFixed(6)} | Condition: ${condition}`
+        `   ${conditionMet ? '✅' : '❌'} [${timeframe}] MACD: ${displayMacd.toFixed(6)} | Signal: ${displaySignal.toFixed(6)} | Condition: ${condition}${isCrossing ? ' (closed-candle)' : ' (live)'}`
       );
 
       if (!conditionMet) {
         console.log(`   ❌ MACD: Timeframe ${timeframe} FAILED ${condition}`);
         return false;
       }
+
     }
 
     console.log(`   🎉 MACD: All ${timeframes.length} timeframes PASSED ${condition}`);

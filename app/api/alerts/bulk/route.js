@@ -51,20 +51,32 @@ export async function POST(request) {
       );
     }
 
-    // Validate required conditions
-
-    if (
-      !conditions.minDaily ||
-      !conditions.changePercent?.timeframe ||
-      !conditions.changePercent?.percentage
-    ) {
+    // Validate: at least minDaily is required, other conditions are optional
+    if (!conditions.minDaily) {
       return NextResponse.json(
         {
-          error: "Min Daily and Change % conditions are required",
+          error: "Min Daily volume condition is required",
           details: {
             minDaily: conditions.minDaily,
-            changePercent: conditions.changePercent,
           },
+        },
+        { status: 400 }
+      );
+    }
+
+    // Ensure at least one additional filter condition is set
+    const hasChangePercent = conditions.changePercent?.timeframe && conditions.changePercent?.percentage;
+    const hasMACD = conditions.macd?.timeframes?.length > 0;
+    const hasVolume = conditions.volume?.timeframes?.length > 0;
+    const hasRSI = conditions.rsiRange?.timeframes?.length > 0;
+    const hasCandle = conditions.candle?.timeframes?.length > 0;
+    const hasAlertCount = conditions.alertCount?.timeframe;
+    const hasOpenInterest = conditions.openInterest?.timeframes?.length > 0;
+
+    if (!hasChangePercent && !hasMACD && !hasVolume && !hasRSI && !hasCandle && !hasAlertCount && !hasOpenInterest) {
+      return NextResponse.json(
+        {
+          error: "At least one filter condition (Change %, MACD, Volume, RSI, etc.) is required along with Min Daily",
         },
         { status: 400 }
       );
