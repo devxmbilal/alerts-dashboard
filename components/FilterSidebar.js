@@ -1122,8 +1122,10 @@ const FilterSidebar = forwardRef(
             </AccordionDetails>
           </DarkAccordion>
 
-          {/* MACD Filter */}
-          <DarkAccordion>
+          {false && (
+            <>
+              {/* MACD Filter */}
+              <DarkAccordion>
             <AccordionSummary
               expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
             >
@@ -1292,6 +1294,8 @@ const FilterSidebar = forwardRef(
               />
             </AccordionDetails>
           </DarkAccordion>
+            </>
+          )}
 
           {/* 🔥 UI FIX: Moved buttons here - after Volume accordion, inside filters area */}
           <Box sx={{ p: 1, mt: 2 }}>
