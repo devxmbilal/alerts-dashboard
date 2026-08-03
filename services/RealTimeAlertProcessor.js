@@ -2753,59 +2753,62 @@ class RealTimeAlertProcessor {
     }
   }
 
-  // 🛡️ SAFE RSI CALCULATION - Queue System to Prevent 418 Ban
   async calculateRSI(symbol, timeframe, period = 14) {
-    const key = `${symbol}_${timeframe}`;
+    const key = `${symbol}_${timeframe}_${period}`;
+    const timeframeMs = this.getTimeframeMs(timeframe);
+    const currentCandleStart = Math.floor(Date.now() / timeframeMs) * timeframeMs;
 
-    // Circuit breaker - check if we've had actual API failures
-    const failureKey = `rsi_failures_${key}`;
-    const failures = this.rsiFailures?.get(failureKey) || 0;
-    const lastFailureTime = this.rsiFailures?.get(`${failureKey}_time`) || 0;
-    const timeSinceLastFailure = Date.now() - lastFailureTime;
+    if (!this.rsiDataCache) this.rsiDataCache = new Map();
+    let historyEntry = this.rsiDataCache.get(key);
 
-    // Only block if we have real failures AND within 10 minute window
-    if (failures >= 5 && timeSinceLastFailure < 10 * 60 * 1000) {
-      return null;
-    } else if (failures >= 5 && timeSinceLastFailure >= 10 * 60 * 1000) {
-      // Reset after 10 minutes
-      this.rsiFailures.delete(failureKey);
-      this.rsiFailures.delete(`${failureKey}_time`);
-    }
+    // Re-fetch klines if: no data, or a new candle has started since last fetch
+    const needsFresh = !historyEntry || historyEntry.candleStart !== currentCandleStart;
 
-    // 1. Check if we have history for local calculation
-    let closes = this.rsiHistory.get(key);
+    if (needsFresh) {
+      if (Date.now() < this.apiBanUntil) return null; // API banned, skip
 
-    if (!closes || closes.length < period + 1) {
-      // Data missing -> Queue background fetch (but only if not already queued)
-      const alreadyQueued = this.rsiQueue.some(item => item.key === key);
-      if (!alreadyQueued && this.rsiQueue.length < 500) {
-        this.queueRsiHistoryFetch(symbol, timeframe, period);
+      try {
+        const binanceInterval = this.getBinanceInterval(timeframe);
+        const limit = Math.max(period * 10, 250); // Need enough candles for Wilder's Smoothing
+        const response = await fetch(
+          `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`
+        );
+
+        if (response.status === 418 || response.status === 429) {
+          this.apiBanUntil = Date.now() + 120 * 1000;
+          return null;
+        }
+
+        if (!response.ok) return null;
+
+        const klines = await response.json();
+        const closes = klines.map(k => parseFloat(k[4]));
+
+        historyEntry = {
+          closes,
+          candleStart: currentCandleStart,
+          fetchedAt: Date.now(),
+        };
+        this.rsiDataCache.set(key, historyEntry);
+      } catch (err) {
+        console.error(`❌ RSI klines fetch failed for ${symbol} ${timeframe}: ${err.message}`);
+        if (!historyEntry) return null;
       }
-
-      // ✅ FIX: Don't count as failure - data is just loading
-      // Return null immediately (alert will retry next tick)
-      return null;
     }
 
-    // 2. Add current live price for real-time RSI
+    let closes = historyEntry.closes;
+    if (!closes || closes.length < period + 1) return null;
+
+    // 2. Add current live price for real-time RSI (overwrite the forming candle)
     const livePrice = this.livePrices[symbol]?.price;
     let calculationCloses = [...closes];
 
     if (livePrice && calculationCloses.length > 0) {
-      // OVERWRITE the last candle's close (which is the ongoing candle) instead of pushing a new phantom candle
-      calculationCloses[calculationCloses.length - 1] = livePrice;
+      calculationCloses[calculationCloses.length - 1] = parseFloat(livePrice);
     }
 
-    // 3. Calculate RSI locally (no API call)
-    const rsi = this.computeRSILocally(calculationCloses, period);
-
-    // Reset failure count on success
-    if (rsi !== null && this.rsiFailures) {
-      this.rsiFailures.delete(failureKey);
-      this.rsiFailures.delete(`${failureKey}_time`);
-    }
-
-    return rsi;
+    // 3. Calculate RSI locally (Wilder's Smoothing)
+    return this.computeRSILocally(calculationCloses, period);
   }
 
   // Queue RSI history fetch (prevents multiple simultaneous API calls)
