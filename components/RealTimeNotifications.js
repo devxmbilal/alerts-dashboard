@@ -187,6 +187,11 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
           // Handle alert_triggered events from Redis via smooth staggered queue
           if (data.type === "alert_triggered") {
             const alertData = data.data || data;
+            console.log(`🚨 ALERT TRIGGERED (Queued for smooth display): ${alertData.symbol}`);
+            alertQueueRef.current.push(alertData);
+            processAlertQueue();
+
+            if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
               new Notification(`🚨 Alert Triggered: ${alertData.symbol}`, {
                 body: `Price: $${alertData.triggeredPrice} | Change: ${alertData.triggeredChange}%`,
                 icon: "/favicon.ico",
