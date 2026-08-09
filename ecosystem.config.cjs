@@ -13,7 +13,7 @@ module.exports = {
     {
       name: "alerts-dashboard",
       script: "node_modules/.bin/next",
-      args: "start -p 3000",
+      args: "start -p 3005",
       cwd: "/var/www/alerts-dashboard",
       instances: 1,
       autorestart: true,
@@ -22,7 +22,7 @@ module.exports = {
       env_file: ".env",
       env: {
         NODE_ENV: "production",
-        PORT: 3000,
+        PORT: 3005,
         LOG_LEVEL: "error", // Only log errors in production
       },
       // Wait for binance-worker to populate Redis before accepting requests
