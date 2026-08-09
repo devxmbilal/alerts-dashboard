@@ -34,12 +34,77 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
   const [isClearing, setIsClearing] = useState(false);
   const eventSourceRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
-  const onAlertTriggerRef = useRef(onAlertTrigger);
+  const alertQueueRef = useRef([]);
+  const isProcessingQueueRef = useRef(false);
+
+  // Smooth staggered queue processor for real-time alerts
+  const processAlertQueue = React.useCallback(() => {
+    if (isProcessingQueueRef.current || alertQueueRef.current.length === 0) {
+      return;
+    }
+
+    isProcessingQueueRef.current = true;
+    const alertData = alertQueueRef.current.shift();
+
+    const mappedAlert = {
+      id: alertData.alertId || alertData._id || `realtime_${Date.now()}_${Math.random()}`,
+      symbol: alertData.symbol,
+      targetValue:
+        alertData.targetValue ||
+        alertData.conditions?.changePercent?.percentage,
+      actualValue: alertData.actualValue || alertData.triggeredChange,
+      timeframe:
+        alertData.timeframe ||
+        alertData.conditions?.changePercent?.timeframe ||
+        "5MIN",
+      direction:
+        alertData.direction ||
+        alertData.conditions?.changePercent?.direction ||
+        "increase",
+      price: alertData.triggeredPrice || alertData.price,
+      baselinePrice: alertData.baselinePrice,
+      changeFromBaselinePercent: alertData.changeFromBaselinePercent,
+      volume: alertData.triggeredVolume || alertData.volume,
+      priceChangePercent:
+        alertData.triggeredChange || alertData.priceChangePercent,
+      triggeredAt: alertData.triggeredAt || new Date().toISOString(),
+      read: false,
+    };
+
+    // Add new alert to history smoothly
+    setAlertHistory((prev) => {
+      const newHistory = [mappedAlert, ...prev];
+      return newHistory.slice(0, 50);
+    });
+
+    // Update badge count
+    setNewAlertCount((prev) => prev + 1);
+
+    // Trigger chart switch if callback provided
+    if (onAlertTriggerRef.current && alertData.symbol) {
+      try {
+        onAlertTriggerRef.current({
+          symbol: alertData.symbol,
+          price: alertData.triggeredPrice,
+          priceChangePercent: alertData.triggeredChange,
+          conditions: alertData.conditions,
+          triggeredAt: alertData.triggeredAt,
+        });
+      } catch (callbackError) {
+        console.error("❌ Error in onAlertTrigger callback:", callbackError);
+      }
+    }
+
+    // Process next queued alert after 1.2s delay for smooth presentation
+    setTimeout(() => {
+      isProcessingQueueRef.current = false;
+      processAlertQueue();
+    }, 1200);
+  }, []);
 
   // Keep callback ref up to date
   useEffect(() => {
     onAlertTriggerRef.current = onAlertTrigger;
-    console.log("🔄 onAlertTrigger callback updated", typeof onAlertTrigger);
   }, [onAlertTrigger]);
 
   useEffect(() => {
@@ -119,89 +184,9 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
             return;
           }
 
-          // Handle alert_triggered events from Redis
+          // Handle alert_triggered events from Redis via smooth staggered queue
           if (data.type === "alert_triggered") {
             const alertData = data.data || data;
-            console.log(`🚨 ALERT TRIGGERED: ${alertData.symbol}`);
-
-            // Map alert data to history format
-            const mappedAlert = {
-              id:
-                alertData.alertId || alertData._id || `realtime_${Date.now()}`,
-              symbol: alertData.symbol,
-              targetValue:
-                alertData.targetValue ||
-                alertData.conditions?.changePercent?.percentage,
-              actualValue: alertData.actualValue || alertData.triggeredChange,
-              timeframe:
-                alertData.timeframe ||
-                alertData.conditions?.changePercent?.timeframe ||
-                "5MIN",
-              direction:
-                alertData.direction ||
-                alertData.conditions?.changePercent?.direction ||
-                "increase",
-              price: alertData.triggeredPrice || alertData.price,
-              baselinePrice: alertData.baselinePrice,
-              changeFromBaselinePercent: alertData.changeFromBaselinePercent,
-              volume: alertData.triggeredVolume || alertData.volume,
-              priceChangePercent:
-                alertData.triggeredChange || alertData.priceChangePercent,
-              triggeredAt: alertData.triggeredAt || new Date().toISOString(),
-              read: false,
-            };
-
-            // Add new alert to history
-            setAlertHistory((prev) => {
-              const newHistory = [mappedAlert, ...prev];
-              // Keep only last 50 alerts
-              return newHistory.slice(0, 50);
-            });
-
-            // Update new alert count for badge
-            setNewAlertCount((prev) => prev + 1);
-
-            // Show visual feedback for new alert
-            console.log(`🚨 NEW ALERT ADDED TO HISTORY: ${alertData.symbol}`);
-            console.log(`📊 Alert details:`, mappedAlert);
-
-            // Trigger chart switch if callback provided
-            if (onAlertTriggerRef.current && alertData.symbol) {
-              console.log(`🚨 TRIGGERING CHART SWITCH for ${alertData.symbol}`);
-              console.log("🔍 Alert data for chart switch:", {
-                symbol: alertData.symbol,
-                price: alertData.triggeredPrice,
-                priceChangePercent: alertData.triggeredChange,
-                conditions: alertData.conditions,
-                triggeredAt: alertData.triggeredAt,
-              });
-
-              try {
-                onAlertTriggerRef.current({
-                  symbol: alertData.symbol,
-                  price: alertData.triggeredPrice,
-                  priceChangePercent: alertData.triggeredChange,
-                  conditions: alertData.conditions,
-                  triggeredAt: alertData.triggeredAt,
-                });
-                console.log("✅ Chart switch callback executed successfully");
-              } catch (callbackError) {
-                console.error(
-                  "❌ Error in onAlertTrigger callback:",
-                  callbackError
-                );
-                console.error("❌ Callback error stack:", callbackError.stack);
-              }
-            } else {
-              console.warn("⚠️ Chart switch NOT triggered:", {
-                hasCallback: !!onAlertTriggerRef.current,
-                hasSymbol: !!alertData.symbol,
-                dataType: data.type,
-              });
-            }
-
-            // Show browser notification if permission granted
-            if (Notification.permission === "granted") {
               new Notification(`🚨 Alert Triggered: ${alertData.symbol}`, {
                 body: `Price: $${alertData.triggeredPrice} | Change: ${alertData.triggeredChange}%`,
                 icon: "/favicon.ico",
