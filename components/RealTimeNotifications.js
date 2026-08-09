@@ -36,6 +36,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
   const reconnectTimeoutRef = useRef(null);
   const alertQueueRef = useRef([]);
   const isProcessingQueueRef = useRef(false);
+  const onAlertTriggerRef = useRef(null);
 
   // Smooth staggered queue processor for real-time alerts
   const processAlertQueue = React.useCallback(() => {
