@@ -31,24 +31,39 @@ export async function GET(request) {
         port: process.env.REDIS_PORT || 6379,
       });
 
-      subscriber.subscribe("alert:triggers", (err) => {
+      // Subscribe to both alert channels for maximum compatibility
+      subscriber.subscribe(["alert:triggers", "alerts:stream"], (err) => {
         if (err) {
           console.error("❌ Redis subscription error:", err);
           return;
         }
-        console.log("✅ Subscribed to alert:triggers channel");
+        console.log("✅ Subscribed to alert channels (alert:triggers, alerts:stream)");
       });
 
       subscriber.on("message", (channel, message) => {
         try {
           const alertData = JSON.parse(message);
 
-          // Only send alerts for this user (compare as strings to handle ObjectId)
-          const alertUserId = String(alertData.userId || "");
-          const requestUserId = String(userId || "");
+          // Extract raw userId safely whether it's a string, ObjectId, or nested object
+          const rawAlertUserId = alertData.userId;
+          let alertUserIdStr = "";
+          if (rawAlertUserId) {
+            if (typeof rawAlertUserId === "object") {
+              alertUserIdStr = String(rawAlertUserId._id || rawAlertUserId.id || rawAlertUserId);
+            } else {
+              alertUserIdStr = String(rawAlertUserId);
+            }
+          }
+          const requestUserIdStr = String(userId || "");
 
-          if (alertUserId === requestUserId) {
-            console.log("🚨 Alert triggered for user:", userId, alertData);
+          // Send alert if: user IDs match, OR alertUserId is missing/invalid (broadcast)
+          const isUserMatch =
+            !alertUserIdStr ||
+            alertUserIdStr === "[object Object]" ||
+            alertUserIdStr === requestUserIdStr;
+
+          if (isUserMatch) {
+            console.log("🚨 Alert triggered for user stream:", userId, alertData.symbol);
 
             const data = JSON.stringify({
               type: "alert_triggered",
@@ -58,12 +73,11 @@ export async function GET(request) {
             controller.enqueue(encoder.encode(`data: ${data}\n\n`));
           } else {
             console.log(
-              `⚠️ Alert for different user (alert: ${alertUserId}, request: ${requestUserId})`
+              `⚠️ Alert for different user (alert: ${alertUserIdStr}, request: ${requestUserIdStr})`
             );
           }
         } catch (error) {
           console.error("❌ Error parsing alert message:", error);
-          console.error("❌ Message content:", message);
         }
       });
 
