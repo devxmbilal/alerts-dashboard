@@ -40,6 +40,7 @@ import {
   Snackbar,
   ToggleButton,
   ToggleButtonGroup,
+  Select,
 } from "@mui/material";
 import { styled } from "@mui/material/styles";
 import CheckIcon from "@mui/icons-material/Check";
@@ -1332,13 +1333,28 @@ const FilterSidebar = forwardRef(
               <Typography variant="body2" sx={{ color: "text.secondary", mt: 2, mb: 1 }}>
                 Divergence Condition:
               </Typography>
-              <CustomSelect
+              <Select
                 fullWidth
                 value={filters?.rsiDivergence?.condition || ""}
                 onChange={(e) =>
                   handleInputChange("rsiDivergence", "condition", e.target.value)
                 }
                 displayEmpty
+                sx={{
+                  color: "#fff",
+                  ".MuiOutlinedInput-notchedOutline": {
+                    borderColor: "#333",
+                  },
+                  "&.Mui-focused .MuiOutlinedInput-notchedOutline": {
+                    borderColor: "#00bfa5",
+                  },
+                  "&:hover .MuiOutlinedInput-notchedOutline": {
+                    borderColor: "#666",
+                  },
+                  ".MuiSvgIcon-root": {
+                    color: "#666",
+                  },
+                }}
                 MenuProps={{
                   PaperProps: {
                     sx: {
@@ -1372,7 +1388,7 @@ const FilterSidebar = forwardRef(
                 <MenuItem value="condition2">
                   2. If other conditions met at bearish divergences on current candle alert will not trigger
                 </MenuItem>
-              </CustomSelect>
+              </Select>
             </AccordionDetails>
           </DarkAccordion>
 
