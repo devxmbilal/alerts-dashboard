@@ -37,15 +37,8 @@ export async function POST(request) {
       userId: decoded.userId,
     }).select("_id");
 
-    // Remove all alerts from real-time monitoring first
+    // Remove all alerts from real-time monitoring via Redis Pub/Sub
     try {
-      const RealTimeAlertProcessor = (
-        await import("../../../../services/RealTimeAlertProcessor.js")
-      ).default;
-
-      for (const alert of alertsToDelete) {
-        await RealTimeAlertProcessor.removeAlert(alert._id.toString());
-      }
 
       // Publish Redis message for alerts cleared
       await AlertRedisService.publishAlertsCleared(decoded.userId);

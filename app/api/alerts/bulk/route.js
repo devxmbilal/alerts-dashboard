@@ -338,15 +338,8 @@ export async function POST(request) {
       );
     }
 
-    // Add alerts to real-time monitoring
+    // Add alerts to real-time monitoring via Redis Pub/Sub
     try {
-      const RealTimeAlertProcessor = (
-        await import("../../../../services/RealTimeAlertProcessor.js")
-      ).default;
-
-      for (const alert of createdAlerts) {
-        await RealTimeAlertProcessor.addAlert(alert._id.toString());
-      }
 
       // Publish Redis message for bulk alerts created
       const alertIds = createdAlerts.map((alert) => alert._id.toString());
@@ -374,13 +367,7 @@ export async function POST(request) {
       // Don't fail the API call if monitoring fails
     }
 
-    // Force refresh alerts to ensure worker has latest data
-    try {
-      await RealTimeAlertProcessor.forceRefreshAlerts();
-    } catch (refreshError) {
-      console.warn("⚠️ Error refreshing alerts:", refreshError.message);
-    }
-
+    // (PM2 Worker will pick up the Redis message and refresh active alerts automatically)
 
     return NextResponse.json({
       success: true,
