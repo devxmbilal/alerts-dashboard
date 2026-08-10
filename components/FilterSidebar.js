@@ -291,6 +291,7 @@ const FilterSidebar = forwardRef(
                 loadedFilters.rsiDivergence.bullishHidden = saved.rsiDivergence.bullishHidden || false;
                 loadedFilters.rsiDivergence.bearish = saved.rsiDivergence.bearish || false;
                 loadedFilters.rsiDivergence.bearishHidden = saved.rsiDivergence.bearishHidden || false;
+                loadedFilters.rsiDivergence.condition = saved.rsiDivergence.condition || "";
               }
 
               setFilters(loadedFilters);
@@ -513,7 +514,7 @@ const FilterSidebar = forwardRef(
         if (hasRsiDivergence) {
           const rsiDivTimeframes = Object.keys(filters.rsiDivergence).filter(
             (key) =>
-              !["bullish", "bullishHidden", "bearish", "bearishHidden"].includes(key) &&
+              !["bullish", "bullishHidden", "bearish", "bearishHidden", "condition"].includes(key) &&
               filters.rsiDivergence[key] === true
           );
           alertConditions.rsiDivergence = {
@@ -522,6 +523,7 @@ const FilterSidebar = forwardRef(
             bullishHidden: filters.rsiDivergence.bullishHidden || false,
             bearish: filters.rsiDivergence.bearish || false,
             bearishHidden: filters.rsiDivergence.bearishHidden || false,
+            condition: filters.rsiDivergence.condition || "",
           };
         }
 
@@ -1325,6 +1327,52 @@ const FilterSidebar = forwardRef(
                   />
                 </Grid>
               </Grid>
+
+              {/* Divergence Conditions Dropdown */}
+              <Typography variant="body2" sx={{ color: "text.secondary", mt: 2, mb: 1 }}>
+                Divergence Condition:
+              </Typography>
+              <CustomSelect
+                fullWidth
+                value={filters?.rsiDivergence?.condition || ""}
+                onChange={(e) =>
+                  handleInputChange("rsiDivergence", "condition", e.target.value)
+                }
+                displayEmpty
+                MenuProps={{
+                  PaperProps: {
+                    sx: {
+                      bgcolor: "#1a1a1a",
+                      border: "1px solid #333",
+                      "& .MuiMenuItem-root": {
+                        color: "#fff",
+                        fontSize: "14px",
+                        whiteSpace: "normal",
+                        padding: "10px 16px",
+                        "&:hover": {
+                          bgcolor: "rgba(0, 191, 165, 0.1)",
+                        },
+                        "&.Mui-selected": {
+                          bgcolor: "rgba(0, 191, 165, 0.2)",
+                          "&:hover": {
+                            bgcolor: "rgba(0, 191, 165, 0.3)",
+                          },
+                        },
+                      },
+                    },
+                  },
+                }}
+              >
+                <MenuItem value="">
+                  <em>Select Condition</em>
+                </MenuItem>
+                <MenuItem value="condition1">
+                  1. All Divergences will trigger after candle close without requiring other conditions met
+                </MenuItem>
+                <MenuItem value="condition2">
+                  2. If other conditions met at bearish divergences on current candle alert will not trigger
+                </MenuItem>
+              </CustomSelect>
             </AccordionDetails>
           </DarkAccordion>
 
