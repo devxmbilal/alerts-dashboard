@@ -41,6 +41,7 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   Select,
+  Radio,
 } from "@mui/material";
 import { styled } from "@mui/material/styles";
 import CheckIcon from "@mui/icons-material/Check";
@@ -1329,66 +1330,78 @@ const FilterSidebar = forwardRef(
                 </Grid>
               </Grid>
 
-              {/* Divergence Conditions Dropdown */}
-              <Typography variant="body2" sx={{ color: "text.secondary", mt: 2, mb: 1 }}>
+              {/* Divergence Conditions Styled Cards */}
+              <Typography variant="body2" sx={{ color: "text.secondary", mt: 2, mb: 1.5 }}>
                 Divergence Condition:
               </Typography>
-              <Select
-                fullWidth
-                value={filters?.rsiDivergence?.condition || ""}
-                onChange={(e) =>
-                  handleInputChange("rsiDivergence", "condition", e.target.value)
-                }
-                displayEmpty
-                sx={{
-                  color: "#fff",
-                  ".MuiOutlinedInput-notchedOutline": {
-                    borderColor: "#333",
-                  },
-                  "&.Mui-focused .MuiOutlinedInput-notchedOutline": {
-                    borderColor: "#00bfa5",
-                  },
-                  "&:hover .MuiOutlinedInput-notchedOutline": {
-                    borderColor: "#666",
-                  },
-                  ".MuiSvgIcon-root": {
-                    color: "#666",
-                  },
-                }}
-                MenuProps={{
-                  PaperProps: {
-                    sx: {
-                      bgcolor: "#1a1a1a",
-                      border: "1px solid #333",
-                      "& .MuiMenuItem-root": {
-                        color: "#fff",
-                        fontSize: "14px",
-                        whiteSpace: "normal",
-                        padding: "10px 16px",
-                        "&:hover": {
-                          bgcolor: "rgba(0, 191, 165, 0.1)",
-                        },
-                        "&.Mui-selected": {
-                          bgcolor: "rgba(0, 191, 165, 0.2)",
-                          "&:hover": {
-                            bgcolor: "rgba(0, 191, 165, 0.3)",
-                          },
-                        },
-                      },
-                    },
-                  },
-                }}
-              >
-                <MenuItem value="">
-                  <em>Select Condition</em>
-                </MenuItem>
-                <MenuItem value="condition1">
-                  1. All Divergences will trigger after candle close without requiring other conditions met
-                </MenuItem>
-                <MenuItem value="condition2">
-                  2. If other conditions met at bearish divergences on current candle alert will not trigger
-                </MenuItem>
-              </Select>
+              
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+                {/* Condition 1 Card */}
+                <Box
+                  onClick={() => handleInputChange("rsiDivergence", "condition", "condition1")}
+                  sx={{
+                    p: 1.5,
+                    borderRadius: 1.5,
+                    border: "1px solid",
+                    borderColor: filters?.rsiDivergence?.condition === "condition1" ? "#00bfa5" : "#333",
+                    bgcolor: filters?.rsiDivergence?.condition === "condition1" ? "rgba(0, 191, 165, 0.08)" : "#1a1a1a",
+                    cursor: "pointer",
+                    transition: "all 0.2s ease-in-out",
+                    "&:hover": {
+                      borderColor: filters?.rsiDivergence?.condition === "condition1" ? "#00bfa5" : "#555",
+                      bgcolor: filters?.rsiDivergence?.condition === "condition1" ? "rgba(0, 191, 165, 0.12)" : "#222",
+                    }
+                  }}
+                >
+                  <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1 }}>
+                    <Radio 
+                      checked={filters?.rsiDivergence?.condition === "condition1"}
+                      sx={{ p: 0, color: "#666", "&.Mui-checked": { color: "#00bfa5" }, mt: 0.2 }}
+                    />
+                    <Box>
+                      <Typography variant="subtitle2" sx={{ color: filters?.rsiDivergence?.condition === "condition1" ? "#00bfa5" : "#e0e0e0", fontWeight: 600, mb: 0.5, fontSize: "14px" }}>
+                        Independent Trigger
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: "text.secondary", lineHeight: 1.4, display: "block", fontSize: "12px" }}>
+                        All Divergences will trigger after candle close without requiring other conditions met.
+                      </Typography>
+                    </Box>
+                  </Box>
+                </Box>
+
+                {/* Condition 2 Card */}
+                <Box
+                  onClick={() => handleInputChange("rsiDivergence", "condition", "condition2")}
+                  sx={{
+                    p: 1.5,
+                    borderRadius: 1.5,
+                    border: "1px solid",
+                    borderColor: filters?.rsiDivergence?.condition === "condition2" ? "#00bfa5" : "#333",
+                    bgcolor: filters?.rsiDivergence?.condition === "condition2" ? "rgba(0, 191, 165, 0.08)" : "#1a1a1a",
+                    cursor: "pointer",
+                    transition: "all 0.2s ease-in-out",
+                    "&:hover": {
+                      borderColor: filters?.rsiDivergence?.condition === "condition2" ? "#00bfa5" : "#555",
+                      bgcolor: filters?.rsiDivergence?.condition === "condition2" ? "rgba(0, 191, 165, 0.12)" : "#222",
+                    }
+                  }}
+                >
+                  <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1 }}>
+                    <Radio 
+                      checked={filters?.rsiDivergence?.condition === "condition2"}
+                      sx={{ p: 0, color: "#666", "&.Mui-checked": { color: "#00bfa5" }, mt: 0.2 }}
+                    />
+                    <Box>
+                      <Typography variant="subtitle2" sx={{ color: filters?.rsiDivergence?.condition === "condition2" ? "#00bfa5" : "#e0e0e0", fontWeight: 600, mb: 0.5, fontSize: "14px" }}>
+                        Conditional Trigger
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: "text.secondary", lineHeight: 1.4, display: "block", fontSize: "12px" }}>
+                        If other conditions met at bearish divergences on current candle alert will not trigger.
+                      </Typography>
+                    </Box>
+                  </Box>
+                </Box>
+              </Box>
             </AccordionDetails>
           </DarkAccordion>
 
