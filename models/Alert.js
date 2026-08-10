@@ -65,6 +65,13 @@ const alertSchema = new mongoose.Schema(
           default: "ABOVE",
         },
       },
+      rsiDivergence: {
+        timeframes: [String],
+        bullish: { type: Boolean, default: false },
+        bullishHidden: { type: Boolean, default: false },
+        bearish: { type: Boolean, default: false },
+        bearishHidden: { type: Boolean, default: false },
+      },
       macd: {
         timeframes: [String],
         fastPeriod: {

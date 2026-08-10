@@ -34,6 +34,14 @@ const conditionSchema = new mongoose.Schema(
             period: { type: String },
             timeframes: [{ type: String }],
         },
+        rsiDivergence: {
+            enabled: { type: Boolean, default: false },
+            bullish: { type: Boolean, default: false },
+            bullishHidden: { type: Boolean, default: false },
+            bearish: { type: Boolean, default: false },
+            bearishHidden: { type: Boolean, default: false },
+            timeframes: [{ type: String }],
+        },
         // MACD Condition (Fast EMA vs Slow EMA)
         macd: {
             enabled: { type: Boolean, default: false },

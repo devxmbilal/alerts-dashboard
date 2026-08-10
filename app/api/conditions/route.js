@@ -57,6 +57,7 @@ export async function POST(request) {
             alertCount: { enabled: false },
             candle: { enabled: false, timeframes: [] },
             rsiRange: { enabled: false, timeframes: [] },
+            rsiDivergence: { enabled: false, timeframes: [] },
             macd: { enabled: false, timeframes: [] },
             volume: { enabled: false, timeframes: [] },
             minDaily: { enabled: false },
@@ -94,6 +95,17 @@ export async function POST(request) {
                 level: conditions.rsiRange.level,
                 period: conditions.rsiRange.period,
                 timeframes: conditions.rsiRange.timeframes || [],
+            };
+        }
+
+        if (conditions.rsiDivergence) {
+            conditionData.rsiDivergence = {
+                enabled: true,
+                bullish: conditions.rsiDivergence.bullish || false,
+                bullishHidden: conditions.rsiDivergence.bullishHidden || false,
+                bearish: conditions.rsiDivergence.bearish || false,
+                bearishHidden: conditions.rsiDivergence.bearishHidden || false,
+                timeframes: conditions.rsiDivergence.timeframes || [],
             };
         }
 
