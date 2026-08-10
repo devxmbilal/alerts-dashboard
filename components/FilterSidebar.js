@@ -749,6 +749,8 @@ const FilterSidebar = forwardRef(
       { value: "4HR", label: "4HR" },
       { value: "12HR", label: "12HR" },
       { value: "D", label: "D" },
+      { value: "W", label: "W" },
+      { value: "M", label: "M" },
     ];
 
     // RSI Range condition options - matching the image
@@ -1220,7 +1222,7 @@ const FilterSidebar = forwardRef(
             </AccordionDetails>
           </DarkAccordion>
 
-          {/* RSI Divergence Filter */}
+          {/* Divergence Filter */}
           <DarkAccordion>
             <AccordionSummary
               expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
@@ -1228,7 +1230,7 @@ const FilterSidebar = forwardRef(
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <TimelineIcon sx={{ color: "#00bfa5" }} />
                 <Typography sx={{ color: "text.primary" }}>
-                  RSI Divergence
+                  Divergence
                 </Typography>
               </Box>
             </AccordionSummary>
@@ -1489,89 +1491,6 @@ const FilterSidebar = forwardRef(
             </AccordionDetails>
           </DarkAccordion>
           */}
-          {/* Divergence Filter */}
-          <DarkAccordion>
-            <AccordionSummary
-              expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
-            >
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                <ShowChartIcon sx={{ color: "#00bfa5" }} />
-                <Typography sx={{ color: "text.primary" }}>Divergence</Typography>
-              </Box>
-            </AccordionSummary>
-            <AccordionDetails>
-              <Grid container spacing={1} sx={{ mb: 2 }}>
-                {["5MIN", "15MIN", "1HR", "4HR", "12HR", "D", "W", "M"].map((tf) => (
-                  <Grid item xs={4} key={tf}>
-                    <FormControlLabel
-                      control={
-                        <CustomCheckbox
-                          checked={filters?.rsiDivergence?.[tf] || false}
-                          onChange={() =>
-                            handleCheckboxChange("rsiDivergence", tf)
-                          }
-                        />
-                      }
-                      label={tf}
-                      sx={{
-                        color: "text.primary",
-                        "& .MuiFormControlLabel-label": {
-                          fontSize: "14px",
-                        },
-                      }}
-                    />
-                  </Grid>
-                ))}
-              </Grid>
-
-              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                Divergence Types:
-              </Typography>
-              
-              <FormGroup>
-                <FormControlLabel
-                  control={
-                    <CustomCheckbox
-                      checked={filters?.rsiDivergence?.bullish || false}
-                      onChange={(e) => handleInputChange("rsiDivergence", "bullish", e.target.checked)}
-                    />
-                  }
-                  label="Bullish Divergence"
-                  sx={{ color: "text.primary", "& .MuiFormControlLabel-label": { fontSize: "14px" } }}
-                />
-                <FormControlLabel
-                  control={
-                    <CustomCheckbox
-                      checked={filters?.rsiDivergence?.bullishHidden || false}
-                      onChange={(e) => handleInputChange("rsiDivergence", "bullishHidden", e.target.checked)}
-                    />
-                  }
-                  label="Bullish Hidden Divergence"
-                  sx={{ color: "text.primary", "& .MuiFormControlLabel-label": { fontSize: "14px" } }}
-                />
-                <FormControlLabel
-                  control={
-                    <CustomCheckbox
-                      checked={filters?.rsiDivergence?.bearish || false}
-                      onChange={(e) => handleInputChange("rsiDivergence", "bearish", e.target.checked)}
-                    />
-                  }
-                  label="Bearish Divergence"
-                  sx={{ color: "text.primary", "& .MuiFormControlLabel-label": { fontSize: "14px" } }}
-                />
-                <FormControlLabel
-                  control={
-                    <CustomCheckbox
-                      checked={filters?.rsiDivergence?.bearishHidden || false}
-                      onChange={(e) => handleInputChange("rsiDivergence", "bearishHidden", e.target.checked)}
-                    />
-                  }
-                  label="Bearish Hidden Divergence"
-                  sx={{ color: "text.primary", "& .MuiFormControlLabel-label": { fontSize: "14px" } }}
-                />
-              </FormGroup>
-            </AccordionDetails>
-          </DarkAccordion>
             </>
           )}
 
