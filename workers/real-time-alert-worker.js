@@ -101,7 +101,9 @@ process.on("SIGTERM", async () => {
   process.exit(0);
 });
 
-// Start the worker directly
-worker.start().catch(console.error);
+// Start the worker
+if (import.meta.url === `file://${process.argv[1]}`) {
+  worker.start().catch(console.error);
+}
 
 export default worker;

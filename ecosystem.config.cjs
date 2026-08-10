@@ -13,7 +13,7 @@ module.exports = {
     {
       name: "alerts-dashboard",
       script: "node_modules/.bin/next",
-      args: "start -p 3005",
+      args: "start -p 3000",
       cwd: "/var/www/alerts-dashboard",
       instances: 1,
       autorestart: true,
@@ -22,7 +22,7 @@ module.exports = {
       env_file: ".env",
       env: {
         NODE_ENV: "production",
-        PORT: 3005,
+        PORT: 3000,
         LOG_LEVEL: "error", // Only log errors in production
       },
       // Wait for binance-worker to populate Redis before accepting requests
@@ -142,27 +142,6 @@ module.exports = {
       error_file: "./logs/db-queue-worker-error.log",
       out_file: "./logs/db-queue-worker-out.log",
       log_file: "./logs/db-queue-worker.log",
-      time: true,
-    },
-    {
-      name: "real-time-worker",
-      script: "workers/real-time-alert-worker.js",
-      cwd: "/var/www/alerts-dashboard",
-      instances: 1,
-      autorestart: true,
-      watch: false,
-      max_memory_restart: "1G",
-      env_file: ".env",
-      env: {
-        NODE_ENV: "production",
-        REDIS_HOST: "localhost",
-        REDIS_PORT: 6379,
-        MONGODB_URI: "mongodb://127.0.0.1:27017/crypto-alerts",
-        LOG_LEVEL: "error",
-      },
-      error_file: "./logs/real-time-worker-error.log",
-      out_file: "./logs/real-time-worker-out.log",
-      log_file: "./logs/real-time-worker.log",
       time: true,
     },
   ],

@@ -2011,15 +2011,17 @@ class RealTimeAlertProcessor {
       const symbols = Array.from(this.activeAlerts.keys());
 
       // Try to get from Redis cache first
-      const redis = await import("../utils/redis.js");
+      const { getRedisClient } = await import("../utils/redis.js");
+      const redisClient = getRedisClient();
 
       for (const symbol of symbols) {
         try {
-          let priceData = await redis.default.get(`crypto:${symbol}`);
-          if (!priceData) {
-            priceData = await redis.default.get(
-              `crypto:${symbol.toLowerCase()}`
-            );
+          let priceData = null;
+          if (redisClient) {
+            priceData = await redisClient.get(`crypto:${symbol}`);
+            if (!priceData) {
+              priceData = await redisClient.get(`crypto:${symbol.toLowerCase()}`);
+            }
           }
 
           if (priceData) {
