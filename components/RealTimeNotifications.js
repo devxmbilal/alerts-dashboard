@@ -117,7 +117,17 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
     // Load existing alert history
     loadAlertHistory();
 
+    const handleAlertsCleared = () => {
+      console.log("🧹 Clearing alerts from frontend queue");
+      alertQueueRef.current = [];
+      setAlertHistory([]);
+      setNewAlertCount(0);
+    };
+
+    window.addEventListener('alertsCleared', handleAlertsCleared);
+
     return () => {
+      window.removeEventListener('alertsCleared', handleAlertsCleared);
       if (eventSourceRef.current) {
         console.log("🗱️ Cleaning up EventSource on unmount");
         eventSourceRef.current.close();

@@ -627,6 +627,9 @@ const FilterSidebar = forwardRef(
         if (response.ok) {
           const data = await response.json();
           console.log("✅ All alerts removed:", data);
+          
+          // 🔥 Dispatch event to clear frontend notification queue
+          window.dispatchEvent(new CustomEvent('alertsCleared'));
 
           // Reset filter state
           setFilters({
