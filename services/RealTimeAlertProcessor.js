@@ -994,7 +994,7 @@ class RealTimeAlertProcessor {
           // based on the previous candle's performance at the junction.
           // This ensures the 2% check is FRESH for the new candle.
           const freshBaseline = parseFloat(liveData.price) || originalBaselinePrice;
-          
+
           // Set effectiveBaseline so the change% check below uses the NEW (reset) baseline
           // This ensures the very first tick of a new candle starts at 0% change.
           effectiveBaseline = freshBaseline;
@@ -1150,7 +1150,7 @@ class RealTimeAlertProcessor {
       // If the baseline was reset (EffectiveBaseline is current price), the change is 0.
       const livePrice = parseFloat(liveData.price) || 0;
       const calcBaseline = (typeof effectiveBaseline !== 'undefined') ? effectiveBaseline : originalBaselinePrice;
-      
+
       const actualChangePercent = calcBaseline > 0
         ? ((livePrice - calcBaseline) / calcBaseline) * 100
         : 0;
@@ -1233,6 +1233,13 @@ class RealTimeAlertProcessor {
           }
         })
       );
+
+      // Check if any condition triggered a bypass (Independent Trigger)
+      const bypassCondition = conditionResults.find(r => r.bypassOthers);
+      if (bypassCondition) {
+        console.log(`🚀 Bypass Trigger Activated: ${bypassCondition.reason}`);
+        return true;
+      }
 
       // Check if all conditions passed
       for (let i = 0; i < conditionResults.length; i++) {
@@ -1335,7 +1342,7 @@ class RealTimeAlertProcessor {
           const changeFromBaseline =
             ((liveData.price - effectiveBaseline) / effectiveBaseline) *
             100;
-          
+
           // 🛡️ NaN Protection
           if (Number.isNaN(changeFromBaseline)) {
             return { passed: false, reason: "Calculation error (NaN)" };
@@ -1473,6 +1480,70 @@ class RealTimeAlertProcessor {
       });
     }
 
+    // Priority 5.5: RSI Divergence
+    if (this.isConditionSet(conditions.rsiDivergence?.timeframes)) {
+      activeConditions.push({
+        name: "RSI Divergence",
+        priority: 5.5,
+        check: async () => {
+          if (
+            !conditions.rsiDivergence.timeframes ||
+            conditions.rsiDivergence.timeframes.length === 0
+          ) {
+            return {
+              passed: false,
+              reason: "No timeframes configured for RSI Divergence",
+            };
+          }
+
+          const divCondition = conditions.rsiDivergence.condition || "";
+          const isIndependentTrigger = divCondition === "condition1";
+          const isBearishBlocker = divCondition === "condition2";
+
+          const divMatch = await this.evaluateRSIDivergence(
+            conditions.rsiDivergence,
+            alert.symbol,
+            14, // rsiPeriod
+            isIndependentTrigger // onlyClosedCandles
+          );
+
+          if (divMatch === null || (typeof divMatch === "object" && divMatch.found === undefined)) {
+            return { passed: true, reason: "RSI data loading — skipped this tick" };
+          }
+
+          if (isIndependentTrigger) {
+            if (divMatch.found) {
+              return { 
+                passed: true, 
+                bypassOthers: true, 
+                reason: `RSI Divergence (${divMatch.type}) formed on closed candle - bypassing other conditions` 
+              };
+            } else {
+              return { passed: false, reason: "No closed-candle Divergence found for independent trigger" };
+            }
+          }
+
+          if (isBearishBlocker) {
+            if (divMatch.found && divMatch.isBearish) {
+              return { 
+                passed: false, 
+                reason: `Blocked by active ${divMatch.type} on current candle` 
+              };
+            } else {
+              // If not a bearish divergence, we pass (so other conditions can trigger)
+              return { passed: true, reason: "No bearish divergence blocker active" };
+            }
+          }
+
+          // Default behavior
+          return {
+            passed: divMatch.found,
+            reason: divMatch.found ? `RSI Divergence (${divMatch.type}) condition met` : "RSI Divergence not met",
+          };
+        },
+      });
+    }
+
     // Priority 6: Volume (medium-high cost)
     if (this.isConditionSet(conditions.volume?.timeframes)) {
       activeConditions.push({
@@ -1569,6 +1640,40 @@ class RealTimeAlertProcessor {
             reason: openInterestMatch
               ? "Open Interest condition met"
               : "Open Interest condition not met",
+          };
+        },
+      });
+    }
+
+    // Priority 9: Volume EMA Crossing (checks if volume bar crosses above EMA line)
+    if (this.isConditionSet(conditions.volumeEma?.timeframes)) {
+      activeConditions.push({
+        name: "Volume EMA",
+        priority: 9,
+        check: async () => {
+          if (
+            !conditions.volumeEma.timeframes ||
+            conditions.volumeEma.timeframes.length === 0
+          ) {
+            return {
+              passed: false,
+              reason: "No timeframes configured for Volume EMA condition",
+            };
+          }
+
+          const volumeEmaMatch = await this.evaluateVolumeEmaCrossing(
+            conditions.volumeEma,
+            liveData,
+            alert.symbol
+          );
+          if (volumeEmaMatch === null) {
+            return { passed: false, reason: "Volume EMA data loading — blocked until ready" };
+          }
+          return {
+            passed: volumeEmaMatch,
+            reason: volumeEmaMatch
+              ? "Volume EMA crossing up condition met"
+              : "Volume EMA crossing up condition not met",
           };
         },
       });
@@ -2118,7 +2223,7 @@ class RealTimeAlertProcessor {
             baselinePrice: newBaselinePrice,
             baselineVolume: newBaselineVolume,
             baselineTimestamp: new Date(),
-          }).catch(() => {});
+          }).catch(() => { });
 
           // Skip alert check this tick — next tick will evaluate with the fresh baseline
           return false;
@@ -2304,6 +2409,23 @@ class RealTimeAlertProcessor {
           alert.symbol
         );
         if (rsiMatch === false) {
+          // null means data still loading — skip check, don't fail alert
+          conditionsMet = false;
+        }
+      }
+
+      // Check RSI Divergence conditions (optional)
+      if (
+        conditionsMet &&
+        conditions.rsiDivergence &&
+        conditions.rsiDivergence.timeframes &&
+        conditions.rsiDivergence.timeframes.length > 0
+      ) {
+        const divMatch = await this.evaluateRSIDivergence(
+          conditions.rsiDivergence,
+          alert.symbol
+        );
+        if (divMatch === false) {
           // null means data still loading — skip check, don't fail alert
           conditionsMet = false;
         }
@@ -2753,7 +2875,7 @@ class RealTimeAlertProcessor {
     }
   }
 
-  async calculateRSI(symbol, timeframe, period = 14) {
+  async getHistoricalCloses(symbol, timeframe, period = 14) {
     const key = `${symbol}_${timeframe}_${period}`;
     const timeframeMs = this.getTimeframeMs(timeframe);
     const currentCandleStart = Math.floor(Date.now() / timeframeMs) * timeframeMs;
@@ -2796,7 +2918,12 @@ class RealTimeAlertProcessor {
       }
     }
 
-    let closes = historyEntry.closes;
+    return historyEntry.closes;
+  }
+
+  async calculateRSI(symbol, timeframe, period = 14) {
+    let closes = await this.getHistoricalCloses(symbol, timeframe, period);
+
     if (!closes || closes.length < period + 1) return null;
 
     // 2. Add current live price for real-time RSI (overwrite the forming candle)
@@ -3008,6 +3135,84 @@ class RealTimeAlertProcessor {
     const rsi = 100 - 100 / (1 + rs);
 
     return rsi;
+  }
+
+  // Calculate historical RSI array for divergence detection
+  computeRSIArray(closes, period) {
+    if (closes.length < period + 1) return [];
+
+    const rsiArray = new Array(closes.length).fill(null);
+    const changes = [];
+    for (let i = 1; i < closes.length; i++) {
+      changes.push(closes[i] - closes[i - 1]);
+    }
+
+    const gains = changes.map(change => (change > 0 ? change : 0));
+    const losses = changes.map(change => (change < 0 ? Math.abs(change) : 0));
+
+    let avgGain = 0;
+    let avgLoss = 0;
+
+    for (let i = 0; i < period; i++) {
+      avgGain += gains[i];
+      avgLoss += losses[i];
+    }
+
+    avgGain = avgGain / period;
+    avgLoss = avgLoss / period;
+
+    // First RSI value
+    let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    rsiArray[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + rs);
+
+    // Calculate rest of RSI using Wilder's smoothing
+    for (let i = period; i < changes.length; i++) {
+      avgGain = (avgGain * (period - 1) + gains[i]) / period;
+      avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+
+      if (avgLoss === 0) {
+        rsiArray[i + 1] = 100;
+      } else {
+        rs = avgGain / avgLoss;
+        rsiArray[i + 1] = 100 - 100 / (1 + rs);
+      }
+    }
+
+    return rsiArray;
+  }
+
+  // Detect Swing Highs (peaks) or Swing Lows (valleys)
+  // Returns array of objects: { index, value }
+  findSwings(data, type, leftBars = 2, rightBars = 2) {
+    const swings = [];
+    for (let i = leftBars; i < data.length - rightBars; i++) {
+      const val = data[i];
+      if (val === null || val === undefined) continue;
+
+      let isSwing = true;
+      for (let j = i - leftBars; j <= i + rightBars; j++) {
+        if (i === j) continue;
+        const compareVal = data[j];
+        if (compareVal === null || compareVal === undefined) {
+          isSwing = false;
+          break;
+        }
+
+        if (type === "high" && val <= compareVal) {
+          isSwing = false;
+          break;
+        }
+        if (type === "low" && val >= compareVal) {
+          isSwing = false;
+          break;
+        }
+      }
+
+      if (isSwing) {
+        swings.push({ index: i, value: val });
+      }
+    }
+    return swings;
   }
 
   // Helper: Delay function
@@ -3479,6 +3684,105 @@ class RealTimeAlertProcessor {
     }
   }
 
+  async evaluateRSIDivergence(condition, symbol, rsiPeriod = 14, onlyClosedCandles = false) {
+    if (!condition || !condition.timeframes || condition.timeframes.length === 0) return { found: false };
+
+    // If no specific divergence type is selected, return false
+    if (!condition.bullish && !condition.bullishHidden && !condition.bearish && !condition.bearishHidden) {
+      return { found: false };
+    }
+
+    for (const timeframe of condition.timeframes) {
+      const closes = await this.getHistoricalCloses(symbol, timeframe, rsiPeriod);
+      if (!closes || closes.length < rsiPeriod + 10) continue;
+
+      let calculationCloses = [...closes];
+      
+      if (!onlyClosedCandles) {
+        // Update the last candle with live price
+        const livePrice = this.livePrices[symbol]?.price;
+        if (livePrice && calculationCloses.length > 0) {
+          calculationCloses[calculationCloses.length - 1] = parseFloat(livePrice);
+        }
+      } else {
+        // If checking only closed candles, drop the last (forming) candle
+        calculationCloses.pop();
+      }
+
+      const rsiArray = this.computeRSIArray(calculationCloses, rsiPeriod);
+
+      // We only look at the most recent 50 candles to avoid very old divergences
+      const lookback = 50;
+      const startIndex = Math.max(rsiPeriod * 2, calculationCloses.length - lookback);
+      const recentCloses = calculationCloses;
+
+      let foundType = null;
+      let isBearish = false;
+
+      // Bullish Check (needs Swing Lows)
+      if (condition.bullish || condition.bullishHidden) {
+        const lows = this.findSwings(recentCloses, "low", 2, 2);
+        const recentLows = lows.filter(l => l.index >= startIndex);
+
+        if (recentLows.length >= 2) {
+          const low1 = recentLows[recentLows.length - 1]; // Most recent
+          const low2 = recentLows[recentLows.length - 2]; // Previous
+
+          const price1 = low1.value;
+          const price2 = low2.value;
+          const rsi1 = rsiArray[low1.index];
+          const rsi2 = rsiArray[low2.index];
+
+          if (rsi1 !== null && rsi2 !== null) {
+            // Bullish (Regular): Price LL, RSI HL
+            if (condition.bullish && price1 < price2 && rsi1 > rsi2) {
+              foundType = "bullish";
+            }
+            // Bullish Hidden: Price HL, RSI LL
+            else if (condition.bullishHidden && price1 > price2 && rsi1 < rsi2) {
+              foundType = "bullishHidden";
+            }
+          }
+        }
+      }
+
+      // Bearish Check (needs Swing Highs)
+      if (!foundType && (condition.bearish || condition.bearishHidden)) {
+        const highs = this.findSwings(recentCloses, "high", 2, 2);
+        const recentHighs = highs.filter(h => h.index >= startIndex);
+
+        if (recentHighs.length >= 2) {
+          const high1 = recentHighs[recentHighs.length - 1]; // Most recent
+          const high2 = recentHighs[recentHighs.length - 2]; // Previous
+
+          const price1 = high1.value;
+          const price2 = high2.value;
+          const rsi1 = rsiArray[high1.index];
+          const rsi2 = rsiArray[high2.index];
+
+          if (rsi1 !== null && rsi2 !== null) {
+            // Bearish (Regular): Price HH, RSI LH
+            if (condition.bearish && price1 > price2 && rsi1 < rsi2) {
+              foundType = "bearish";
+              isBearish = true;
+            }
+            // Bearish Hidden: Price LH, RSI HH
+            else if (condition.bearishHidden && price1 < price2 && rsi1 > rsi2) {
+              foundType = "bearishHidden";
+              isBearish = true;
+            }
+          }
+        }
+      }
+
+      if (foundType) {
+        return { found: true, type: foundType, isBearish, timeframe };
+      }
+    }
+
+    return { found: false };
+  }
+
   async evaluateRSIConditions(rsiConditions, priceData, symbol = null) {
     const { condition, level, period, timeframes } = rsiConditions;
     const targetLevel = parseFloat(level) || 50;
@@ -3572,11 +3876,11 @@ class RealTimeAlertProcessor {
     if (!values || values.length < period) return null;
     const multiplier = 2 / (period + 1);
     const emaArray = new Array(values.length).fill(null);
-    
+
     // SMA for the first valid period
     let ema = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
     emaArray[period - 1] = ema;
-    
+
     // EMA for the rest of the array
     for (let i = period; i < values.length; i++) {
       ema = (values[i] - ema) * multiplier + ema;
@@ -3587,33 +3891,33 @@ class RealTimeAlertProcessor {
 
   computeMACDFromCloses(closes, fastPeriod, slowPeriod, signalPeriod = 9) {
     if (!closes || closes.length < slowPeriod + signalPeriod) return null;
-    
+
     // 1. Calculate Fast and Slow EMAs for the entire closes array
     const fastEMAs = this.computeEMAArray(closes, fastPeriod);
     const slowEMAs = this.computeEMAArray(closes, slowPeriod);
-    
+
     if (!fastEMAs || !slowEMAs) return null;
-    
+
     // 2. Calculate the MACD Line array (Fast EMA - Slow EMA)
     const validMacdValues = [];
     const startIndex = slowPeriod - 1; // Index where slowEMA starts having values
-    
+
     for (let i = startIndex; i < closes.length; i++) {
       validMacdValues.push(fastEMAs[i] - slowEMAs[i]);
     }
-    
+
     // 3. Calculate Signal Line (EMA of MACD Line)
     const signalEMAs = this.computeEMAArray(validMacdValues, signalPeriod);
-    
+
     if (!signalEMAs) return null;
-    
+
     // 4. Get the current and previous values
     const currentMacdLine = validMacdValues[validMacdValues.length - 1];
     const currentSignalLine = signalEMAs[signalEMAs.length - 1];
-    
+
     const prevMacdLine = validMacdValues[validMacdValues.length - 2];
     const prevSignalLine = signalEMAs[signalEMAs.length - 2];
-    
+
     return {
       macdLine: currentMacdLine,
       signalLine: currentSignalLine,
@@ -3988,7 +4292,7 @@ class RealTimeAlertProcessor {
     const timeframeMs = this.getTimeframeMs(tf);
     const currentBoundary = Math.floor(Date.now() / timeframeMs) * timeframeMs;
     const elapsedMs = Date.now() - currentBoundary;
-    
+
     let projectedVolume = currentCandleVolume;
     // Only project if at least 1% of the candle has formed (avoids wild spikes right at the start)
     if (elapsedMs > 0 && (elapsedMs / timeframeMs) > 0.01) {
@@ -4025,9 +4329,114 @@ class RealTimeAlertProcessor {
     return conditionMet;
   }
 
+  // ==================== Volume EMA Crossing ====================
+  // Alerts when the volume bar crosses above the Volume EMA line
+  // Uses same REST API approach as MACD/RSI to avoid drift
+  async evaluateVolumeEmaCrossing(volumeEmaConditions, priceData, symbol) {
+    const { timeframes, emaPeriod, condition } = volumeEmaConditions;
+    const period = parseInt(emaPeriod) || 20;
 
+    if (!symbol || !timeframes || timeframes.length === 0) {
+      return false;
+    }
 
+    console.log(`📊 Volume EMA Check: ${symbol} | Period: ${period} | Condition: ${condition} | Timeframes: [${timeframes.join(", ")}]`);
 
+    // ALL selected timeframes must pass (same logic as MACD)
+    for (const timeframe of timeframes) {
+      const result = await this.getVolumeEmaData(symbol, timeframe, period);
+
+      if (!result) {
+        console.log(`   ⏳ [${timeframe}] Volume EMA data not ready — skipping`);
+        return null; // Data not ready
+      }
+
+      const { prevVolume, prevEma, currentVolume, currentEma } = result;
+
+      let crossed = false;
+      if (condition === "CROSSING_UP") {
+        // Previous volume was below EMA, current volume is above EMA
+        crossed = prevVolume < prevEma && currentVolume > currentEma;
+      } else if (condition === "CROSSING_DOWN") {
+        // Previous volume was above EMA, current volume is below EMA
+        crossed = prevVolume > prevEma && currentVolume < currentEma;
+      }
+
+      console.log(
+        `   ${crossed ? "✅" : "❌"} [${timeframe}] Vol: ${currentVolume.toFixed(2)} | EMA(${period}): ${currentEma.toFixed(2)} | PrevVol: ${prevVolume.toFixed(2)} | PrevEMA: ${prevEma.toFixed(2)} | ${condition}: ${crossed}`
+      );
+
+      if (!crossed) {
+        return false; // If any timeframe fails, the whole condition fails
+      }
+    }
+
+    return true; // All timeframes passed
+  }
+
+  // Fetch volume data and compute Volume EMA (cached per candle boundary)
+  async getVolumeEmaData(symbol, timeframe, emaPeriod) {
+    const key = `${symbol}_${timeframe}_volema_${emaPeriod}`;
+    const timeframeMs = this.getTimeframeMs(timeframe);
+    const currentCandleStart = Math.floor(Date.now() / timeframeMs) * timeframeMs;
+
+    if (!this.volumeEmaCache) this.volumeEmaCache = new Map();
+    let cached = this.volumeEmaCache.get(key);
+
+    // Use cache if from the same candle
+    if (cached && cached.candleStart === currentCandleStart) {
+      return cached;
+    }
+
+    // Fetch fresh klines from Binance
+    if (Date.now() < this.apiBanUntil) return null;
+
+    try {
+      const binanceInterval = this.getBinanceInterval(timeframe);
+      const limit = Math.max(emaPeriod * 5, 100); // Need enough for EMA convergence
+      const response = await fetch(
+        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`
+      );
+
+      if (response.status === 418 || response.status === 429) {
+        this.apiBanUntil = Date.now() + 120 * 1000;
+        return null;
+      }
+
+      if (!response.ok) return null;
+
+      const klines = await response.json();
+      if (!klines || klines.length < emaPeriod + 2) return null;
+
+      // Extract base asset volumes (index [5] in klines)
+      const volumes = klines.map((k) => parseFloat(k[5]));
+
+      // Compute EMA of volumes
+      const emaArray = this.computeEMAArray(volumes, emaPeriod);
+      if (!emaArray) return null;
+
+      // Get current and previous values
+      const lastIdx = volumes.length - 1;
+      const prevIdx = volumes.length - 2;
+
+      if (emaArray[lastIdx] === null || emaArray[prevIdx] === null) return null;
+
+      const result = {
+        currentVolume: volumes[lastIdx],
+        currentEma: emaArray[lastIdx],
+        prevVolume: volumes[prevIdx],
+        prevEma: emaArray[prevIdx],
+        candleStart: currentCandleStart,
+        timestamp: Date.now(),
+      };
+
+      this.volumeEmaCache.set(key, result);
+      return result;
+    } catch (err) {
+      console.error(`❌ Volume EMA klines fetch failed for ${symbol} ${timeframe}: ${err.message}`);
+      return null;
+    }
+  }
 
 
   async getUserFavorites(userId) {
