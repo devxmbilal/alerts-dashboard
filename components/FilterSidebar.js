@@ -1489,19 +1489,19 @@ const FilterSidebar = forwardRef(
             </AccordionDetails>
           </DarkAccordion>
           */}
-          {/* RSI Divergence Filter */}
+          {/* Divergence Filter */}
           <DarkAccordion>
             <AccordionSummary
               expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
             >
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <ShowChartIcon sx={{ color: "#00bfa5" }} />
-                <Typography sx={{ color: "text.primary" }}>RSI Divergence</Typography>
+                <Typography sx={{ color: "text.primary" }}>Divergence</Typography>
               </Box>
             </AccordionSummary>
             <AccordionDetails>
               <Grid container spacing={1} sx={{ mb: 2 }}>
-                {["5MIN", "15MIN", "1HR", "4HR", "12HR", "D"].map((tf) => (
+                {["5MIN", "15MIN", "1HR", "4HR", "12HR", "D", "W", "M"].map((tf) => (
                   <Grid item xs={4} key={tf}>
                     <FormControlLabel
                       control={
