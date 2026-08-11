@@ -56,51 +56,9 @@ export function calculateLockTime(timeframe, triggerTime = null) {
     throw new Error(`Invalid alert count timeframe: ${timeframe}`);
   }
 
-  // Get current date components
-  const currentDate = new Date(now);
-  const timeframeMinutes = Math.floor(timeframeMs / (60 * 1000));
-  const timeframeHours = Math.floor(timeframeMs / (60 * 60 * 1000));
-  const timeframeDays = Math.floor(timeframeMs / (24 * 60 * 60 * 1000));
-
-  // Create a new date object for candle start (copy of current time)
-  const candleStartDate = new Date(currentDate);
-
-  // Reset seconds and milliseconds first (always)
-  candleStartDate.setSeconds(0);
-  candleStartDate.setMilliseconds(0);
-
-  if (timeframeMs < 60 * 60 * 1000) {
-    // For timeframes less than 1 hour (minutes-based: 5MIN, 15MIN, 30MIN)
-    // Align minutes to timeframe boundaries
-    // Example: 5MIN → align to 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55
-    // Example: 15MIN → align to 0, 15, 30, 45
-    const currentMinutes = currentDate.getMinutes();
-    const alignedMinutes =
-      Math.floor(currentMinutes / timeframeMinutes) * timeframeMinutes;
-    candleStartDate.setMinutes(alignedMinutes);
-  } else if (timeframeMs < 24 * 60 * 60 * 1000) {
-    // For hour-based timeframes (1H, 2H, 4H, 6H, 8H, 12H)
-    // Align hours to timeframe boundaries and reset minutes
-    // Example: 1H → align to 0, 1, 2, 3, ... (hour boundaries)
-    // Example: 4H → align to 0, 4, 8, 12, 16, 20
-    const currentHours = currentDate.getHours();
-    const alignedHours =
-      Math.floor(currentHours / timeframeHours) * timeframeHours;
-    candleStartDate.setHours(alignedHours);
-    candleStartDate.setMinutes(0);
-  } else {
-    // For day-based timeframes (1D, 3D, etc.)
-    // Align to day boundaries at 00:00:00
-    const epochDays = Math.floor(currentDate.getTime() / (24 * 60 * 60 * 1000));
-    const alignedDays = Math.floor(epochDays / timeframeDays) * timeframeDays;
-    const alignedTimestamp = alignedDays * 24 * 60 * 60 * 1000;
-    candleStartDate.setTime(alignedTimestamp);
-    candleStartDate.setHours(0);
-    candleStartDate.setMinutes(0);
-  }
-
-  // Lock until the END of the current candle period
-  const lockUntil = new Date(candleStartDate.getTime() + timeframeMs);
+  // Use exact duration from trigger time (trigger time + duration)
+  // This ensures a 1-hour cooldown actually lasts exactly 1 hour from the moment it triggers.
+  const lockUntil = new Date(now.getTime() + timeframeMs);
 
   return lockUntil;
 }
