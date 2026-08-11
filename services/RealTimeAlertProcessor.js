@@ -3834,33 +3834,37 @@ class RealTimeAlertProcessor {
       // RSI line itself. A swing only counts when BOTH series pivoted around the same
       // bar — reading price off an RSI pivot bar reports a "high" on a bar where price
       // never actually made one, which is what produced the false divergences.
-      const pairPivots = (pricePivots, rsiPivots) => {
-        const paired = [];
-        for (const pricePivot of pricePivots) {
-          let match = null;
-          let bestDistance = Infinity;
-          for (const rsiPivot of rsiPivots) {
-            const distance = Math.abs(rsiPivot.index - pricePivot.index);
-            if (distance > PIVOT_ALIGN_TOLERANCE || distance >= bestDistance) continue;
-            match = rsiPivot;
-            bestDistance = distance;
+      const buildSwingPoints = (rsiPivots, priceSeries, isBetterPrice) =>
+        rsiPivots.map((rsiPivot) => {
+          // Take the real price extreme around the RSI pivot rather than whatever
+          // price happened to print on that exact bar — the price swing usually
+          // lands a candle or two either side of the momentum turn.
+          const from = Math.max(0, rsiPivot.index - PIVOT_ALIGN_TOLERANCE);
+          const to = Math.min(priceSeries.length - 1, rsiPivot.index + PIVOT_ALIGN_TOLERANCE);
+
+          let price = priceSeries[rsiPivot.index];
+          let priceIndex = rsiPivot.index;
+          for (let i = from; i <= to; i++) {
+            const candidate = priceSeries[i];
+            if (!isFinite(candidate)) continue;
+            if (!isFinite(price) || isBetterPrice(candidate, price)) {
+              price = candidate;
+              priceIndex = i;
+            }
           }
-          if (!match) continue;
 
-          paired.push({
-            index: pricePivot.index,
-            price: pricePivot.value,
-            rsi: match.value,
-            // Both pivots must be confirmed before the swing can be acted on
-            confirmIndex: Math.max(pricePivot.index, match.index) + LB_RIGHT,
-          });
-        }
-        return paired;
-      };
+          return {
+            index: rsiPivot.index,
+            price,
+            priceIndex,
+            rsi: rsiPivot.value,
+            confirmIndex: rsiPivot.index + LB_RIGHT,
+          };
+        });
 
-      // Compare the two most recent swings where price and RSI both pivoted
-      const evaluate = (pricePivots, rsiPivots, checks) => {
-        const points = pairPivots(pricePivots, rsiPivots);
+      // Compare the two most recent momentum swings
+      const evaluate = (rsiPivots, priceSeries, isBetterPrice, checks) => {
+        const points = buildSwingPoints(rsiPivots, priceSeries, isBetterPrice);
         if (points.length < 2) return null;
 
         const p1 = points[points.length - 1]; // most recent
@@ -3902,11 +3906,12 @@ class RealTimeAlertProcessor {
 
       let hit = null;
 
-      // Bullish → swing LOWS: price from candle lows, RSI from the RSI line
+      // Bullish → swing LOWS: RSI pivot lows anchor the swing, price is the candle low there
       if (condition.bullish || condition.bullishHidden) {
         hit = evaluate(
-          this.findSwings(lows, "low", LB_LEFT, LB_RIGHT),
           this.findSwings(rsiArray, "low", LB_LEFT, LB_RIGHT),
+          lows,
+          (candidate, current) => candidate < current,
           [
             {
               enabled: condition.bullish,
@@ -3928,11 +3933,12 @@ class RealTimeAlertProcessor {
         );
       }
 
-      // Bearish → swing HIGHS: price from candle highs, RSI from the RSI line
+      // Bearish → swing HIGHS: RSI pivot highs anchor the swing, price is the candle high there
       if (!hit && (condition.bearish || condition.bearishHidden)) {
         hit = evaluate(
-          this.findSwings(highs, "high", LB_LEFT, LB_RIGHT),
           this.findSwings(rsiArray, "high", LB_LEFT, LB_RIGHT),
+          highs,
+          (candidate, current) => candidate > current,
           [
             {
               enabled: condition.bearish,
