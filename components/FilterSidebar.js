@@ -42,6 +42,7 @@ import {
   ToggleButtonGroup,
   Select,
   Radio,
+  Tooltip,
 } from "@mui/material";
 import { styled } from "@mui/material/styles";
 import CheckIcon from "@mui/icons-material/Check";
@@ -55,6 +56,7 @@ import TimelineIcon from "@mui/icons-material/Timeline";
 import StarIcon from "@mui/icons-material/Star";
 import ShowChartIcon from "@mui/icons-material/ShowChart";
 import BarChartIcon from "@mui/icons-material/BarChart";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import { useAlert } from "../contexts/AlertContext";
 import { useSocket } from "../contexts/SocketContext";
 import { useFavorites } from "../contexts/FavoritesContext";
@@ -1331,9 +1333,24 @@ const FilterSidebar = forwardRef(
               </Grid>
 
               {/* Divergence Condition Dropdown */}
-              <Typography variant="body2" sx={{ color: "text.secondary", mt: 2, mb: 1 }}>
-                Divergence Condition:
-              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", mt: 2, mb: 1, gap: 0.5 }}>
+                <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                  Divergence
+                </Typography>
+                <Tooltip 
+                  title={
+                    <Box sx={{ p: 0.5 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 0.5 }}>1. Independent Trigger</Typography>
+                      <Typography variant="caption" sx={{ display: 'block', mb: 1, lineHeight: 1.2 }}>All Divergences will trigger after candle close without requiring other conditions met.</Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 0.5 }}>2. Conditional Trigger</Typography>
+                      <Typography variant="caption" sx={{ display: 'block', lineHeight: 1.2 }}>If other conditions met at bearish divergences on current candle alert will not trigger.</Typography>
+                    </Box>
+                  } 
+                  placement="top"
+                >
+                  <InfoOutlinedIcon sx={{ fontSize: 16, color: "text.secondary", cursor: "pointer" }} />
+                </Tooltip>
+              </Box>
               
               <CustomTextField
                 fullWidth
@@ -1358,23 +1375,6 @@ const FilterSidebar = forwardRef(
                   </Box>
                 </MenuItem>
               </CustomTextField>
-              
-              {/* Selected Condition Description Box (Theme Aware) */}
-              <Box
-                sx={{
-                  p: 1.5,
-                  borderRadius: 1.5,
-                  border: "1px solid",
-                  borderColor: theme.palette.mode === 'dark' ? "#333" : "#e0e0e0",
-                  bgcolor: theme.palette.mode === 'dark' ? "rgba(255, 255, 255, 0.03)" : "rgba(0, 0, 0, 0.03)",
-                }}
-              >
-                <Typography variant="caption" sx={{ color: "text.secondary", lineHeight: 1.4, display: "block" }}>
-                  {filters?.rsiDivergence?.condition === "condition2"
-                    ? "If other conditions met at bearish divergences on current candle alert will not trigger."
-                    : "All Divergences will trigger after candle close without requiring other conditions met."}
-                </Typography>
-              </Box>
             </AccordionDetails>
           </DarkAccordion>
 
