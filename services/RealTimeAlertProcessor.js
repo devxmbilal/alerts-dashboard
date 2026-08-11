@@ -3796,6 +3796,7 @@ class RealTimeAlertProcessor {
     const RANGE_LOWER = 5;  // Min bars between the two pivots
     const RANGE_UPPER = 60; // Max bars between the two pivots
     const MAX_BARS_SINCE_CONFIRM = 1; // Only fire on a freshly confirmed pivot
+    const PIVOT_ALIGN_TOLERANCE = 3;  // How far the RSI pivot may sit from the price pivot
 
     for (const timeframe of condition.timeframes) {
       const ohlc = await this.getHistoricalOHLC(symbol, timeframe, rsiPeriod);
@@ -3829,28 +3830,57 @@ class RealTimeAlertProcessor {
 
       const lastIndex = closes.length - 1;
 
-      // A pivot at index i is only confirmed LB_RIGHT bars later. For the independent
-      // trigger we require that confirmation to have just happened, otherwise an old
-      // divergence would keep re-firing on every tick.
-      const isFresh = (pivotIndex) =>
-        !onlyClosedCandles ||
-        lastIndex - (pivotIndex + LB_RIGHT) <= MAX_BARS_SINCE_CONFIRM;
+      // Price pivots come from the real candle wicks (OHLC); RSI pivots come from the
+      // RSI line itself. A swing only counts when BOTH series pivoted around the same
+      // bar — reading price off an RSI pivot bar reports a "high" on a bar where price
+      // never actually made one, which is what produced the false divergences.
+      const pairPivots = (pricePivots, rsiPivots) => {
+        const paired = [];
+        for (const pricePivot of pricePivots) {
+          let match = null;
+          let bestDistance = Infinity;
+          for (const rsiPivot of rsiPivots) {
+            const distance = Math.abs(rsiPivot.index - pricePivot.index);
+            if (distance > PIVOT_ALIGN_TOLERANCE || distance >= bestDistance) continue;
+            match = rsiPivot;
+            bestDistance = distance;
+          }
+          if (!match) continue;
 
-      // Compare the two most recent oscillator pivots against the price series
-      const evaluate = (pivots, priceSeries, checks) => {
-        if (pivots.length < 2) return null;
+          paired.push({
+            index: pricePivot.index,
+            price: pricePivot.value,
+            rsi: match.value,
+            // Both pivots must be confirmed before the swing can be acted on
+            confirmIndex: Math.max(pricePivot.index, match.index) + LB_RIGHT,
+          });
+        }
+        return paired;
+      };
 
-        const p1 = pivots[pivots.length - 1]; // most recent
-        const p2 = pivots[pivots.length - 2]; // previous
+      // Compare the two most recent swings where price and RSI both pivoted
+      const evaluate = (pricePivots, rsiPivots, checks) => {
+        const points = pairPivots(pricePivots, rsiPivots);
+        if (points.length < 2) return null;
+
+        const p1 = points[points.length - 1]; // most recent
+        const p2 = points[points.length - 2]; // previous
 
         const barsBetween = p1.index - p2.index;
         if (barsBetween < RANGE_LOWER || barsBetween > RANGE_UPPER) return null;
-        if (!isFresh(p1.index)) return null;
 
-        const price1 = priceSeries[p1.index];
-        const price2 = priceSeries[p2.index];
-        const rsi1 = p1.value;
-        const rsi2 = p2.value;
+        // A pivot is only confirmed LB_RIGHT bars after it forms. For the independent
+        // trigger we require that confirmation to have just happened, otherwise an old
+        // divergence would keep re-firing on every tick.
+        if (
+          onlyClosedCandles &&
+          lastIndex - p1.confirmIndex > MAX_BARS_SINCE_CONFIRM
+        ) {
+          return null;
+        }
+
+        const { price: price1, rsi: rsi1 } = p1;
+        const { price: price2, rsi: rsi2 } = p2;
         if (!isFinite(price1) || !isFinite(price2)) return null;
         if (rsi1 === null || rsi2 === null) return null;
 
@@ -3872,48 +3902,56 @@ class RealTimeAlertProcessor {
 
       let hit = null;
 
-      // Bullish → pivots on RSI lows, price compared on candle LOWS
+      // Bullish → swing LOWS: price from candle lows, RSI from the RSI line
       if (condition.bullish || condition.bullishHidden) {
-        hit = evaluate(this.findSwings(rsiArray, "low", LB_LEFT, LB_RIGHT), lows, [
-          {
-            enabled: condition.bullish,
-            type: "bullish",
-            isBearish: false,
-            label: "Regular Bullish Divergence",
-            // Price Lower Low + RSI Higher Low
-            test: (price1, price2, rsi1, rsi2) => price1 < price2 && rsi1 > rsi2,
-          },
-          {
-            enabled: condition.bullishHidden,
-            type: "bullishHidden",
-            isBearish: false,
-            label: "Hidden Bullish Divergence",
-            // Price Higher Low + RSI Lower Low
-            test: (price1, price2, rsi1, rsi2) => price1 > price2 && rsi1 < rsi2,
-          },
-        ]);
+        hit = evaluate(
+          this.findSwings(lows, "low", LB_LEFT, LB_RIGHT),
+          this.findSwings(rsiArray, "low", LB_LEFT, LB_RIGHT),
+          [
+            {
+              enabled: condition.bullish,
+              type: "bullish",
+              isBearish: false,
+              label: "Regular Bullish Divergence",
+              // Price Lower Low + RSI Higher Low
+              test: (price1, price2, rsi1, rsi2) => price1 < price2 && rsi1 > rsi2,
+            },
+            {
+              enabled: condition.bullishHidden,
+              type: "bullishHidden",
+              isBearish: false,
+              label: "Hidden Bullish Divergence",
+              // Price Higher Low + RSI Lower Low
+              test: (price1, price2, rsi1, rsi2) => price1 > price2 && rsi1 < rsi2,
+            },
+          ]
+        );
       }
 
-      // Bearish → pivots on RSI highs, price compared on candle HIGHS
+      // Bearish → swing HIGHS: price from candle highs, RSI from the RSI line
       if (!hit && (condition.bearish || condition.bearishHidden)) {
-        hit = evaluate(this.findSwings(rsiArray, "high", LB_LEFT, LB_RIGHT), highs, [
-          {
-            enabled: condition.bearish,
-            type: "bearish",
-            isBearish: true,
-            label: "Regular Bearish Divergence",
-            // Price Higher High + RSI Lower High
-            test: (price1, price2, rsi1, rsi2) => price1 > price2 && rsi1 < rsi2,
-          },
-          {
-            enabled: condition.bearishHidden,
-            type: "bearishHidden",
-            isBearish: true,
-            label: "Hidden Bearish Divergence",
-            // Price Lower High + RSI Higher High
-            test: (price1, price2, rsi1, rsi2) => price1 < price2 && rsi1 > rsi2,
-          },
-        ]);
+        hit = evaluate(
+          this.findSwings(highs, "high", LB_LEFT, LB_RIGHT),
+          this.findSwings(rsiArray, "high", LB_LEFT, LB_RIGHT),
+          [
+            {
+              enabled: condition.bearish,
+              type: "bearish",
+              isBearish: true,
+              label: "Regular Bearish Divergence",
+              // Price Higher High + RSI Lower High
+              test: (price1, price2, rsi1, rsi2) => price1 > price2 && rsi1 < rsi2,
+            },
+            {
+              enabled: condition.bearishHidden,
+              type: "bearishHidden",
+              isBearish: true,
+              label: "Hidden Bearish Divergence",
+              // Price Lower High + RSI Higher High
+              test: (price1, price2, rsi1, rsi2) => price1 < price2 && rsi1 > rsi2,
+            },
+          ]
+        );
       }
 
       if (hit) {
