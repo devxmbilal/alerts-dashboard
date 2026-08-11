@@ -377,9 +377,10 @@ const FilterSidebar = forwardRef(
       const hasVolume = Object.values(filters.volume).some((value) => value === true);
       const hasVolumeEma = filters.volumeEma && Object.values(filters.volumeEma).some((value) => value === true);
       const hasRsiDivergence = filters.rsiDivergence && Object.values(filters.rsiDivergence).some((value) => value === true);
+      const isIndependentDivergence = hasRsiDivergence && (filters.rsiDivergence.condition === "condition1" || !filters.rsiDivergence.condition);
 
-      // Validation 1: Min Daily is required
-      if (!hasMinDaily) {
+      // Validation 1: Min Daily is required (UNLESS independent divergence trigger is selected)
+      if (!hasMinDaily && !isIndependentDivergence) {
         setErrorMessage("Please set: Min Daily volume");
         setIsCreating(false);
         return;
@@ -406,15 +407,16 @@ const FilterSidebar = forwardRef(
           (key) => filters.minDaily[key] === true
         );
 
-        if (!minDailyKey) {
+        if (!minDailyKey && !isIndependentDivergence) {
           setErrorMessage("Please select a Min Daily value");
           setIsCreating(false);
           return;
         }
 
-        const alertConditions = {
-          minDaily: minDailyKey,
-        };
+        const alertConditions = {};
+        if (minDailyKey) {
+          alertConditions.minDaily = minDailyKey;
+        }
 
         if (hasChangePercent) {
           const changePercentKey = Object.keys(filters.changePercent).find(
