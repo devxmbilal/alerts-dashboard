@@ -46,15 +46,9 @@ const TradingViewChart = ({
         "1w": "W",
       };
 
-      // Dynamically calculate height to fill available space
-      const wrapper = document.getElementById("tradingview_chart_wrapper");
-      const dynamicHeight = wrapper?.clientHeight
-        ? wrapper.clientHeight
-        : Math.max(300, window.innerHeight - 220);
-
       new TradingView.widget({
         width: "100%",
-        height: dynamicHeight,
+        height: "100%",
         symbol: symbol,
         interval: intervalMap[timeframe] || timeframe,
         timezone: "Etc/UTC",
@@ -66,20 +60,11 @@ const TradingViewChart = ({
         hide_top_toolbar: false,
         save_image: false,
         container_id: "tradingview_chart",
+        autosize: true,
       });
     }
 
-    // Optional: adjust chart on resize (lightweight recreate)
-    const onResize = () => {
-      const c = document.getElementById("tradingview_chart");
-      if (c) c.innerHTML = "";
-      createWidget();
-    };
-    window.addEventListener("resize", onResize);
-
-    return () => {
-      window.removeEventListener("resize", onResize);
-    };
+    return () => {};
   }, [symbol, timeframe, mode]);
 
   return (

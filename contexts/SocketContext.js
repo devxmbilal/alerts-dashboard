@@ -22,6 +22,7 @@ export const SocketProvider = ({ children }) => {
   const [isConnected, setIsConnected] = useState(false);
   const [marketData, setMarketData] = useState(new Map());
   const [eventSource, setEventSource] = useState(null);
+  const eventSourceRef = React.useRef(null);
   const [subscribedSymbols, setSubscribedSymbols] = useState([]);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [alertProcessor, setAlertProcessor] = useState(null);
@@ -46,9 +47,9 @@ export const SocketProvider = ({ children }) => {
   // Connect to Server-Sent Events
   const connect = useCallback(
     (symbols = []) => {
-      if (eventSource) {
+      if (eventSourceRef.current) {
         console.log("🔌 Closing existing SSE connection");
-        eventSource.close();
+        eventSourceRef.current.close();
       }
 
       const symbolsParam = symbols.length > 0 ? symbols.join(",") : "";
@@ -166,9 +167,9 @@ export const SocketProvider = ({ children }) => {
 
   // Disconnect from SSE
   const disconnect = useCallback(() => {
-    if (eventSource) {
+    if (eventSourceRef.current) {
       console.log("🔌 Disconnecting SSE...");
-      eventSource.close();
+      eventSourceRef.current.close();
       setEventSource(null);
       setIsConnected(false);
     }
@@ -307,8 +308,8 @@ export const SocketProvider = ({ children }) => {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (eventSource) {
-        eventSource.close();
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
       }
     };
   }, [eventSource]);
@@ -334,3 +335,4 @@ export const SocketProvider = ({ children }) => {
 };
 
 export default SocketContext;
+
