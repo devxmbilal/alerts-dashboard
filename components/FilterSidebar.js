@@ -1330,77 +1330,50 @@ const FilterSidebar = forwardRef(
                 </Grid>
               </Grid>
 
-              {/* Divergence Conditions Styled Cards */}
-              <Typography variant="body2" sx={{ color: "text.secondary", mt: 2, mb: 1.5 }}>
+              {/* Divergence Condition Dropdown */}
+              <Typography variant="body2" sx={{ color: "text.secondary", mt: 2, mb: 1 }}>
                 Divergence Condition:
               </Typography>
               
-              <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
-                {/* Condition 1 Card */}
-                <Box
-                  onClick={() => handleInputChange("rsiDivergence", "condition", "condition1")}
-                  sx={{
-                    p: 1.5,
-                    borderRadius: 1.5,
-                    border: "1px solid",
-                    borderColor: filters?.rsiDivergence?.condition === "condition1" ? "#00bfa5" : "#333",
-                    bgcolor: filters?.rsiDivergence?.condition === "condition1" ? "rgba(0, 191, 165, 0.08)" : "#1a1a1a",
-                    cursor: "pointer",
-                    transition: "all 0.2s ease-in-out",
-                    "&:hover": {
-                      borderColor: filters?.rsiDivergence?.condition === "condition1" ? "#00bfa5" : "#555",
-                      bgcolor: filters?.rsiDivergence?.condition === "condition1" ? "rgba(0, 191, 165, 0.12)" : "#222",
-                    }
-                  }}
-                >
-                  <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1 }}>
-                    <Radio 
-                      checked={filters?.rsiDivergence?.condition === "condition1"}
-                      sx={{ p: 0, color: "#666", "&.Mui-checked": { color: "#00bfa5" }, mt: 0.2 }}
-                    />
-                    <Box>
-                      <Typography variant="subtitle2" sx={{ color: filters?.rsiDivergence?.condition === "condition1" ? "#00bfa5" : "#e0e0e0", fontWeight: 600, mb: 0.5, fontSize: "14px" }}>
-                        Independent Trigger
-                      </Typography>
-                      <Typography variant="caption" sx={{ color: "text.secondary", lineHeight: 1.4, display: "block", fontSize: "12px" }}>
-                        All Divergences will trigger after candle close without requiring other conditions met.
-                      </Typography>
-                    </Box>
+              <CustomTextField
+                fullWidth
+                select
+                size="small"
+                value={filters?.rsiDivergence?.condition || "condition1"}
+                onChange={(e) => handleInputChange("rsiDivergence", "condition", e.target.value)}
+                sx={{ mb: 1 }}
+              >
+                <MenuItem value="condition1" sx={{ py: 1 }}>
+                  <Box>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                      Independent Trigger
+                    </Typography>
                   </Box>
-                </Box>
-
-                {/* Condition 2 Card */}
-                <Box
-                  onClick={() => handleInputChange("rsiDivergence", "condition", "condition2")}
-                  sx={{
-                    p: 1.5,
-                    borderRadius: 1.5,
-                    border: "1px solid",
-                    borderColor: filters?.rsiDivergence?.condition === "condition2" ? "#00bfa5" : "#333",
-                    bgcolor: filters?.rsiDivergence?.condition === "condition2" ? "rgba(0, 191, 165, 0.08)" : "#1a1a1a",
-                    cursor: "pointer",
-                    transition: "all 0.2s ease-in-out",
-                    "&:hover": {
-                      borderColor: filters?.rsiDivergence?.condition === "condition2" ? "#00bfa5" : "#555",
-                      bgcolor: filters?.rsiDivergence?.condition === "condition2" ? "rgba(0, 191, 165, 0.12)" : "#222",
-                    }
-                  }}
-                >
-                  <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1 }}>
-                    <Radio 
-                      checked={filters?.rsiDivergence?.condition === "condition2"}
-                      sx={{ p: 0, color: "#666", "&.Mui-checked": { color: "#00bfa5" }, mt: 0.2 }}
-                    />
-                    <Box>
-                      <Typography variant="subtitle2" sx={{ color: filters?.rsiDivergence?.condition === "condition2" ? "#00bfa5" : "#e0e0e0", fontWeight: 600, mb: 0.5, fontSize: "14px" }}>
-                        Conditional Trigger
-                      </Typography>
-                      <Typography variant="caption" sx={{ color: "text.secondary", lineHeight: 1.4, display: "block", fontSize: "12px" }}>
-                        If other conditions met at bearish divergences on current candle alert will not trigger.
-                      </Typography>
-                    </Box>
+                </MenuItem>
+                <MenuItem value="condition2" sx={{ py: 1 }}>
+                  <Box>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                      Conditional Trigger
+                    </Typography>
                   </Box>
-                </Box>
+                </MenuItem>
+              </CustomTextField>
+              
+              {/* Selected Condition Description Box (Theme Aware) */}
+              <Box
+                sx={{
+                  p: 1.5,
+                  borderRadius: 1.5,
+                  border: "1px solid",
+                  borderColor: theme.palette.mode === 'dark' ? "#333" : "#e0e0e0",
+                  bgcolor: theme.palette.mode === 'dark' ? "rgba(255, 255, 255, 0.03)" : "rgba(0, 0, 0, 0.03)",
+                }}
+              >
+                <Typography variant="caption" sx={{ color: "text.secondary", lineHeight: 1.4, display: "block" }}>
+                  {filters?.rsiDivergence?.condition === "condition2"
+                    ? "If other conditions met at bearish divergences on current candle alert will not trigger."
+                    : "All Divergences will trigger after candle close without requiring other conditions met."}
+                </Typography>
               </Box>
             </AccordionDetails>
           </DarkAccordion>
