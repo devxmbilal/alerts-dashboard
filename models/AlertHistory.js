@@ -46,6 +46,27 @@ const alertHistorySchema = new mongoose.Schema(
         condition: String,
         percentage: String,
       },
+      rsiDivergence: {
+        timeframes: [String],
+        bullish: Boolean,
+        bullishHidden: Boolean,
+        bearish: Boolean,
+        bearishHidden: Boolean,
+        condition: String,
+      },
+    },
+    // Set only when an RSI divergence took part in the trigger
+    divergence: {
+      type: { type: String },        // bullish | bullishHidden | bearish | bearishHidden
+      label: String,                 // e.g. "Regular Bullish Divergence"
+      timeframe: String,
+      rsiPeriod: Number,
+      isBearish: Boolean,
+      barsBetween: Number,
+      trigger: String,               // independent | conditional | standard
+      divergenceOnly: Boolean,       // true when divergence was the ONLY trigger condition
+      pivot1: { price: Number, rsi: Number, time: Number },
+      pivot2: { price: Number, rsi: Number, time: Number },
     },
     conditions: {
       type: String,

@@ -1155,39 +1155,54 @@ class RealTimeAlertProcessor {
         ? ((livePrice - calcBaseline) / calcBaseline) * 100
         : 0;
 
-      // 🛡️ MINIMUM CHANGE THRESHOLD - Prevent 0% change alerts
-      const MIN_CHANGE_THRESHOLD = 0.001; // 0.001% minimum change required
-      const hasMinimumChange = Math.abs(actualChangePercent) >= MIN_CHANGE_THRESHOLD;
+      // An Independent Divergence Trigger fires on the divergence alone and must not be
+      // gated on price direction — a bullish divergence forms while price is still FALLING,
+      // so the default "increase" direction would otherwise swallow every bullish signal.
+      const divergenceCfg = alert.conditions?.rsiDivergence;
+      const isIndependentDivergence =
+        divergenceCfg?.timeframes?.length > 0 &&
+        (divergenceCfg.condition === "condition1" || !divergenceCfg.condition);
 
-      if (!hasMinimumChange) {
-        return { triggered: false, reason: "change_below_threshold" };
+      if (!isIndependentDivergence) {
+        // 🛡️ MINIMUM CHANGE THRESHOLD - Prevent 0% change alerts
+        const MIN_CHANGE_THRESHOLD = 0.001; // 0.001% minimum change required
+        const hasMinimumChange = Math.abs(actualChangePercent) >= MIN_CHANGE_THRESHOLD;
+
+        if (!hasMinimumChange) {
+          return { triggered: false, reason: "change_below_threshold" };
+        }
+
+        const priceChanged = livePrice !== originalBaselinePrice;
+
+        if (direction === "increase" && livePrice <= originalBaselinePrice) {
+          return { triggered: false, reason: "price_not_increased" };
+        }
+
+        if (direction === "decrease" && livePrice >= originalBaselinePrice) {
+          return { triggered: false, reason: "price_not_decreased" };
+        }
+
+        if (!priceChanged) {
+          return { triggered: false, reason: "price_unchanged" };
+        }
       }
 
-      const priceChanged = livePrice !== originalBaselinePrice;
-
-      if (direction === "increase" && livePrice <= originalBaselinePrice) {
-        return { triggered: false, reason: "price_not_increased" };
-      }
-
-      if (direction === "decrease" && livePrice >= originalBaselinePrice) {
-        return { triggered: false, reason: "price_not_decreased" };
-      }
-
-      if (!priceChanged) {
-        return { triggered: false, reason: "price_unchanged" };
-      }
+      // Collects details from the conditions that matched (e.g. which divergence fired)
+      // so the alert message can explain WHY it triggered.
+      const triggerContext = {};
 
       // Check alert conditions - pass correct baseline for Change Percent calculation
       const conditionsMet = await this.checkAlertConditionsWithLiveData(
         alert,
         liveData,
-        calcBaseline // 🔥 CRITICAL: Use the same baseline we used for our pre-check
+        calcBaseline, // 🔥 CRITICAL: Use the same baseline we used for our pre-check
+        triggerContext
       );
 
       if (conditionsMet) {
         // Trigger the alert (this will apply the lock)
         // 🔥 FIX: Pass original baseline so correct % is saved in history
-        await this.triggerAlertWithLiveData(alert, liveData, originalBaselinePrice);
+        await this.triggerAlertWithLiveData(alert, liveData, originalBaselinePrice, triggerContext);
 
         return { triggered: true, reason: "conditions_met" };
       } else {
@@ -1200,7 +1215,7 @@ class RealTimeAlertProcessor {
   }
 
   // OPTIMIZED: Check conditions with live data - hierarchical and only check set conditions
-  async checkAlertConditionsWithLiveData(alert, liveData, originalBaselinePrice = null) {
+  async checkAlertConditionsWithLiveData(alert, liveData, originalBaselinePrice = null, triggerContext = {}) {
     try {
       const conditions = alert.conditions;
 
@@ -1214,7 +1229,8 @@ class RealTimeAlertProcessor {
         conditions,
         liveData,
         alert,
-        baselinePriceForCheck // 🔥 Pass original baseline for % change calculation
+        baselinePriceForCheck, // 🔥 Pass original baseline for % change calculation
+        triggerContext
       );
 
       if (activeConditions.length === 0) {
@@ -1262,8 +1278,21 @@ class RealTimeAlertProcessor {
     }
   }
 
+  // True when the alert has a trigger condition other than RSI divergence.
+  // Min Daily is excluded — it only filters which symbols qualify, it never fires an alert.
+  hasNonDivergenceTrigger(conditions = {}) {
+    return !!(
+      conditions.changePercent?.percentage ||
+      conditions.volume?.timeframes?.length > 0 ||
+      conditions.rsiRange?.timeframes?.length > 0 ||
+      conditions.candle?.timeframes?.length > 0 ||
+      conditions.macd?.timeframes?.length > 0 ||
+      conditions.openInterest?.timeframes?.length > 0
+    );
+  }
+
   // OPTIMIZATION HELPER: Get only active/set conditions in priority order
-  getActiveConditions(conditions, liveData, alert, baselinePriceForCheck = null) {
+  getActiveConditions(conditions, liveData, alert, baselinePriceForCheck = null, triggerContext = {}) {
     const activeConditions = [];
 
     // 🔥 CRITICAL: Use passed baseline for calculations
@@ -1497,8 +1526,10 @@ class RealTimeAlertProcessor {
           }
 
           const divCondition = conditions.rsiDivergence.condition || "";
-          const isIndependentTrigger = divCondition === "condition1";
+          // Unset defaults to Independent Trigger — matches the UI default and
+          // the validation in app/api/alerts/bulk/route.js
           const isBearishBlocker = divCondition === "condition2";
+          const isIndependentTrigger = !isBearishBlocker;
 
           const divMatch = await this.evaluateRSIDivergence(
             conditions.rsiDivergence,
@@ -1511,12 +1542,47 @@ class RealTimeAlertProcessor {
             return { passed: true, reason: "RSI data loading — skipped this tick" };
           }
 
+          // Record what fired so the alert message can show the divergence detail
+          if (divMatch.found) {
+            triggerContext.divergence = {
+              type: divMatch.type,
+              label: divMatch.label,
+              timeframe: divMatch.timeframe,
+              rsiPeriod: divMatch.rsiPeriod,
+              isBearish: divMatch.isBearish,
+              barsBetween: divMatch.barsBetween,
+              pivot1: divMatch.pivot1,
+              pivot2: divMatch.pivot2,
+              trigger: isIndependentTrigger
+                ? "independent"
+                : isBearishBlocker
+                  ? "conditional"
+                  : "standard",
+              // Identifies this exact divergence so it is only alerted once
+              signature: `${divMatch.timeframe}:${divMatch.type}:${divMatch.pivot1?.time}`,
+              // Divergence is the ONLY trigger → notifications show a divergence-only template
+              divergenceOnly: !this.hasNonDivergenceTrigger(conditions),
+            };
+          }
+
           if (isIndependentTrigger) {
             if (divMatch.found) {
-              return { 
-                passed: true, 
-                bypassOthers: true, 
-                reason: `RSI Divergence (${divMatch.type}) formed on closed candle - bypassing other conditions` 
+              // The same confirmed pivot stays valid for a couple of bars — alert on it once
+              const alertKey = alert._id?.toString();
+              if (
+                this.lastFiredDivergence?.get(alertKey) ===
+                triggerContext.divergence.signature
+              ) {
+                return {
+                  passed: false,
+                  reason: `Divergence (${divMatch.type}) already alerted for this pivot`,
+                };
+              }
+
+              return {
+                passed: true,
+                bypassOthers: true,
+                reason: `RSI Divergence (${divMatch.type}) formed on closed candle - bypassing other conditions`
               };
             } else {
               return { passed: false, reason: "No closed-candle Divergence found for independent trigger" };
@@ -1717,7 +1783,7 @@ class RealTimeAlertProcessor {
 
   // Trigger alert with live data and update baseline
   // 🔥 FIX: Added originalBaselinePrice parameter to preserve correct change %
-  async triggerAlertWithLiveData(alert, liveData, originalBaselinePrice = null) {
+  async triggerAlertWithLiveData(alert, liveData, originalBaselinePrice = null, triggerContext = {}) {
     // CRITICAL: Check if alert is ALREADY locked (Alert Count condition)
     if (isAlertLocked(alert)) {
       const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
@@ -1799,6 +1865,8 @@ class RealTimeAlertProcessor {
           changeFromBaseline: changeFromBaseline,
           changeFromBaselinePercent: changeFromBaselinePercent,
         },
+        // Present only when an RSI divergence took part in this trigger
+        divergence: triggerContext.divergence || undefined,
         triggeredAt: new Date(),
         conditions: this.getAlertConditionsText(alert.conditions),
       };
@@ -1823,6 +1891,16 @@ class RealTimeAlertProcessor {
       console.log(
         `✅ Alert history saved: ${savedAlertHistory._id} for ${alert.symbol}`
       );
+
+      // Remember which divergence pivot we just alerted on, so the same confirmed
+      // pivot does not re-fire on every tick while it stays valid.
+      if (triggerContext.divergence?.signature) {
+        if (!this.lastFiredDivergence) this.lastFiredDivergence = new Map();
+        this.lastFiredDivergence.set(
+          alert._id?.toString(),
+          triggerContext.divergence.signature
+        );
+      }
 
       // Update alert with latest price and new baseline
       const updateData = {
@@ -2427,7 +2505,7 @@ class RealTimeAlertProcessor {
           conditions.rsiDivergence,
           alert.symbol
         );
-        if (divMatch === false) {
+        if (!divMatch?.found) {
           // null means data still loading — skip check, don't fail alert
           conditionsMet = false;
         }
@@ -2845,6 +2923,7 @@ class RealTimeAlertProcessor {
           volume24h: parseFloat(priceData.volume || priceData.volume24h) || 0,
         },
         baselineData: alertHistory.baselineData,
+        divergence: alertHistory.divergence || null,
         // Additional fields for backward compatibility
         alertId: alert._id?.toString(),
         _id: alertHistory._id?.toString(),
@@ -2877,7 +2956,10 @@ class RealTimeAlertProcessor {
     }
   }
 
-  async getHistoricalCloses(symbol, timeframe, period = 14) {
+  // Fetch full OHLC candles, cached per candle boundary.
+  // Divergence needs the real candle wicks (high/low), not just closes — comparing
+  // closes only is line-chart divergence and disagrees with what TradingView draws.
+  async getHistoricalOHLC(symbol, timeframe, period = 14) {
     const key = `${symbol}_${timeframe}_${period}`;
     const timeframeMs = this.getTimeframeMs(timeframe);
     const currentCandleStart = Math.floor(Date.now() / timeframeMs) * timeframeMs;
@@ -2885,8 +2967,11 @@ class RealTimeAlertProcessor {
     if (!this.rsiDataCache) this.rsiDataCache = new Map();
     let historyEntry = this.rsiDataCache.get(key);
 
-    // Re-fetch klines if: no data, or a new candle has started since last fetch
-    const needsFresh = !historyEntry || historyEntry.candleStart !== currentCandleStart;
+    // Re-fetch klines if: no data, cached entry predates OHLC support, or a new candle started
+    const needsFresh =
+      !historyEntry ||
+      !historyEntry.highs ||
+      historyEntry.candleStart !== currentCandleStart;
 
     if (needsFresh) {
       if (Date.now() < this.apiBanUntil) return null; // API banned, skip
@@ -2906,10 +2991,12 @@ class RealTimeAlertProcessor {
         if (!response.ok) return null;
 
         const klines = await response.json();
-        const closes = klines.map(k => parseFloat(k[4]));
 
         historyEntry = {
-          closes,
+          closes: klines.map(k => parseFloat(k[4])),
+          highs: klines.map(k => parseFloat(k[2])),
+          lows: klines.map(k => parseFloat(k[3])),
+          openTimes: klines.map(k => k[0]),
           candleStart: currentCandleStart,
           fetchedAt: Date.now(),
         };
@@ -2920,7 +3007,12 @@ class RealTimeAlertProcessor {
       }
     }
 
-    return historyEntry.closes;
+    return historyEntry;
+  }
+
+  async getHistoricalCloses(symbol, timeframe, period = 14) {
+    const ohlc = await this.getHistoricalOHLC(symbol, timeframe, period);
+    return ohlc ? ohlc.closes : null;
   }
 
   async calculateRSI(symbol, timeframe, period = 14) {
@@ -3686,6 +3778,10 @@ class RealTimeAlertProcessor {
     }
   }
 
+  // RSI Divergence — mirrors TradingView's built-in "Divergence Indicator":
+  // pivots are detected on the RSI oscillator, and price is compared using the
+  // candle LOW (bullish) / HIGH (bearish) at those pivot bars — real OHLC wicks,
+  // not closing prices.
   async evaluateRSIDivergence(condition, symbol, rsiPeriod = 14, onlyClosedCandles = false) {
     if (!condition || !condition.timeframes || condition.timeframes.length === 0) return { found: false };
 
@@ -3694,91 +3790,137 @@ class RealTimeAlertProcessor {
       return { found: false };
     }
 
+    // TradingView "Divergence Indicator" defaults
+    const LB_LEFT = 5;      // Pivot Lookback Left
+    const LB_RIGHT = 5;     // Pivot Lookback Right (pivot confirms this many bars later)
+    const RANGE_LOWER = 5;  // Min bars between the two pivots
+    const RANGE_UPPER = 60; // Max bars between the two pivots
+    const MAX_BARS_SINCE_CONFIRM = 1; // Only fire on a freshly confirmed pivot
+
     for (const timeframe of condition.timeframes) {
-      const closes = await this.getHistoricalCloses(symbol, timeframe, rsiPeriod);
-      if (!closes || closes.length < rsiPeriod + 10) continue;
+      const ohlc = await this.getHistoricalOHLC(symbol, timeframe, rsiPeriod);
+      if (!ohlc || !ohlc.closes || !ohlc.highs || !ohlc.lows) continue;
 
-      let calculationCloses = [...closes];
-      
-      if (!onlyClosedCandles) {
-        // Update the last candle with live price
-        const livePrice = this.livePrices[symbol]?.price;
-        if (livePrice && calculationCloses.length > 0) {
-          calculationCloses[calculationCloses.length - 1] = parseFloat(livePrice);
-        }
+      const closes = [...ohlc.closes];
+      const highs = [...ohlc.highs];
+      const lows = [...ohlc.lows];
+      const openTimes = ohlc.openTimes || [];
+
+      if (onlyClosedCandles) {
+        // Drop the still-forming candle so signals only fire on a closed bar
+        closes.pop();
+        highs.pop();
+        lows.pop();
       } else {
-        // If checking only closed candles, drop the last (forming) candle
-        calculationCloses.pop();
+        // Fold the live price into the forming candle (extends the wick if needed)
+        const livePrice = parseFloat(this.livePrices[symbol]?.price);
+        const last = closes.length - 1;
+        if (livePrice && last >= 0) {
+          closes[last] = livePrice;
+          highs[last] = Math.max(highs[last], livePrice);
+          lows[last] = Math.min(lows[last], livePrice);
+        }
       }
 
-      const rsiArray = this.computeRSIArray(calculationCloses, rsiPeriod);
+      if (closes.length < rsiPeriod + LB_LEFT + LB_RIGHT + RANGE_LOWER + 1) continue;
 
-      // We only look at the most recent 50 candles to avoid very old divergences
-      const lookback = 50;
-      const startIndex = Math.max(rsiPeriod * 2, calculationCloses.length - lookback);
-      const recentCloses = calculationCloses;
+      const rsiArray = this.computeRSIArray(closes, rsiPeriod);
+      if (!rsiArray || rsiArray.length === 0) continue;
 
-      let foundType = null;
-      let isBearish = false;
+      const lastIndex = closes.length - 1;
 
-      // Bullish Check (needs Swing Lows)
+      // A pivot at index i is only confirmed LB_RIGHT bars later. For the independent
+      // trigger we require that confirmation to have just happened, otherwise an old
+      // divergence would keep re-firing on every tick.
+      const isFresh = (pivotIndex) =>
+        !onlyClosedCandles ||
+        lastIndex - (pivotIndex + LB_RIGHT) <= MAX_BARS_SINCE_CONFIRM;
+
+      // Compare the two most recent oscillator pivots against the price series
+      const evaluate = (pivots, priceSeries, checks) => {
+        if (pivots.length < 2) return null;
+
+        const p1 = pivots[pivots.length - 1]; // most recent
+        const p2 = pivots[pivots.length - 2]; // previous
+
+        const barsBetween = p1.index - p2.index;
+        if (barsBetween < RANGE_LOWER || barsBetween > RANGE_UPPER) return null;
+        if (!isFresh(p1.index)) return null;
+
+        const price1 = priceSeries[p1.index];
+        const price2 = priceSeries[p2.index];
+        const rsi1 = p1.value;
+        const rsi2 = p2.value;
+        if (!isFinite(price1) || !isFinite(price2)) return null;
+        if (rsi1 === null || rsi2 === null) return null;
+
+        for (const check of checks) {
+          if (!check.enabled) continue;
+          if (!check.test(price1, price2, rsi1, rsi2)) continue;
+
+          return {
+            type: check.type,
+            isBearish: check.isBearish,
+            label: check.label,
+            barsBetween,
+            pivot1: { price: price1, rsi: rsi1, time: openTimes[p1.index] || null },
+            pivot2: { price: price2, rsi: rsi2, time: openTimes[p2.index] || null },
+          };
+        }
+        return null;
+      };
+
+      let hit = null;
+
+      // Bullish → pivots on RSI lows, price compared on candle LOWS
       if (condition.bullish || condition.bullishHidden) {
-        const lows = this.findSwings(recentCloses, "low", 2, 2);
-        const recentLows = lows.filter(l => l.index >= startIndex);
-
-        if (recentLows.length >= 2) {
-          const low1 = recentLows[recentLows.length - 1]; // Most recent
-          const low2 = recentLows[recentLows.length - 2]; // Previous
-
-          const price1 = low1.value;
-          const price2 = low2.value;
-          const rsi1 = rsiArray[low1.index];
-          const rsi2 = rsiArray[low2.index];
-
-          if (rsi1 !== null && rsi2 !== null) {
-            // Bullish (Regular): Price LL, RSI HL
-            if (condition.bullish && price1 < price2 && rsi1 > rsi2) {
-              foundType = "bullish";
-            }
-            // Bullish Hidden: Price HL, RSI LL
-            else if (condition.bullishHidden && price1 > price2 && rsi1 < rsi2) {
-              foundType = "bullishHidden";
-            }
-          }
-        }
+        hit = evaluate(this.findSwings(rsiArray, "low", LB_LEFT, LB_RIGHT), lows, [
+          {
+            enabled: condition.bullish,
+            type: "bullish",
+            isBearish: false,
+            label: "Regular Bullish Divergence",
+            // Price Lower Low + RSI Higher Low
+            test: (price1, price2, rsi1, rsi2) => price1 < price2 && rsi1 > rsi2,
+          },
+          {
+            enabled: condition.bullishHidden,
+            type: "bullishHidden",
+            isBearish: false,
+            label: "Hidden Bullish Divergence",
+            // Price Higher Low + RSI Lower Low
+            test: (price1, price2, rsi1, rsi2) => price1 > price2 && rsi1 < rsi2,
+          },
+        ]);
       }
 
-      // Bearish Check (needs Swing Highs)
-      if (!foundType && (condition.bearish || condition.bearishHidden)) {
-        const highs = this.findSwings(recentCloses, "high", 2, 2);
-        const recentHighs = highs.filter(h => h.index >= startIndex);
-
-        if (recentHighs.length >= 2) {
-          const high1 = recentHighs[recentHighs.length - 1]; // Most recent
-          const high2 = recentHighs[recentHighs.length - 2]; // Previous
-
-          const price1 = high1.value;
-          const price2 = high2.value;
-          const rsi1 = rsiArray[high1.index];
-          const rsi2 = rsiArray[high2.index];
-
-          if (rsi1 !== null && rsi2 !== null) {
-            // Bearish (Regular): Price HH, RSI LH
-            if (condition.bearish && price1 > price2 && rsi1 < rsi2) {
-              foundType = "bearish";
-              isBearish = true;
-            }
-            // Bearish Hidden: Price LH, RSI HH
-            else if (condition.bearishHidden && price1 < price2 && rsi1 > rsi2) {
-              foundType = "bearishHidden";
-              isBearish = true;
-            }
-          }
-        }
+      // Bearish → pivots on RSI highs, price compared on candle HIGHS
+      if (!hit && (condition.bearish || condition.bearishHidden)) {
+        hit = evaluate(this.findSwings(rsiArray, "high", LB_LEFT, LB_RIGHT), highs, [
+          {
+            enabled: condition.bearish,
+            type: "bearish",
+            isBearish: true,
+            label: "Regular Bearish Divergence",
+            // Price Higher High + RSI Lower High
+            test: (price1, price2, rsi1, rsi2) => price1 > price2 && rsi1 < rsi2,
+          },
+          {
+            enabled: condition.bearishHidden,
+            type: "bearishHidden",
+            isBearish: true,
+            label: "Hidden Bearish Divergence",
+            // Price Lower High + RSI Higher High
+            test: (price1, price2, rsi1, rsi2) => price1 < price2 && rsi1 > rsi2,
+          },
+        ]);
       }
 
-      if (foundType) {
-        return { found: true, type: foundType, isBearish, timeframe };
+      if (hit) {
+        console.log(
+          `🔀 ${hit.label} on ${symbol} ${timeframe} — price ${hit.pivot2.price} → ${hit.pivot1.price}, RSI ${hit.pivot2.rsi.toFixed(2)} → ${hit.pivot1.rsi.toFixed(2)} (${hit.barsBetween} bars apart)`
+        );
+        return { found: true, timeframe, rsiPeriod, ...hit };
       }
     }
 

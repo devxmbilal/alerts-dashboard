@@ -101,6 +101,7 @@ export async function POST(request) {
         if (conditions.rsiDivergence) {
             conditionData.rsiDivergence = {
                 enabled: true,
+                condition: conditions.rsiDivergence.condition || "",
                 bullish: conditions.rsiDivergence.bullish || false,
                 bullishHidden: conditions.rsiDivergence.bullishHidden || false,
                 bearish: conditions.rsiDivergence.bearish || false,

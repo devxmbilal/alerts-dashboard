@@ -49,6 +49,9 @@ class AlertHistoryService {
             alertHistoryData.baselineData.changeFromBaselinePercent
           ),
         },
+        // Present only when an RSI divergence took part in the trigger —
+        // this is what lets the alert message explain WHY it fired.
+        divergence: alertHistoryData.divergence,
         triggeredAt: alertHistoryData.triggeredAt,
         status: "triggered",
       });

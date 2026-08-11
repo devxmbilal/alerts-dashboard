@@ -13,10 +13,11 @@ const alertSchema = new mongoose.Schema(
       index: true,
     },
     conditions: {
-      // Basic conditions (required)
+      // Min Daily is usually required, but an Independent Divergence Trigger
+      // is a complete alert condition on its own and must be creatable without it.
       minDaily: {
         type: String,
-        required: true,
+        default: "",
       },
       changePercent: {
         timeframe: {
@@ -71,6 +72,7 @@ const alertSchema = new mongoose.Schema(
         bullishHidden: { type: Boolean, default: false },
         bearish: { type: Boolean, default: false },
         bearishHidden: { type: Boolean, default: false },
+        condition: { type: String, default: "" },
       },
       macd: {
         timeframes: [String],

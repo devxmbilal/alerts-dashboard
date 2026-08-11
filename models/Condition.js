@@ -40,6 +40,7 @@ const conditionSchema = new mongoose.Schema(
             bullishHidden: { type: Boolean, default: false },
             bearish: { type: Boolean, default: false },
             bearishHidden: { type: Boolean, default: false },
+            condition: { type: String, default: "" },
             timeframes: [{ type: String }],
         },
         // MACD Condition (Fast EMA vs Slow EMA)

@@ -376,11 +376,25 @@ const FilterSidebar = forwardRef(
       const hasMacd = filters.macd && Object.values(filters.macd).some((value) => value === true);
       const hasVolume = Object.values(filters.volume).some((value) => value === true);
       const hasVolumeEma = filters.volumeEma && Object.values(filters.volumeEma).some((value) => value === true);
-      const hasRsiDivergence = filters.rsiDivergence && Object.values(filters.rsiDivergence).some((value) => value === true);
-      const isIndependentDivergence = hasRsiDivergence && (filters.rsiDivergence.condition === "condition1" || !filters.rsiDivergence.condition);
+      // Divergence needs BOTH a timeframe and a divergence type to be a usable trigger
+      const rsiDivHasTimeframe =
+        filters.rsiDivergence &&
+        Object.keys(filters.rsiDivergence).some(
+          (key) =>
+            !["bullish", "bullishHidden", "bearish", "bearishHidden", "condition"].includes(key) &&
+            filters.rsiDivergence[key] === true
+        );
+      const rsiDivHasType = !!(
+        filters.rsiDivergence?.bullish ||
+        filters.rsiDivergence?.bullishHidden ||
+        filters.rsiDivergence?.bearish ||
+        filters.rsiDivergence?.bearishHidden
+      );
+      const hasRsiDivergence = rsiDivHasTimeframe && rsiDivHasType;
 
-      // Validation 1: Min Daily is required (UNLESS independent divergence trigger is selected)
-      if (!hasMinDaily && !isIndependentDivergence) {
+      // Validation 1: Min Daily is required UNLESS divergence is set —
+      // divergence is a complete trigger on its own
+      if (!hasMinDaily && !hasRsiDivergence) {
         setErrorMessage("Please set: Min Daily volume");
         setIsCreating(false);
         return;
@@ -407,7 +421,7 @@ const FilterSidebar = forwardRef(
           (key) => filters.minDaily[key] === true
         );
 
-        if (!minDailyKey && !isIndependentDivergence) {
+        if (!minDailyKey && !hasRsiDivergence) {
           setErrorMessage("Please select a Min Daily value");
           setIsCreating(false);
           return;

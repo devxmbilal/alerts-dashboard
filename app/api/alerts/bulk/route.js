@@ -51,11 +51,18 @@ export async function POST(request) {
       );
     }
 
-    const isIndependentDivergence = conditions.rsiDivergence?.condition === "condition1" || !conditions.rsiDivergence?.condition;
-    const hasDivergence = conditions.rsiDivergence?.timeframes?.length > 0;
+    const divergenceTypeSelected = !!(
+      conditions.rsiDivergence?.bullish ||
+      conditions.rsiDivergence?.bullishHidden ||
+      conditions.rsiDivergence?.bearish ||
+      conditions.rsiDivergence?.bearishHidden
+    );
+    const hasDivergence =
+      conditions.rsiDivergence?.timeframes?.length > 0 && divergenceTypeSelected;
 
-    // Validate: at least minDaily is required, (UNLESS independent divergence trigger is selected)
-    if (!conditions.minDaily && !(hasDivergence && isIndependentDivergence)) {
+    // Validate: minDaily is required, UNLESS divergence is set — divergence is a
+    // complete trigger on its own and must be usable as the only condition.
+    if (!conditions.minDaily && !hasDivergence) {
       return NextResponse.json(
         {
           error: "Min Daily volume condition is required",
