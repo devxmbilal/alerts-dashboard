@@ -51,8 +51,11 @@ export async function POST(request) {
       );
     }
 
-    // Validate: at least minDaily is required, other conditions are optional
-    if (!conditions.minDaily) {
+    const isIndependentDivergence = conditions.rsiDivergence?.condition === "condition1" || !conditions.rsiDivergence?.condition;
+    const hasDivergence = conditions.rsiDivergence?.timeframes?.length > 0;
+
+    // Validate: at least minDaily is required, (UNLESS independent divergence trigger is selected)
+    if (!conditions.minDaily && !(hasDivergence && isIndependentDivergence)) {
       return NextResponse.json(
         {
           error: "Min Daily volume condition is required",
