@@ -403,37 +403,13 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
     return change >= 0 ? "#4caf50" : "#f44336";
   };
 
-  // Explains WHY a divergence alert fired, mirroring the Telegram message
+  // One-line label for which divergence fired, mirroring the Telegram message
   const getDivergenceMeta = (type) =>
     ({
-      bullish: {
-        name: "Regular Bullish Divergence",
-        bias: "Reversal ▲",
-        price: "Lower Low (LL)",
-        rsi: "Higher Low (HL)",
-        color: "#4caf50",
-      },
-      bullishHidden: {
-        name: "Hidden Bullish Divergence",
-        bias: "Continuation ▲",
-        price: "Higher Low (HL)",
-        rsi: "Lower Low (LL)",
-        color: "#4caf50",
-      },
-      bearish: {
-        name: "Regular Bearish Divergence",
-        bias: "Reversal ▼",
-        price: "Higher High (HH)",
-        rsi: "Lower High (LH)",
-        color: "#f44336",
-      },
-      bearishHidden: {
-        name: "Hidden Bearish Divergence",
-        bias: "Continuation ▼",
-        price: "Lower High (LH)",
-        rsi: "Higher High (HH)",
-        color: "#f44336",
-      },
+      bullish: { name: "Regular Bullish Divergence", color: "#4caf50" },
+      bullishHidden: { name: "Hidden Bullish Divergence", color: "#4caf50" },
+      bearish: { name: "Regular Bearish Divergence", color: "#f44336" },
+      bearishHidden: { name: "Hidden Bearish Divergence", color: "#f44336" },
     }[type] || null);
 
   const formatConditions = (conditions) => {
@@ -642,104 +618,55 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                       }
                       secondary={
                         <Box sx={{ mt: 0.5, lineHeight: 1.8 }}>
-                          {/* Divergence detail — only for divergence-driven alerts */}
+                          {/* Divergence — single line noting what fired, rest of the message is unchanged */}
                           {alert.divergence &&
                             getDivergenceMeta(alert.divergence.type) && (
-                              <Box
+                              <Typography
+                                variant="body2"
                                 sx={{
-                                  mb: 0.75,
-                                  p: 0.75,
-                                  borderRadius: 1,
-                                  borderLeft: `3px solid ${getDivergenceMeta(alert.divergence.type).color}`,
-                                  backgroundColor: `${getDivergenceMeta(alert.divergence.type).color}14`,
+                                  color: getDivergenceMeta(alert.divergence.type).color,
+                                  fontWeight: 700,
+                                  fontSize: "0.8rem",
+                                  display: "block",
+                                  mb: 0.5,
                                 }}
                               >
-                                <Typography
-                                  variant="body2"
-                                  sx={{
-                                    color: getDivergenceMeta(alert.divergence.type).color,
-                                    fontWeight: 700,
-                                    fontSize: "0.8rem",
-                                    display: "block",
-                                  }}
-                                >
-                                  {alert.divergence.label ||
-                                    getDivergenceMeta(alert.divergence.type).name}
-                                </Typography>
-                                <Typography
-                                  variant="body2"
-                                  sx={{
-                                    color: "text.secondary",
-                                    fontSize: "0.72rem",
-                                    display: "block",
-                                  }}
-                                >
-                                  <strong>{alert.divergence.timeframe}</strong> · RSI(
-                                  {alert.divergence.rsiPeriod || 14}) ·{" "}
-                                  {getDivergenceMeta(alert.divergence.type).bias}
-                                </Typography>
-                                <Typography
-                                  variant="body2"
-                                  sx={{
-                                    color: "text.secondary",
-                                    fontSize: "0.72rem",
-                                    display: "block",
-                                  }}
-                                >
-                                  Price {getDivergenceMeta(alert.divergence.type).price}:{" "}
-                                  {formatPrice(alert.divergence.pivot2?.price)} →{" "}
-                                  {formatPrice(alert.divergence.pivot1?.price)}
-                                </Typography>
-                                <Typography
-                                  variant="body2"
-                                  sx={{
-                                    color: "text.secondary",
-                                    fontSize: "0.72rem",
-                                    display: "block",
-                                  }}
-                                >
-                                  RSI {getDivergenceMeta(alert.divergence.type).rsi}:{" "}
-                                  {alert.divergence.pivot2?.rsi?.toFixed(2)} →{" "}
-                                  {alert.divergence.pivot1?.rsi?.toFixed(2)}
-                                  {alert.divergence.barsBetween
-                                    ? ` · ${alert.divergence.barsBetween} candles apart`
-                                    : ""}
-                                </Typography>
-                              </Box>
+                                {alert.divergence.label ||
+                                  getDivergenceMeta(alert.divergence.type).name}{" "}
+                                {alert.divergence.timeframe}
+                              </Typography>
                             )}
 
-                          {/* Target & Actual — hidden when divergence was the only condition */}
-                          {!alert.divergence?.divergenceOnly && (
-                            <Typography
-                              variant="body2"
-                              sx={{
-                                color: "text.secondary",
-                                display: "block",
-                                mb: 0.5,
-                                fontSize: "0.8rem",
+                          {/* Target & Actual */}
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              color: "text.secondary",
+                              display: "block",
+                              mb: 0.5,
+                              fontSize: "0.8rem",
+                            }}
+                          >
+                            <strong>Target:</strong> {alert.targetValue || 1} |{" "}
+                            <strong>Actual Change ({alert.timeframe || "5MIN"}):</strong>{" "}
+                            <span
+                              style={{
+                                color: getChangeColor(
+                                  alert.actualValue || alert.priceChangePercent
+                                ),
+                                fontWeight: 600,
                               }}
                             >
-                              <strong>Target:</strong> {alert.targetValue || 1} |{" "}
-                              <strong>Actual Change ({alert.timeframe || "5MIN"}):</strong>{" "}
-                              <span
-                                style={{
-                                  color: getChangeColor(
-                                    alert.actualValue || alert.priceChangePercent
-                                  ),
-                                  fontWeight: 600,
-                                }}
-                              >
-                                {alert.actualValue !== undefined
-                                  ? alert.actualValue.toFixed(3)
-                                  : alert.priceChangePercent}
-                                %
-                              </span>{" "}
-                              | <strong>Timeframe:</strong>{" "}
-                              {alert.timeframe || "5MIN"} |{" "}
-                              <strong>Direction:</strong>{" "}
-                              {alert.direction || "increase"}
-                            </Typography>
-                          )}
+                              {alert.actualValue !== undefined
+                                ? alert.actualValue.toFixed(3)
+                                : alert.priceChangePercent}
+                              %
+                            </span>{" "}
+                            | <strong>Timeframe:</strong>{" "}
+                            {alert.timeframe || "5MIN"} |{" "}
+                            <strong>Direction:</strong>{" "}
+                            {alert.direction || "increase"}
+                          </Typography>
 
                           {/* Price */}
                           <Typography
@@ -755,48 +682,45 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                             <strong>Price:</strong> {formatPrice(alert.price)}
                           </Typography>
 
-                          {/* Last Price + Change — only meaningful for price-change alerts */}
-                          {!alert.divergence?.divergenceOnly && (
-                            <>
-                              <Typography
-                                variant="body2"
-                                sx={{
-                                  color: "text.secondary",
-                                  display: "block",
-                                  mb: 0.5,
-                                  fontSize: "0.8rem",
-                                }}
-                              >
-                                <strong>Last Price:</strong>{" "}
-                                {formatPrice(alert.baselinePrice || alert.price)}
-                              </Typography>
+                          {/* Last Price */}
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              color: "text.secondary",
+                              display: "block",
+                              mb: 0.5,
+                              fontSize: "0.8rem",
+                            }}
+                          >
+                            <strong>Last Price:</strong>{" "}
+                            {formatPrice(alert.baselinePrice || alert.price)}
+                          </Typography>
 
-                              <Typography
-                                variant="body2"
-                                sx={{
-                                  color: "text.secondary",
-                                  display: "block",
-                                  mb: 0.5,
-                                  fontSize: "0.8rem",
-                                }}
-                              >
-                                <strong>Change in price:</strong>{" "}
-                                <span
-                                  style={{
-                                    color: getChangeColor(
-                                      alert.changeFromBaselinePercent
-                                    ),
-                                    fontWeight: 600,
-                                  }}
-                                >
-                                  {alert.changeFromBaselinePercent !== undefined
-                                    ? alert.changeFromBaselinePercent.toFixed(3)
-                                    : "N/A"}
-                                  %
-                                </span>
-                              </Typography>
-                            </>
-                          )}
+                          {/* Change in price */}
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              color: "text.secondary",
+                              display: "block",
+                              mb: 0.5,
+                              fontSize: "0.8rem",
+                            }}
+                          >
+                            <strong>Change in price:</strong>{" "}
+                            <span
+                              style={{
+                                color: getChangeColor(
+                                  alert.changeFromBaselinePercent
+                                ),
+                                fontWeight: 600,
+                              }}
+                            >
+                              {alert.changeFromBaselinePercent !== undefined
+                                ? alert.changeFromBaselinePercent.toFixed(3)
+                                : "N/A"}
+                              %
+                            </span>
+                          </Typography>
 
                           {/* Volume */}
                           <Typography

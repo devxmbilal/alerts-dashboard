@@ -169,33 +169,14 @@ class TelegramService {
       day: "numeric",
     });
 
-    const divergenceBlock = this.formatDivergenceBlock(divergence);
-
-    // Divergence was the only condition — drop the Change %/baseline lines that
-    // belong to a price-change alert and would just be noise here.
-    if (divergence?.divergenceOnly && divergenceBlock) {
-      return `
-🚨 *DIVERGENCE ALERT!* 🚨
-
-*${symbol || "Unknown"}*
-━━━━━━━━━━━━━━━
-${divergenceBlock}
-💵 Current Price: \`$${safePrice(triggeredPrice)}\`
-${changeEmoji} 24h Change: \`${safeNumber(priceChangePercent)}%\`
-📊 24h Volume: \`${safeVolume}\`
-⏰ Time: \`${timeStr}\`
-📅 Date: \`${dateStr}\`
-
-━━━━━━━━━━━━━━━
-      `.trim();
-    }
+    const divergenceLine = this.formatDivergenceLine(divergence);
 
     return `
 🚨 *ALERT TRIGGERED!* 🚨
 
 *${symbol || "Unknown"}*
 ━━━━━━━━━━━━━━━
-${divergenceBlock}
+${divergenceLine ? divergenceLine + "\n" : ""}
 📊 Actual Change (${alertData.timeframe || "5MIN"}): \`${safeNumber(actualValue)}%\`
 💵 Current Price: \`$${safePrice(triggeredPrice)}\`
 📍 Last Price: \`$${safePrice(baselinePrice)}\`
@@ -208,48 +189,26 @@ ${changeEmoji} 24h Change: \`${safeNumber(priceChangePercent)}%\`
     `.trim();
   }
 
-  // Renders the "why this fired" section for RSI divergence alerts.
-  // Returns an empty string for alerts that had no divergence involved.
-  formatDivergenceBlock(divergence) {
+  // Single-line "why this fired" note for RSI divergence alerts, e.g.
+  // "🔴 Hidden Bearish Divergence 15MIN" — added to the normal template,
+  // nothing else about the message changes.
+  formatDivergenceLine(divergence) {
     if (!divergence || !divergence.type) return "";
 
-    const META = {
-      bullish: { icon: "🟢", name: "Regular Bullish Divergence", bias: "Reversal ▲", price: "Lower Low (LL)", rsi: "Higher Low (HL)" },
-      bullishHidden: { icon: "🟢", name: "Hidden Bullish Divergence", bias: "Continuation ▲", price: "Higher Low (HL)", rsi: "Lower Low (LL)" },
-      bearish: { icon: "🔴", name: "Regular Bearish Divergence", bias: "Reversal ▼", price: "Higher High (HH)", rsi: "Lower High (LH)" },
-      bearishHidden: { icon: "🔴", name: "Hidden Bearish Divergence", bias: "Continuation ▼", price: "Lower High (LH)", rsi: "Higher High (HH)" },
+    const LABELS = {
+      bullish: "Regular Bullish Divergence",
+      bullishHidden: "Hidden Bullish Divergence",
+      bearish: "Regular Bearish Divergence",
+      bearishHidden: "Hidden Bearish Divergence",
     };
 
-    const meta = META[divergence.type];
-    if (!meta) return "";
+    const label = divergence.label || LABELS[divergence.type];
+    if (!label) return "";
 
-    const fmtPrice = (val) =>
-      typeof val === "number" && !isNaN(val) ? `$${val.toFixed(6)}` : "N/A";
-    const fmtRsi = (val) =>
-      typeof val === "number" && !isNaN(val) ? val.toFixed(2) : "N/A";
+    const icon = divergence.isBearish ? "🔴" : "🟢";
+    const timeframe = divergence.timeframe || "";
 
-    const lines = [
-      "",
-      `${meta.icon} *${divergence.label || meta.name}*`,
-      `⏱ Timeframe: \`${divergence.timeframe || "N/A"}\`  •  RSI(${divergence.rsiPeriod || 14})`,
-      `🎯 Bias: \`${meta.bias}\``,
-      `📉 Price: \`${meta.price}\`  ${fmtPrice(divergence.pivot2?.price)} → ${fmtPrice(divergence.pivot1?.price)}`,
-      `📊 RSI: \`${meta.rsi}\`  ${fmtRsi(divergence.pivot2?.rsi)} → ${fmtRsi(divergence.pivot1?.rsi)}`,
-    ];
-
-    if (divergence.barsBetween) {
-      lines.push(`📏 Pivot Gap: \`${divergence.barsBetween} candles\``);
-    }
-
-    if (divergence.trigger === "independent") {
-      lines.push("⚡ Trigger: `Independent (confirmed on candle close)`");
-    } else if (divergence.trigger === "conditional") {
-      lines.push("🔗 Trigger: `Conditional (with other filters)`");
-    }
-
-    lines.push("", "━━━━━━━━━━━━━━━");
-
-    return lines.join("\n");
+    return `${icon} ${label}${timeframe ? " " + timeframe : ""}`;
   }
 
   // =============== LOW-LEVEL SENDS (rate-limited) ===============
