@@ -1346,7 +1346,7 @@ const FilterSidebar = forwardRef(
                         borderColor: theme.palette.divider,
                         boxShadow: theme.shadows[4],
                         p: 0,
-                        maxWidth: 300
+                        maxWidth: 250
                       }
                     }
                   }}
@@ -1364,11 +1364,8 @@ const FilterSidebar = forwardRef(
                           border: (filters?.rsiDivergence?.condition === "condition1" || !filters?.rsiDivergence?.condition) ? `1px solid ${theme.palette.primary.main}80` : '1px solid transparent'
                         }}
                       >
-                        <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 0.5, color: (filters?.rsiDivergence?.condition === "condition1" || !filters?.rsiDivergence?.condition) ? "primary.main" : "text.primary" }}>
+                        <Typography variant="body1" sx={{ fontWeight: 'bold', color: (filters?.rsiDivergence?.condition === "condition1" || !filters?.rsiDivergence?.condition) ? "primary.main" : "text.primary" }}>
                           1. Independent Trigger
-                        </Typography>
-                        <Typography variant="caption" sx={{ display: 'block', lineHeight: 1.3, color: "text.secondary" }}>
-                          All Divergences will trigger after candle close without requiring other conditions met.
                         </Typography>
                       </Box>
                       
@@ -1383,21 +1380,18 @@ const FilterSidebar = forwardRef(
                           border: filters?.rsiDivergence?.condition === "condition2" ? `1px solid ${theme.palette.primary.main}80` : '1px solid transparent'
                         }}
                       >
-                        <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 0.5, color: filters?.rsiDivergence?.condition === "condition2" ? "primary.main" : "text.primary" }}>
+                        <Typography variant="body1" sx={{ fontWeight: 'bold', color: filters?.rsiDivergence?.condition === "condition2" ? "primary.main" : "text.primary" }}>
                           2. Conditional Trigger
-                        </Typography>
-                        <Typography variant="caption" sx={{ display: 'block', lineHeight: 1.3, color: "text.secondary" }}>
-                          If other conditions met at bearish divergences on current candle alert will not trigger.
                         </Typography>
                       </Box>
                     </Box>
                   } 
                 >
-                  <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, cursor: "pointer", width: "fit-content" }}>
-                    <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1, cursor: "pointer", width: "fit-content" }}>
+                    <Typography variant="body1" sx={{ color: "text.primary", fontWeight: 600 }}>
                       Divergence Condition
                     </Typography>
-                    <InfoOutlinedIcon sx={{ fontSize: 16, color: "primary.main" }} />
+                    <InfoOutlinedIcon sx={{ fontSize: 18, color: "primary.main" }} />
                   </Box>
                 </Tooltip>
               </Box>
