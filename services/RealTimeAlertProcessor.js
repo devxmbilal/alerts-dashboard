@@ -3292,21 +3292,36 @@ class RealTimeAlertProcessor {
       if (val === null || val === undefined) continue;
 
       let isSwing = true;
-      for (let j = i - leftBars; j <= i + rightBars; j++) {
-        if (i === j) continue;
+
+      // Ties are allowed on the left and rejected on the right, so a flat
+      // bottom/top resolves to its last bar. Requiring a strict extreme on both
+      // sides skips these outright — and flat stretches are common, since a quiet
+      // market repeats the same close and RSI for several candles in a row. Those
+      // skipped lows were the real swings, which left the divergence check pairing
+      // up two unrelated points hours apart.
+      for (let j = i - leftBars; j < i; j++) {
         const compareVal = data[j];
         if (compareVal === null || compareVal === undefined) {
           isSwing = false;
           break;
         }
-
-        if (type === "high" && val <= compareVal) {
+        if (type === "high" ? val < compareVal : val > compareVal) {
           isSwing = false;
           break;
         }
-        if (type === "low" && val >= compareVal) {
-          isSwing = false;
-          break;
+      }
+
+      if (isSwing) {
+        for (let j = i + 1; j <= i + rightBars; j++) {
+          const compareVal = data[j];
+          if (compareVal === null || compareVal === undefined) {
+            isSwing = false;
+            break;
+          }
+          if (type === "high" ? val <= compareVal : val >= compareVal) {
+            isSwing = false;
+            break;
+          }
         }
       }
 
