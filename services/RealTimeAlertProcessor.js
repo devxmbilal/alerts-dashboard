@@ -3816,27 +3816,19 @@ class RealTimeAlertProcessor {
     }
 
     // TradingView "Divergence Indicator" defaults
-    const LB_LEFT = 5;      // Pivot Lookback Left
-    const LB_RIGHT = 5;     // Pivot Lookback Right (pivot confirms this many bars later)
+    const LB_LEFT = 5;      // Pivot Lookback Left for past anchor
+    const LB_RIGHT = 5;     // Pivot Lookback Right for past anchor
     const RANGE_LOWER = 5;  // Min bars between the two pivots
     const RANGE_UPPER = 60; // Max bars between the two pivots
-    // A 5-bar pivot scan also picks up micro-wiggles. Two swings whose RSI differs by
-    // ~1 point over a 0.2% price move is noise, not a divergence a trader would draw,
-    // so both legs must move by at least this much for the signal to count.
-    const MIN_RSI_DIFF = 3;           // RSI points between the two pivots
-    const MIN_PRICE_DIFF_PCT = 0.3;   // % price change between the two pivots
-    // Floors alone still let through divergences that are weak on BOTH legs and are
-    // invisible on a chart. Scoring the two together is how divergence scanners rank
-    // strength, and it cleanly separates the signals worth alerting on.
-    const MIN_STRENGTH = 4;           // RSI points x price %
-    // Momentum also has to be at an extreme — a divergence built around RSI 50 is
-    // mid-range chop, not the oversold/overbought turn traders act on.
-    const EXTREME_BULLISH_RSI = 40;   // newer pivot must be at or below this
-    const EXTREME_BEARISH_RSI = 60;   // newer pivot must be at or above this
-    // A freshly confirmed pivot at index i was confirmed at bar i + LB_RIGHT.
-    // Only alert when the newer pivot's confirmation is within MAX_STALENESS bars
-    // of the current bar — prevents alerting on old, already-played-out signals.
-    const MAX_STALENESS = 2;
+
+    // Strict noise filters so the divergence is clearly visible on the chart
+    const MIN_RSI_DIFF = 5;           // RSI points between the two pivots
+    const MIN_PRICE_DIFF_PCT = 0.5;   // % price change between the two pivots
+    const MIN_STRENGTH = 10;          // RSI points x price %
+
+    // Momentum must be at an extreme for the past anchor
+    const EXTREME_BULLISH_RSI = 40;   // past pivot must be at or below this
+    const EXTREME_BEARISH_RSI = 60;   // past pivot must be at or above this
 
     for (const timeframe of condition.timeframes) {
       const ohlc = await this.getHistoricalOHLC(symbol, timeframe, rsiPeriod);
@@ -3870,69 +3862,68 @@ class RealTimeAlertProcessor {
 
       const lastIndex = closes.length - 1;
 
-      // ✅ FIXED: Both p1 (newer) and p2 (older) must be CONFIRMED RSI pivots.
-      // Old code used lastIndex (current candle) as p1 WITHOUT any pivot
-      // confirmation — any random candle could "diverge" from a past pivot,
-      // producing alerts with no visible divergence on the chart.
-      //
-      // New logic: find two confirmed RSI pivots within [RANGE_LOWER, RANGE_UPPER]
-      // bars of each other. The newer pivot (p1) must have been freshly confirmed
-      // (its confirmation bar = p1.index + LB_RIGHT is close to lastIndex).
-      // Price is read from the candle at each RSI pivot bar (same as TradingView).
-      const evaluate = (rsiPivots, priceSeries, isExtremeEnough, checks) => {
-        if (rsiPivots.length < 2) return null;
+      // PRO DIVERGENCE LOGIC:
+      // p1 (Current): The current candle (so the trader can draw a line TO IT right now).
+      // p2 (Past): A confirmed RSI pivot in the past.
+      // Crucially, we enforce that RSI is ticking in the correct direction (forming a peak)
+      // on the current candle, so we don't alert in the middle of a straight line.
+      const evaluate = (rsiPivots, priceSeries, isExtremeEnough, checks, isBullish) => {
+        if (rsiPivots.length === 0) return null;
 
-        // Iterate from the newest confirmed pivot backwards.
-        for (let i = rsiPivots.length - 1; i >= 1; i--) {
-          const p1Pivot = rsiPivots[i];
-          const confirmationBar = p1Pivot.index + LB_RIGHT;
+        const p1 = {
+          index: lastIndex,
+          price: priceSeries[lastIndex],
+          rsi: rsiArray[lastIndex],
+        };
 
-          // p1 must be fully confirmed (all LB_RIGHT bars after it exist)
-          if (confirmationBar > lastIndex) continue;
-          // p1 must be freshly confirmed — skip stale/old divergences
-          if (lastIndex - confirmationBar > MAX_STALENESS) continue;
+        // Ensure the current candle is actually forming a peak/valley.
+        // If Bearish, RSI should have ticked down (or be flat) from the previous candle.
+        // If Bullish, RSI should have ticked up (or be flat) from the previous candle.
+        const rsiPrev = rsiArray[lastIndex - 1];
+        if (rsiPrev !== undefined && rsiPrev !== null) {
+          if (isBullish && p1.rsi < rsiPrev) return null; // Still dropping, not a valley yet
+          if (!isBullish && p1.rsi > rsiPrev) return null; // Still rising, not a peak yet
+        }
 
-          // Scan older pivots for p2
-          for (let j = i - 1; j >= 0; j--) {
-            const p2Pivot = rsiPivots[j];
-            const barsBetween = p1Pivot.index - p2Pivot.index;
-            if (barsBetween < RANGE_LOWER) continue;
-            if (barsBetween > RANGE_UPPER) break; // all further pivots are even older
+        // Scan older pivots for p2
+        for (let j = rsiPivots.length - 1; j >= 0; j--) {
+          const p2Pivot = rsiPivots[j];
+          const barsBetween = p1.index - p2Pivot.index;
+          if (barsBetween < RANGE_LOWER) continue;
+          if (barsBetween > RANGE_UPPER) break; // all further pivots are even older
 
-            const p1 = {
-              index: p1Pivot.index,
-              price: priceSeries[p1Pivot.index],
-              rsi: p1Pivot.value,
+          const p2 = {
+            index: p2Pivot.index,
+            price: priceSeries[p2Pivot.index],
+            rsi: p2Pivot.value,
+          };
+
+          if (!isFinite(p1.price) || !isFinite(p2.price)) continue;
+          if (p1.rsi === null || p1.rsi === undefined || p2.rsi === null) continue;
+
+          // Both legs must actually separate — otherwise this is chart noise
+          const rsiDiff = Math.abs(p1.rsi - p2.rsi);
+          const priceDiffPct = p2.price !== 0 ? Math.abs((p1.price - p2.price) / p2.price) * 100 : 0;
+          
+          if (rsiDiff < MIN_RSI_DIFF || priceDiffPct < MIN_PRICE_DIFF_PCT) continue;
+          if (rsiDiff * priceDiffPct < MIN_STRENGTH) continue;
+          if (!isExtremeEnough(p2.rsi)) continue;
+
+          for (const check of checks) {
+            if (!check.enabled) continue;
+            // Note: The definitions are:
+            // p1 is the CURRENT candle, p2 is the PAST pivot.
+            // test(currentPrice, pastPrice, currentRSI, pastRSI)
+            if (!check.test(p1.price, p2.price, p1.rsi, p2.rsi)) continue;
+
+            return {
+              type: check.type,
+              isBearish: check.isBearish,
+              label: check.label,
+              barsBetween,
+              pivot1: { price: p1.price, rsi: p1.rsi, time: openTimes[p1.index] || null },
+              pivot2: { price: p2.price, rsi: p2.rsi, time: openTimes[p2.index] || null },
             };
-            const p2 = {
-              index: p2Pivot.index,
-              price: priceSeries[p2Pivot.index],
-              rsi: p2Pivot.value,
-            };
-
-            if (!isFinite(p1.price) || !isFinite(p2.price)) continue;
-            if (p1.rsi === null || p1.rsi === undefined || p2.rsi === null) continue;
-
-            // Both legs must actually separate — otherwise this is chart noise
-            const rsiDiff = Math.abs(p1.rsi - p2.rsi);
-            const priceDiffPct = p2.price !== 0 ? Math.abs((p1.price - p2.price) / p2.price) * 100 : 0;
-            if (rsiDiff < MIN_RSI_DIFF || priceDiffPct < MIN_PRICE_DIFF_PCT) continue;
-            if (rsiDiff * priceDiffPct < MIN_STRENGTH) continue;
-            if (!isExtremeEnough(p1.rsi)) continue;
-
-            for (const check of checks) {
-              if (!check.enabled) continue;
-              if (!check.test(p1.price, p2.price, p1.rsi, p2.rsi)) continue;
-
-              return {
-                type: check.type,
-                isBearish: check.isBearish,
-                label: check.label,
-                barsBetween,
-                pivot1: { price: p1.price, rsi: p1.rsi, time: openTimes[p1.index] || null },
-                pivot2: { price: p2.price, rsi: p2.rsi, time: openTimes[p2.index] || null },
-              };
-            }
           }
         }
         return null;
@@ -3952,18 +3943,19 @@ class RealTimeAlertProcessor {
               type: "bullish",
               isBearish: false,
               label: "Regular Bullish Divergence",
-              // Price Lower Low + RSI Higher Low
-              test: (price1, price2, rsi1, rsi2) => price1 < price2 && rsi1 > rsi2,
+              // currentPrice (p1) < pastPrice (p2) AND currentRSI (p1) > pastRSI (p2)
+              test: (currentPrice, pastPrice, currentRSI, pastRSI) => currentPrice < pastPrice && currentRSI > pastRSI,
             },
             {
               enabled: condition.bullishHidden,
               type: "bullishHidden",
               isBearish: false,
               label: "Hidden Bullish Divergence",
-              // Price Higher Low + RSI Lower Low
-              test: (price1, price2, rsi1, rsi2) => price1 > price2 && rsi1 < rsi2,
+              // currentPrice (p1) > pastPrice (p2) AND currentRSI (p1) < pastRSI (p2)
+              test: (currentPrice, pastPrice, currentRSI, pastRSI) => currentPrice > pastPrice && currentRSI < pastRSI,
             },
-          ]
+          ],
+          true // isBullish
         );
       }
 
@@ -3979,18 +3971,19 @@ class RealTimeAlertProcessor {
               type: "bearish",
               isBearish: true,
               label: "Regular Bearish Divergence",
-              // Price Higher High + RSI Lower High
-              test: (price1, price2, rsi1, rsi2) => price1 > price2 && rsi1 < rsi2,
+              // currentPrice (p1) > pastPrice (p2) AND currentRSI (p1) < pastRSI (p2)
+              test: (currentPrice, pastPrice, currentRSI, pastRSI) => currentPrice > pastPrice && currentRSI < pastRSI,
             },
             {
               enabled: condition.bearishHidden,
               type: "bearishHidden",
               isBearish: true,
               label: "Hidden Bearish Divergence",
-              // Price Lower High + RSI Higher High
-              test: (price1, price2, rsi1, rsi2) => price1 < price2 && rsi1 > rsi2,
+              // currentPrice (p1) < pastPrice (p2) AND currentRSI (p1) > pastRSI (p2)
+              test: (currentPrice, pastPrice, currentRSI, pastRSI) => currentPrice < pastPrice && currentRSI > pastRSI,
             },
-          ]
+          ],
+          false // isBullish
         );
       }
 
