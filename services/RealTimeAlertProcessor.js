@@ -1253,6 +1253,14 @@ class RealTimeAlertProcessor {
       // Check if any condition triggered a bypass (Independent Trigger)
       const bypassCondition = conditionResults.find(r => r.bypassOthers);
       if (bypassCondition) {
+        // Min Daily is a hard prerequisite, not one of the "other conditions" an
+        // independent divergence is allowed to bypass — it keeps illiquid symbols out.
+        const minDailyIndex = activeConditions.findIndex(
+          (c) => c.name === "Min Daily Volume"
+        );
+        if (minDailyIndex !== -1 && !conditionResults[minDailyIndex].passed) {
+          return false;
+        }
         console.log(`🚀 Bypass Trigger Activated: ${bypassCondition.reason}`);
         return true;
       }
@@ -3796,7 +3804,11 @@ class RealTimeAlertProcessor {
     const RANGE_LOWER = 5;  // Min bars between the two pivots
     const RANGE_UPPER = 60; // Max bars between the two pivots
     const MAX_BARS_SINCE_CONFIRM = 1; // Only fire on a freshly confirmed pivot
-    const PIVOT_ALIGN_TOLERANCE = 3;  // How far the RSI pivot may sit from the price pivot
+    // A 5-bar pivot scan also picks up micro-wiggles. Two swings whose RSI differs by
+    // ~1 point over a 0.2% price move is noise, not a divergence a trader would draw,
+    // so both legs must move by at least this much for the signal to count.
+    const MIN_RSI_DIFF = 3;           // RSI points between the two pivots
+    const MIN_PRICE_DIFF_PCT = 0.3;   // % price change between the two pivots
 
     for (const timeframe of condition.timeframes) {
       const ohlc = await this.getHistoricalOHLC(symbol, timeframe, rsiPeriod);
@@ -3834,37 +3846,21 @@ class RealTimeAlertProcessor {
       // RSI line itself. A swing only counts when BOTH series pivoted around the same
       // bar — reading price off an RSI pivot bar reports a "high" on a bar where price
       // never actually made one, which is what produced the false divergences.
-      const buildSwingPoints = (rsiPivots, priceSeries, isBetterPrice) =>
-        rsiPivots.map((rsiPivot) => {
-          // Take the real price extreme around the RSI pivot rather than whatever
-          // price happened to print on that exact bar — the price swing usually
-          // lands a candle or two either side of the momentum turn.
-          const from = Math.max(0, rsiPivot.index - PIVOT_ALIGN_TOLERANCE);
-          const to = Math.min(priceSeries.length - 1, rsiPivot.index + PIVOT_ALIGN_TOLERANCE);
-
-          let price = priceSeries[rsiPivot.index];
-          let priceIndex = rsiPivot.index;
-          for (let i = from; i <= to; i++) {
-            const candidate = priceSeries[i];
-            if (!isFinite(candidate)) continue;
-            if (!isFinite(price) || isBetterPrice(candidate, price)) {
-              price = candidate;
-              priceIndex = i;
-            }
-          }
-
-          return {
-            index: rsiPivot.index,
-            price,
-            priceIndex,
-            rsi: rsiPivot.value,
-            confirmIndex: rsiPivot.index + LB_RIGHT,
-          };
-        });
+      // Price comes from the candle at the RSI pivot bar itself — the same pairing
+      // TradingView's divergence indicator uses (low[lbR] / high[lbR]). Searching a
+      // window around the bar for a better extreme manufactures highs and lows that
+      // the chart never actually printed.
+      const buildSwingPoints = (rsiPivots, priceSeries) =>
+        rsiPivots.map((rsiPivot) => ({
+          index: rsiPivot.index,
+          price: priceSeries[rsiPivot.index],
+          rsi: rsiPivot.value,
+          confirmIndex: rsiPivot.index + LB_RIGHT,
+        }));
 
       // Compare the two most recent momentum swings
-      const evaluate = (rsiPivots, priceSeries, isBetterPrice, checks) => {
-        const points = buildSwingPoints(rsiPivots, priceSeries, isBetterPrice);
+      const evaluate = (rsiPivots, priceSeries, checks) => {
+        const points = buildSwingPoints(rsiPivots, priceSeries);
         if (points.length < 2) return null;
 
         const p1 = points[points.length - 1]; // most recent
@@ -3887,6 +3883,11 @@ class RealTimeAlertProcessor {
         const { price: price2, rsi: rsi2 } = p2;
         if (!isFinite(price1) || !isFinite(price2)) return null;
         if (rsi1 === null || rsi2 === null) return null;
+
+        // Both legs must actually separate — otherwise this is chart noise
+        const rsiDiff = Math.abs(rsi1 - rsi2);
+        const priceDiffPct = price2 !== 0 ? Math.abs((price1 - price2) / price2) * 100 : 0;
+        if (rsiDiff < MIN_RSI_DIFF || priceDiffPct < MIN_PRICE_DIFF_PCT) return null;
 
         for (const check of checks) {
           if (!check.enabled) continue;
@@ -3911,7 +3912,6 @@ class RealTimeAlertProcessor {
         hit = evaluate(
           this.findSwings(rsiArray, "low", LB_LEFT, LB_RIGHT),
           lows,
-          (candidate, current) => candidate < current,
           [
             {
               enabled: condition.bullish,
@@ -3938,7 +3938,6 @@ class RealTimeAlertProcessor {
         hit = evaluate(
           this.findSwings(rsiArray, "high", LB_LEFT, LB_RIGHT),
           highs,
-          (candidate, current) => candidate > current,
           [
             {
               enabled: condition.bearish,

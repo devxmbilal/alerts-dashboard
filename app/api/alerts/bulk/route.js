@@ -60,9 +60,17 @@ export async function POST(request) {
     const hasDivergence =
       conditions.rsiDivergence?.timeframes?.length > 0 && divergenceTypeSelected;
 
-    // Validate: minDaily is required, UNLESS divergence is set — divergence is a
-    // complete trigger on its own and must be usable as the only condition.
-    if (!conditions.minDaily && !hasDivergence) {
+    // Divergence depends on Min Daily + Alert Count. Alert Count gives it a
+    // cooldown — without one, a single divergence re-fires on every tick.
+    if (hasDivergence && !conditions.alertCount?.timeframe) {
+      return NextResponse.json(
+        { error: "Divergence requires Alert Count to be set as well" },
+        { status: 400 }
+      );
+    }
+
+    // Validate: minDaily is always required
+    if (!conditions.minDaily) {
       return NextResponse.json(
         {
           error: "Min Daily volume condition is required",

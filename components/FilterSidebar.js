@@ -392,10 +392,17 @@ const FilterSidebar = forwardRef(
       );
       const hasRsiDivergence = rsiDivHasTimeframe && rsiDivHasType;
 
-      // Validation 1: Min Daily is required UNLESS divergence is set —
-      // divergence is a complete trigger on its own
-      if (!hasMinDaily && !hasRsiDivergence) {
+      // Validation 1: Min Daily is always required
+      if (!hasMinDaily) {
         setErrorMessage("Please set: Min Daily volume");
+        setIsCreating(false);
+        return;
+      }
+
+      // Validation 1b: Divergence depends on Min Daily + Alert Count. Alert Count
+      // gives it a cooldown, without which one divergence re-fires on every tick.
+      if (hasRsiDivergence && !hasAlertCount) {
+        setErrorMessage("Divergence requires Alert Count to be set as well");
         setIsCreating(false);
         return;
       }
@@ -421,7 +428,7 @@ const FilterSidebar = forwardRef(
           (key) => filters.minDaily[key] === true
         );
 
-        if (!minDailyKey && !hasRsiDivergence) {
+        if (!minDailyKey) {
           setErrorMessage("Please select a Min Daily value");
           setIsCreating(false);
           return;
