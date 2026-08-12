@@ -1348,68 +1348,59 @@ const FilterSidebar = forwardRef(
                 </Grid>
               </Grid>
 
-              {/* Divergence Condition Tooltip Select */}
-              <Box sx={{ display: "flex", alignItems: "center", mt: 2, mb: 1 }}>
-                <Tooltip 
-                  interactive
-                  placement="top-start"
-                  slotProps={{
-                    tooltip: {
-                      sx: {
-                        bgcolor: theme.palette.background.paper,
-                        color: theme.palette.text.primary,
-                        border: "1px solid",
-                        borderColor: theme.palette.divider,
-                        boxShadow: theme.shadows[4],
-                        p: 0,
-                        maxWidth: 250
-                      }
-                    }
-                  }}
-                  title={
-                    <Box sx={{ p: 1 }}>
-                      <Box 
-                        onClick={() => handleInputChange("rsiDivergence", "condition", "condition1")}
-                        sx={{ 
-                          p: 1.5, 
-                          mb: 0.5,
-                          borderRadius: 1,
-                          cursor: 'pointer',
-                          bgcolor: (filters?.rsiDivergence?.condition === "condition1" || !filters?.rsiDivergence?.condition) ? (theme.palette.mode === 'dark' ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.03)") : "transparent",
-                          '&:hover': { bgcolor: theme.palette.mode === 'dark' ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)" },
-                          border: (filters?.rsiDivergence?.condition === "condition1" || !filters?.rsiDivergence?.condition) ? `1px solid ${theme.palette.primary.main}80` : '1px solid transparent'
-                        }}
-                      >
-                        <Typography variant="body1" sx={{ fontWeight: 'bold', color: (filters?.rsiDivergence?.condition === "condition1" || !filters?.rsiDivergence?.condition) ? "primary.main" : "text.primary" }}>
+              {/* Divergence Condition: label + info tooltip, dropdown below */}
+              <Box sx={{ mt: 2, mb: 1 }}>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+                  <Typography variant="body1" sx={{ color: "text.primary", fontWeight: 600 }}>
+                    Divergence Condition
+                  </Typography>
+                  <Tooltip
+                    placement="top-start"
+                    slotProps={{
+                      tooltip: {
+                        sx: {
+                          bgcolor: theme.palette.background.paper,
+                          color: theme.palette.text.primary,
+                          border: "1px solid",
+                          borderColor: theme.palette.divider,
+                          boxShadow: theme.shadows[4],
+                          maxWidth: 280,
+                        },
+                      },
+                    }}
+                    title={
+                      <Box sx={{ p: 1 }}>
+                        <Typography variant="body2" sx={{ fontWeight: "bold", mb: 0.5 }}>
                           1. Independent Trigger
                         </Typography>
-                      </Box>
-                      
-                      <Box 
-                        onClick={() => handleInputChange("rsiDivergence", "condition", "condition2")}
-                        sx={{ 
-                          p: 1.5, 
-                          borderRadius: 1,
-                          cursor: 'pointer',
-                          bgcolor: filters?.rsiDivergence?.condition === "condition2" ? (theme.palette.mode === 'dark' ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.03)") : "transparent",
-                          '&:hover': { bgcolor: theme.palette.mode === 'dark' ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)" },
-                          border: filters?.rsiDivergence?.condition === "condition2" ? `1px solid ${theme.palette.primary.main}80` : '1px solid transparent'
-                        }}
-                      >
-                        <Typography variant="body1" sx={{ fontWeight: 'bold', color: filters?.rsiDivergence?.condition === "condition2" ? "primary.main" : "text.primary" }}>
+                        <Typography variant="caption" sx={{ display: "block", mb: 1.5 }}>
+                          All Divergences will trigger after candle close without requiring other conditions met.
+                        </Typography>
+                        <Typography variant="body2" sx={{ fontWeight: "bold", mb: 0.5 }}>
                           2. Conditional Trigger
                         </Typography>
+                        <Typography variant="caption" sx={{ display: "block" }}>
+                          If other conditions met at bearish divergences on current candle alert will not trigger.
+                        </Typography>
                       </Box>
-                    </Box>
-                  } 
+                    }
+                  >
+                    <InfoOutlinedIcon sx={{ fontSize: 18, color: "primary.main", cursor: "pointer" }} />
+                  </Tooltip>
+                </Box>
+
+                <CustomTextField
+                  select
+                  fullWidth
+                  size="small"
+                  value={filters?.rsiDivergence?.condition || "condition1"}
+                  onChange={(e) =>
+                    handleInputChange("rsiDivergence", "condition", e.target.value)
+                  }
                 >
-                  <Box sx={{ display: "flex", alignItems: "center", gap: 1, cursor: "pointer", width: "fit-content" }}>
-                    <Typography variant="body1" sx={{ color: "text.primary", fontWeight: 600 }}>
-                      Divergence Condition
-                    </Typography>
-                    <InfoOutlinedIcon sx={{ fontSize: 18, color: "primary.main" }} />
-                  </Box>
-                </Tooltip>
+                  <MenuItem value="condition1">Independent Trigger</MenuItem>
+                  <MenuItem value="condition2">Conditional Trigger</MenuItem>
+                </CustomTextField>
               </Box>
             </AccordionDetails>
           </DarkAccordion>
