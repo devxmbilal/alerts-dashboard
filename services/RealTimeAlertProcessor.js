@@ -3824,6 +3824,14 @@ class RealTimeAlertProcessor {
     // so both legs must move by at least this much for the signal to count.
     const MIN_RSI_DIFF = 3;           // RSI points between the two pivots
     const MIN_PRICE_DIFF_PCT = 0.3;   // % price change between the two pivots
+    // Floors alone still let through divergences that are weak on BOTH legs and are
+    // invisible on a chart. Scoring the two together is how divergence scanners rank
+    // strength, and it cleanly separates the signals worth alerting on.
+    const MIN_STRENGTH = 4;           // RSI points x price %
+    // Momentum also has to be at an extreme — a divergence built around RSI 50 is
+    // mid-range chop, not the oversold/overbought turn traders act on.
+    const EXTREME_BULLISH_RSI = 45;   // newer pivot must be at or below this
+    const EXTREME_BEARISH_RSI = 55;   // newer pivot must be at or above this
 
     for (const timeframe of condition.timeframes) {
       const ohlc = await this.getHistoricalOHLC(symbol, timeframe, rsiPeriod);
@@ -3874,7 +3882,7 @@ class RealTimeAlertProcessor {
         }));
 
       // Compare the two most recent momentum swings
-      const evaluate = (rsiPivots, priceSeries, checks) => {
+      const evaluate = (rsiPivots, priceSeries, isExtremeEnough, checks) => {
         const points = buildSwingPoints(rsiPivots, priceSeries);
         if (points.length < 2) return null;
 
@@ -3903,6 +3911,8 @@ class RealTimeAlertProcessor {
         const rsiDiff = Math.abs(rsi1 - rsi2);
         const priceDiffPct = price2 !== 0 ? Math.abs((price1 - price2) / price2) * 100 : 0;
         if (rsiDiff < MIN_RSI_DIFF || priceDiffPct < MIN_PRICE_DIFF_PCT) return null;
+        if (rsiDiff * priceDiffPct < MIN_STRENGTH) return null;
+        if (!isExtremeEnough(rsi1)) return null;
 
         for (const check of checks) {
           if (!check.enabled) continue;
@@ -3927,6 +3937,7 @@ class RealTimeAlertProcessor {
         hit = evaluate(
           this.findSwings(rsiArray, "low", LB_LEFT, LB_RIGHT),
           lows,
+          (rsi) => rsi <= EXTREME_BULLISH_RSI,
           [
             {
               enabled: condition.bullish,
@@ -3953,6 +3964,7 @@ class RealTimeAlertProcessor {
         hit = evaluate(
           this.findSwings(rsiArray, "high", LB_LEFT, LB_RIGHT),
           highs,
+          (rsi) => rsi >= EXTREME_BEARISH_RSI,
           [
             {
               enabled: condition.bearish,
