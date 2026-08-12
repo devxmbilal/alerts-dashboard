@@ -3831,8 +3831,12 @@ class RealTimeAlertProcessor {
     const MIN_STRENGTH = 4;           // RSI points x price %
     // Momentum also has to be at an extreme — a divergence built around RSI 50 is
     // mid-range chop, not the oversold/overbought turn traders act on.
-    const EXTREME_BULLISH_RSI = 45;   // newer pivot must be at or below this
-    const EXTREME_BEARISH_RSI = 55;   // newer pivot must be at or above this
+    const EXTREME_BULLISH_RSI = 40;   // newer pivot must be at or below this
+    const EXTREME_BEARISH_RSI = 60;   // newer pivot must be at or above this
+    // A freshly confirmed pivot at index i was confirmed at bar i + LB_RIGHT.
+    // Only alert when the newer pivot's confirmation is within MAX_STALENESS bars
+    // of the current bar — prevents alerting on old, already-played-out signals.
+    const MAX_STALENESS = 2;
 
     for (const timeframe of condition.timeframes) {
       const ohlc = await this.getHistoricalOHLC(symbol, timeframe, rsiPeriod);
@@ -3866,64 +3870,70 @@ class RealTimeAlertProcessor {
 
       const lastIndex = closes.length - 1;
 
-      // Price pivots come from the real candle wicks (OHLC); RSI pivots come from the
-      // RSI line itself. A swing only counts when BOTH series pivoted around the same
-      // bar — reading price off an RSI pivot bar reports a "high" on a bar where price
-      // never actually made one, which is what produced the false divergences.
-      // Price comes from the candle at the RSI pivot bar itself — the same pairing
-      // TradingView's divergence indicator uses (low[lbR] / high[lbR]). Searching a
-      // window around the bar for a better extreme manufactures highs and lows that
-      // the chart never actually printed.
+      // ✅ FIXED: Both p1 (newer) and p2 (older) must be CONFIRMED RSI pivots.
+      // Old code used lastIndex (current candle) as p1 WITHOUT any pivot
+      // confirmation — any random candle could "diverge" from a past pivot,
+      // producing alerts with no visible divergence on the chart.
+      //
+      // New logic: find two confirmed RSI pivots within [RANGE_LOWER, RANGE_UPPER]
+      // bars of each other. The newer pivot (p1) must have been freshly confirmed
+      // (its confirmation bar = p1.index + LB_RIGHT is close to lastIndex).
+      // Price is read from the candle at each RSI pivot bar (same as TradingView).
       const evaluate = (rsiPivots, priceSeries, isExtremeEnough, checks) => {
-        // The divergence is measured from a past swing UP TO the candle the alert
-        // fires on — the same line a trader draws on the chart. Comparing two past
-        // pivots put the whole signal in history: a pivot is only confirmed
-        // LB_RIGHT candles after it forms, so by alert time the move had already
-        // played out and the recent candles showed the opposite of what was reported.
-        const anchors = rsiPivots.filter((pivot) => {
-          const distance = lastIndex - pivot.index;
-          return distance >= RANGE_LOWER && distance <= RANGE_UPPER;
-        });
-        if (!anchors.length) return null;
+        if (rsiPivots.length < 2) return null;
 
-        const anchor = anchors[anchors.length - 1]; // most recent qualifying swing
-        const p2 = {
-          index: anchor.index,
-          price: priceSeries[anchor.index],
-          rsi: anchor.value,
-        };
-        const p1 = {
-          index: lastIndex,
-          price: priceSeries[lastIndex],
-          rsi: rsiArray[lastIndex],
-        };
+        // Iterate from the newest confirmed pivot backwards.
+        for (let i = rsiPivots.length - 1; i >= 1; i--) {
+          const p1Pivot = rsiPivots[i];
+          const confirmationBar = p1Pivot.index + LB_RIGHT;
 
-        const barsBetween = p1.index - p2.index;
+          // p1 must be fully confirmed (all LB_RIGHT bars after it exist)
+          if (confirmationBar > lastIndex) continue;
+          // p1 must be freshly confirmed — skip stale/old divergences
+          if (lastIndex - confirmationBar > MAX_STALENESS) continue;
 
-        const { price: price1, rsi: rsi1 } = p1;
-        const { price: price2, rsi: rsi2 } = p2;
-        if (!isFinite(price1) || !isFinite(price2)) return null;
-        if (rsi1 === null || rsi1 === undefined || rsi2 === null) return null;
+          // Scan older pivots for p2
+          for (let j = i - 1; j >= 0; j--) {
+            const p2Pivot = rsiPivots[j];
+            const barsBetween = p1Pivot.index - p2Pivot.index;
+            if (barsBetween < RANGE_LOWER) continue;
+            if (barsBetween > RANGE_UPPER) break; // all further pivots are even older
 
-        // Both legs must actually separate — otherwise this is chart noise
-        const rsiDiff = Math.abs(rsi1 - rsi2);
-        const priceDiffPct = price2 !== 0 ? Math.abs((price1 - price2) / price2) * 100 : 0;
-        if (rsiDiff < MIN_RSI_DIFF || priceDiffPct < MIN_PRICE_DIFF_PCT) return null;
-        if (rsiDiff * priceDiffPct < MIN_STRENGTH) return null;
-        if (!isExtremeEnough(rsi1)) return null;
+            const p1 = {
+              index: p1Pivot.index,
+              price: priceSeries[p1Pivot.index],
+              rsi: p1Pivot.value,
+            };
+            const p2 = {
+              index: p2Pivot.index,
+              price: priceSeries[p2Pivot.index],
+              rsi: p2Pivot.value,
+            };
 
-        for (const check of checks) {
-          if (!check.enabled) continue;
-          if (!check.test(price1, price2, rsi1, rsi2)) continue;
+            if (!isFinite(p1.price) || !isFinite(p2.price)) continue;
+            if (p1.rsi === null || p1.rsi === undefined || p2.rsi === null) continue;
 
-          return {
-            type: check.type,
-            isBearish: check.isBearish,
-            label: check.label,
-            barsBetween,
-            pivot1: { price: price1, rsi: rsi1, time: openTimes[p1.index] || null },
-            pivot2: { price: price2, rsi: rsi2, time: openTimes[p2.index] || null },
-          };
+            // Both legs must actually separate — otherwise this is chart noise
+            const rsiDiff = Math.abs(p1.rsi - p2.rsi);
+            const priceDiffPct = p2.price !== 0 ? Math.abs((p1.price - p2.price) / p2.price) * 100 : 0;
+            if (rsiDiff < MIN_RSI_DIFF || priceDiffPct < MIN_PRICE_DIFF_PCT) continue;
+            if (rsiDiff * priceDiffPct < MIN_STRENGTH) continue;
+            if (!isExtremeEnough(p1.rsi)) continue;
+
+            for (const check of checks) {
+              if (!check.enabled) continue;
+              if (!check.test(p1.price, p2.price, p1.rsi, p2.rsi)) continue;
+
+              return {
+                type: check.type,
+                isBearish: check.isBearish,
+                label: check.label,
+                barsBetween,
+                pivot1: { price: p1.price, rsi: p1.rsi, time: openTimes[p1.index] || null },
+                pivot2: { price: p2.price, rsi: p2.rsi, time: openTimes[p2.index] || null },
+              };
+            }
+          }
         }
         return null;
       };
