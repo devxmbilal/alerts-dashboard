@@ -1566,8 +1566,10 @@ class RealTimeAlertProcessor {
                 : isBearishBlocker
                   ? "conditional"
                   : "standard",
-              // Identifies this exact divergence so it is only alerted once
-              signature: `${divMatch.timeframe}:${divMatch.type}:${divMatch.pivot1?.time}`,
+              // Keyed on the anchor swing, not the alert candle — the divergence stays
+              // valid for several candles, and keying on the moving end would re-alert
+              // on every one of them.
+              signature: `${divMatch.timeframe}:${divMatch.type}:${divMatch.pivot2?.time}`,
               // Divergence is the ONLY trigger → notifications show a divergence-only template
               divergenceOnly: !this.hasNonDivergenceTrigger(conditions),
             };
@@ -3818,7 +3820,6 @@ class RealTimeAlertProcessor {
     const LB_RIGHT = 5;     // Pivot Lookback Right (pivot confirms this many bars later)
     const RANGE_LOWER = 5;  // Min bars between the two pivots
     const RANGE_UPPER = 60; // Max bars between the two pivots
-    const MAX_BARS_SINCE_CONFIRM = 1; // Only fire on a freshly confirmed pivot
     // A 5-bar pivot scan also picks up micro-wiggles. Two swings whose RSI differs by
     // ~1 point over a 0.2% price move is noise, not a divergence a trader would draw,
     // so both legs must move by at least this much for the signal to count.
@@ -3873,39 +3874,36 @@ class RealTimeAlertProcessor {
       // TradingView's divergence indicator uses (low[lbR] / high[lbR]). Searching a
       // window around the bar for a better extreme manufactures highs and lows that
       // the chart never actually printed.
-      const buildSwingPoints = (rsiPivots, priceSeries) =>
-        rsiPivots.map((rsiPivot) => ({
-          index: rsiPivot.index,
-          price: priceSeries[rsiPivot.index],
-          rsi: rsiPivot.value,
-          confirmIndex: rsiPivot.index + LB_RIGHT,
-        }));
-
-      // Compare the two most recent momentum swings
       const evaluate = (rsiPivots, priceSeries, isExtremeEnough, checks) => {
-        const points = buildSwingPoints(rsiPivots, priceSeries);
-        if (points.length < 2) return null;
+        // The divergence is measured from a past swing UP TO the candle the alert
+        // fires on — the same line a trader draws on the chart. Comparing two past
+        // pivots put the whole signal in history: a pivot is only confirmed
+        // LB_RIGHT candles after it forms, so by alert time the move had already
+        // played out and the recent candles showed the opposite of what was reported.
+        const anchors = rsiPivots.filter((pivot) => {
+          const distance = lastIndex - pivot.index;
+          return distance >= RANGE_LOWER && distance <= RANGE_UPPER;
+        });
+        if (!anchors.length) return null;
 
-        const p1 = points[points.length - 1]; // most recent
-        const p2 = points[points.length - 2]; // previous
+        const anchor = anchors[anchors.length - 1]; // most recent qualifying swing
+        const p2 = {
+          index: anchor.index,
+          price: priceSeries[anchor.index],
+          rsi: anchor.value,
+        };
+        const p1 = {
+          index: lastIndex,
+          price: priceSeries[lastIndex],
+          rsi: rsiArray[lastIndex],
+        };
 
         const barsBetween = p1.index - p2.index;
-        if (barsBetween < RANGE_LOWER || barsBetween > RANGE_UPPER) return null;
-
-        // A pivot is only confirmed LB_RIGHT bars after it forms. For the independent
-        // trigger we require that confirmation to have just happened, otherwise an old
-        // divergence would keep re-firing on every tick.
-        if (
-          onlyClosedCandles &&
-          lastIndex - p1.confirmIndex > MAX_BARS_SINCE_CONFIRM
-        ) {
-          return null;
-        }
 
         const { price: price1, rsi: rsi1 } = p1;
         const { price: price2, rsi: rsi2 } = p2;
         if (!isFinite(price1) || !isFinite(price2)) return null;
-        if (rsi1 === null || rsi2 === null) return null;
+        if (rsi1 === null || rsi1 === undefined || rsi2 === null) return null;
 
         // Both legs must actually separate — otherwise this is chart noise
         const rsiDiff = Math.abs(rsi1 - rsi2);
