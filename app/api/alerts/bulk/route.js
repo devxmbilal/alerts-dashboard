@@ -51,24 +51,6 @@ export async function POST(request) {
       );
     }
 
-    const divergenceTypeSelected = !!(
-      conditions.rsiDivergence?.bullish ||
-      conditions.rsiDivergence?.bullishHidden ||
-      conditions.rsiDivergence?.bearish ||
-      conditions.rsiDivergence?.bearishHidden
-    );
-    const hasDivergence =
-      conditions.rsiDivergence?.timeframes?.length > 0 && divergenceTypeSelected;
-
-    // Divergence depends on Min Daily + Alert Count. Alert Count gives it a
-    // cooldown — without one, a single divergence re-fires on every tick.
-    if (hasDivergence && !conditions.alertCount?.timeframe) {
-      return NextResponse.json(
-        { error: "Divergence requires Alert Count to be set as well" },
-        { status: 400 }
-      );
-    }
-
     // Validate: minDaily is always required
     if (!conditions.minDaily) {
       return NextResponse.json(

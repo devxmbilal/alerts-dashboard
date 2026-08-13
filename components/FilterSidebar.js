@@ -399,14 +399,6 @@ const FilterSidebar = forwardRef(
         return;
       }
 
-      // Validation 1b: Divergence depends on Min Daily + Alert Count. Alert Count
-      // gives it a cooldown, without which one divergence re-fires on every tick.
-      if (hasRsiDivergence && !hasAlertCount) {
-        setErrorMessage("Divergence requires Alert Count to be set as well");
-        setIsCreating(false);
-        return;
-      }
-
       // Validation 2: At least one other condition must be set
       if (!hasChangePercent && !hasAlertCount && !hasCandle && !hasRsiRange && !hasMacd && !hasVolume && !hasVolumeEma && !hasRsiDivergence) {
         setErrorMessage("Please set at least one condition (Change %, RSI, RSI Divergence, etc.)");
