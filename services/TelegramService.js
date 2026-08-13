@@ -4,6 +4,31 @@ import axios from "axios";
 
 dotenv.config();
 
+// Labels a divergence pivot so its candle can be found on the chart. What
+// identifies a candle depends on the timeframe: a daily/weekly/monthly candle
+// is its date (they all open at the same clock time, so the time is noise),
+// while an intraday candle is its time of day — with the date added only when
+// the two pivots fall on different days and the time alone would be ambiguous.
+const PKT = "Asia/Karachi";
+const pktDate = (ms) =>
+  new Date(ms).toLocaleDateString("en-PK", { timeZone: PKT, day: "2-digit", month: "short" });
+const pktTime = (ms) =>
+  new Date(ms).toLocaleTimeString("en-PK", {
+    timeZone: PKT,
+    hour12: true,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+export function formatPivotLabel(ms, timeframe, otherMs) {
+  if (!ms) return null;
+
+  if (["D", "W", "M"].includes(timeframe)) return pktDate(ms);
+
+  const sameDay = otherMs && pktDate(ms) === pktDate(otherMs);
+  return sameDay ? pktTime(ms) : `${pktDate(ms)} ${pktTime(ms)}`;
+}
+
 class TelegramService {
   constructor() {
     this.botToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -189,9 +214,10 @@ ${changeEmoji} 24h Change: \`${safeNumber(priceChangePercent)}%\`
     `.trim();
   }
 
-  // Single-line "why this fired" note for RSI divergence alerts, e.g.
-  // "🔴 Hidden Bearish Divergence 15MIN" — added to the normal template,
-  // nothing else about the message changes.
+  // Note for RSI divergence alerts — the type line ("🔴 Hidden Bearish
+  // Divergence 15MIN") plus the two pivot points (time + price) the alert
+  // compared, so the two candles can be located on the chart and the same
+  // line redrawn by hand to double-check the call.
   formatDivergenceLine(divergence) {
     if (!divergence || !divergence.type) return "";
 
@@ -207,8 +233,20 @@ ${changeEmoji} 24h Change: \`${safeNumber(priceChangePercent)}%\`
 
     const icon = divergence.isBearish ? "🔴" : "🟢";
     const timeframe = divergence.timeframe || "";
+    const typeLine = `${icon} ${label}${timeframe ? " " + timeframe : ""}`;
 
-    return `${icon} ${label}${timeframe ? " " + timeframe : ""}`;
+    const t1 = formatPivotLabel(divergence.pivot1?.time, timeframe, divergence.pivot2?.time);
+    const t2 = formatPivotLabel(divergence.pivot2?.time, timeframe, divergence.pivot1?.time);
+
+    const fmtPrice = (val) =>
+      typeof val === "number" && !isNaN(val) ? val.toFixed(6).replace(/0+$/, "").replace(/\.$/, "") : null;
+
+    const p1 = fmtPrice(divergence.pivot1?.price);
+    const p2 = fmtPrice(divergence.pivot2?.price);
+
+    if (!t1 || !t2 || !p1 || !p2) return typeLine;
+
+    return `${typeLine}\n📍 \`${t2} ($${p2})\` → \`${t1} ($${p1})\``;
   }
 
   // =============== LOW-LEVEL SENDS (rate-limited) ===============

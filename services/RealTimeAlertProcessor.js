@@ -1566,9 +1566,9 @@ class RealTimeAlertProcessor {
                 : isBearishBlocker
                   ? "conditional"
                   : "standard",
-              // Keyed on the anchor swing, not the alert candle — the divergence stays
-              // valid for several candles, and keying on the moving end would re-alert
-              // on every one of them.
+              // Keyed on the anchor only. The measured end is the current candle and
+              // moves forward every bar, so including it would re-alert on the same
+              // divergence for as long as it holds.
               signature: `${divMatch.timeframe}:${divMatch.type}:${divMatch.pivot2?.time}`,
               // Divergence is the ONLY trigger → notifications show a divergence-only template
               divergenceOnly: !this.hasNonDivergenceTrigger(conditions),
@@ -3815,20 +3815,32 @@ class RealTimeAlertProcessor {
       return { found: false };
     }
 
-    // TradingView "Divergence Indicator" defaults
-    const LB_LEFT = 5;      // Pivot Lookback Left for past anchor
-    const LB_RIGHT = 5;     // Pivot Lookback Right for past anchor
-    const RANGE_LOWER = 5;  // Min bars between the two pivots
-    const RANGE_UPPER = 60; // Max bars between the two pivots
+    // Point A is a fully confirmed past pivot — 5 bars clear on both sides, so it
+    // is a solid, already-settled swing that a trader would anchor a line to.
+    const LB_LEFT = 5;
+    const LB_RIGHT_ANCHOR = 5;
+
+    // Point B is the candle that just closed. Requiring B to also be a confirmed
+    // pivot meant waiting several candles into the future before the divergence
+    // could be reported, which put the alert well past the point it was tradeable
+    // (20 hours on 4HR). Measuring the just-closed candle against the settled
+    // anchor keeps the span wide while removing that wait entirely.
+    // Tight window on purpose: a 60-bar cap let Weekly divergences span back
+    // over a year (60 weeks), which isn't a line anyone can draw on a chart.
+    // Tying the window to bar count instead of calendar time keeps every
+    // timeframe fresh and tight the same way.
+    const RANGE_LOWER = 4;     // Min bars between anchor and current candle
+    const RANGE_UPPER = 10;    // Max bars between anchor and current candle
 
     // Strict noise filters so the divergence is clearly visible on the chart
-    const MIN_RSI_DIFF = 5;           // RSI points between the two pivots
-    const MIN_PRICE_DIFF_PCT = 0.5;   // % price change between the two pivots
-    const MIN_STRENGTH = 10;          // RSI points x price %
+    const MIN_RSI_DIFF = 3;           // RSI points between the two points
+    const MIN_PRICE_DIFF_PCT = 0.3;   // % price change between the two points
+    const MIN_STRENGTH = 4;           // RSI points x price %
 
-    // Momentum must be at an extreme for the past anchor
-    const EXTREME_BULLISH_RSI = 40;   // past pivot must be at or below this
-    const EXTREME_BEARISH_RSI = 60;   // past pivot must be at or above this
+    // The current candle — where a trader would act — must sit in
+    // oversold/overbought territory, not mid-range chop.
+    const EXTREME_BULLISH_RSI = 35;   // current candle must be at or below this
+    const EXTREME_BEARISH_RSI = 65;   // current candle must be at or above this
 
     for (const timeframe of condition.timeframes) {
       const ohlc = await this.getHistoricalOHLC(symbol, timeframe, rsiPeriod);
@@ -3855,65 +3867,53 @@ class RealTimeAlertProcessor {
         }
       }
 
-      if (closes.length < rsiPeriod + LB_LEFT + LB_RIGHT + RANGE_LOWER + 1) continue;
+      if (closes.length < rsiPeriod + LB_LEFT + LB_RIGHT_ANCHOR + RANGE_LOWER + 1) continue;
 
       const rsiArray = this.computeRSIArray(closes, rsiPeriod);
       if (!rsiArray || rsiArray.length === 0) continue;
 
       const lastIndex = closes.length - 1;
 
-      // PRO DIVERGENCE LOGIC:
-      // p1 (Current): The current candle (so the trader can draw a line TO IT right now).
-      // p2 (Past): A confirmed RSI pivot in the past.
-      // Crucially, we enforce that RSI is ticking in the correct direction (forming a peak)
-      // on the current candle, so we don't alert in the middle of a straight line.
-      const evaluate = (rsiPivots, priceSeries, isExtremeEnough, checks, isBullish) => {
-        if (rsiPivots.length === 0) return null;
+      // Point B is the candle that just closed; Point A is a settled pivot behind
+      // it. The anchors are scanned newest-first so the line is drawn from the
+      // closest qualifying swing, which is the one a trader would pick.
+      const evaluate = (pivotsAnchor, priceSeries, isExtremeEnough, checks) => {
+        if (!pivotsAnchor.length) return null;
 
         const p1 = {
           index: lastIndex,
           price: priceSeries[lastIndex],
           rsi: rsiArray[lastIndex],
         };
+        if (!isFinite(p1.price) || p1.rsi === null || p1.rsi === undefined) return null;
+        if (!isExtremeEnough(p1.rsi)) return null;
 
-        // Ensure the current candle is actually forming a peak/valley.
-        // If Bearish, RSI should have ticked down (or be flat) from the previous candle.
-        // If Bullish, RSI should have ticked up (or be flat) from the previous candle.
-        const rsiPrev = rsiArray[lastIndex - 1];
-        if (rsiPrev !== undefined && rsiPrev !== null) {
-          if (isBullish && p1.rsi < rsiPrev) return null; // Still dropping, not a valley yet
-          if (!isBullish && p1.rsi > rsiPrev) return null; // Still rising, not a peak yet
-        }
+        for (let j = pivotsAnchor.length - 1; j >= 0; j--) {
+          const anchorPivot = pivotsAnchor[j];
+          if (anchorPivot.index >= p1.index) continue;
 
-        // Scan older pivots for p2
-        for (let j = rsiPivots.length - 1; j >= 0; j--) {
-          const p2Pivot = rsiPivots[j];
-          const barsBetween = p1.index - p2Pivot.index;
+          const barsBetween = p1.index - anchorPivot.index;
           if (barsBetween < RANGE_LOWER) continue;
           if (barsBetween > RANGE_UPPER) break; // all further pivots are even older
 
           const p2 = {
-            index: p2Pivot.index,
-            price: priceSeries[p2Pivot.index],
-            rsi: p2Pivot.value,
+            index: anchorPivot.index,
+            price: priceSeries[anchorPivot.index],
+            rsi: anchorPivot.value,
           };
 
-          if (!isFinite(p1.price) || !isFinite(p2.price)) continue;
-          if (p1.rsi === null || p1.rsi === undefined || p2.rsi === null) continue;
+          if (!isFinite(p2.price) || p2.rsi === null) continue;
 
           // Both legs must actually separate — otherwise this is chart noise
           const rsiDiff = Math.abs(p1.rsi - p2.rsi);
           const priceDiffPct = p2.price !== 0 ? Math.abs((p1.price - p2.price) / p2.price) * 100 : 0;
-          
+
           if (rsiDiff < MIN_RSI_DIFF || priceDiffPct < MIN_PRICE_DIFF_PCT) continue;
           if (rsiDiff * priceDiffPct < MIN_STRENGTH) continue;
-          if (!isExtremeEnough(p2.rsi)) continue;
 
           for (const check of checks) {
             if (!check.enabled) continue;
-            // Note: The definitions are:
-            // p1 is the CURRENT candle, p2 is the PAST pivot.
-            // test(currentPrice, pastPrice, currentRSI, pastRSI)
+            // p1 = current closed candle, p2 = confirmed anchor pivot
             if (!check.test(p1.price, p2.price, p1.rsi, p2.rsi)) continue;
 
             return {
@@ -3934,7 +3934,7 @@ class RealTimeAlertProcessor {
       // Bullish → swing LOWS: RSI pivot lows anchor the swing, price is the candle low there
       if (condition.bullish || condition.bullishHidden) {
         hit = evaluate(
-          this.findSwings(rsiArray, "low", LB_LEFT, LB_RIGHT),
+          this.findSwings(rsiArray, "low", LB_LEFT, LB_RIGHT_ANCHOR),
           lows,
           (rsi) => rsi <= EXTREME_BULLISH_RSI,
           [
@@ -3943,26 +3943,25 @@ class RealTimeAlertProcessor {
               type: "bullish",
               isBearish: false,
               label: "Regular Bullish Divergence",
-              // currentPrice (p1) < pastPrice (p2) AND currentRSI (p1) > pastRSI (p2)
-              test: (currentPrice, pastPrice, currentRSI, pastRSI) => currentPrice < pastPrice && currentRSI > pastRSI,
+              // Price Lower Low + RSI Higher Low
+              test: (price1, price2, rsi1, rsi2) => price1 < price2 && rsi1 > rsi2,
             },
             {
               enabled: condition.bullishHidden,
               type: "bullishHidden",
               isBearish: false,
               label: "Hidden Bullish Divergence",
-              // currentPrice (p1) > pastPrice (p2) AND currentRSI (p1) < pastRSI (p2)
-              test: (currentPrice, pastPrice, currentRSI, pastRSI) => currentPrice > pastPrice && currentRSI < pastRSI,
+              // Price Higher Low + RSI Lower Low
+              test: (price1, price2, rsi1, rsi2) => price1 > price2 && rsi1 < rsi2,
             },
-          ],
-          true // isBullish
+          ]
         );
       }
 
       // Bearish → swing HIGHS: RSI pivot highs anchor the swing, price is the candle high there
       if (!hit && (condition.bearish || condition.bearishHidden)) {
         hit = evaluate(
-          this.findSwings(rsiArray, "high", LB_LEFT, LB_RIGHT),
+          this.findSwings(rsiArray, "high", LB_LEFT, LB_RIGHT_ANCHOR),
           highs,
           (rsi) => rsi >= EXTREME_BEARISH_RSI,
           [
@@ -3971,19 +3970,18 @@ class RealTimeAlertProcessor {
               type: "bearish",
               isBearish: true,
               label: "Regular Bearish Divergence",
-              // currentPrice (p1) > pastPrice (p2) AND currentRSI (p1) < pastRSI (p2)
-              test: (currentPrice, pastPrice, currentRSI, pastRSI) => currentPrice > pastPrice && currentRSI < pastRSI,
+              // Price Higher High + RSI Lower High
+              test: (price1, price2, rsi1, rsi2) => price1 > price2 && rsi1 < rsi2,
             },
             {
               enabled: condition.bearishHidden,
               type: "bearishHidden",
               isBearish: true,
               label: "Hidden Bearish Divergence",
-              // currentPrice (p1) < pastPrice (p2) AND currentRSI (p1) > pastRSI (p2)
-              test: (currentPrice, pastPrice, currentRSI, pastRSI) => currentPrice < pastPrice && currentRSI > pastRSI,
+              // Price Lower High + RSI Higher High
+              test: (price1, price2, rsi1, rsi2) => price1 < price2 && rsi1 > rsi2,
             },
-          ],
-          false // isBullish
+          ]
         );
       }
 

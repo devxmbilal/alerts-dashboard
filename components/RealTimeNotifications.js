@@ -403,6 +403,31 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
     return change >= 0 ? "#4caf50" : "#f44336";
   };
 
+  // Time-of-day for a divergence pivot, matching the Telegram message so the
+  // same two candles can be located on the chart to redraw the line by hand.
+  // Labels a divergence pivot so its candle can be found on the chart. What
+  // identifies a candle depends on the timeframe: a daily/weekly/monthly candle
+  // is its date (they all open at the same clock time, so the time is noise),
+  // while an intraday candle is its time of day — with the date added only when
+  // the two pivots fall on different days and the time alone would be ambiguous.
+  const PKT = "Asia/Karachi";
+  const pktDate = (ms) =>
+    new Date(ms).toLocaleDateString("en-PK", { timeZone: PKT, day: "2-digit", month: "short" });
+  const pktTime = (ms) =>
+    new Date(ms).toLocaleTimeString("en-PK", {
+      timeZone: PKT,
+      hour12: true,
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+  const formatPivotTime = (ms, timeframe, otherMs) => {
+    if (!ms) return null;
+    if (["D", "W", "M"].includes(timeframe)) return pktDate(ms);
+    const sameDay = otherMs && pktDate(ms) === pktDate(otherMs);
+    return sameDay ? pktTime(ms) : `${pktDate(ms)} ${pktTime(ms)}`;
+  };
+
   // One-line label for which divergence fired, mirroring the Telegram message
   const getDivergenceMeta = (type) =>
     ({
@@ -634,6 +659,33 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                                 {alert.divergence.label ||
                                   getDivergenceMeta(alert.divergence.type).name}{" "}
                                 {alert.divergence.timeframe}
+                              </Typography>
+                            )}
+
+                          {alert.divergence?.pivot1?.time &&
+                            alert.divergence?.pivot2?.time && (
+                              <Typography
+                                variant="body2"
+                                sx={{
+                                  color: "text.secondary",
+                                  fontSize: "0.75rem",
+                                  display: "block",
+                                  mb: 0.5,
+                                }}
+                              >
+                                📍{" "}
+                                {formatPivotTime(
+                                  alert.divergence.pivot2.time,
+                                  alert.divergence.timeframe,
+                                  alert.divergence.pivot1.time
+                                )}{" "}
+                                ({formatPrice(alert.divergence.pivot2.price)}) →{" "}
+                                {formatPivotTime(
+                                  alert.divergence.pivot1.time,
+                                  alert.divergence.timeframe,
+                                  alert.divergence.pivot2.time
+                                )}{" "}
+                                ({formatPrice(alert.divergence.pivot1.price)})
                               </Typography>
                             )}
 
