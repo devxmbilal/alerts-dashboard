@@ -388,10 +388,51 @@ class RealTimeAlertProcessor {
         `✅ Cached ${alerts.length} alerts for ${Object.keys(alertsBySymbol).length
         } symbols in Redis`
       );
+
+      await this.rehydrateDivergenceDedup(alerts);
+
       return true;
     } catch (error) {
       console.error("❌ Error loading alerts to Redis cache:", error);
       return false;
+    }
+  }
+
+  // Divergence dedup only lives in memory, so a restart forgets which pivot it
+  // already alerted on — a divergence on a slow timeframe (12HR, D, W) can still
+  // be "the same one" hours later, and the fresh process would fire it again as
+  // if new. Rehydrate from each alert's last saved divergence trigger so a
+  // restart doesn't repeat an alert already sent. This runs on every full alert
+  // load, which is exactly when the in-memory dedup map is empty and needs it.
+  async rehydrateDivergenceDedup(alerts) {
+    try {
+      const divergenceAlertIds = alerts
+        .filter((a) => a.conditions?.rsiDivergence?.timeframes?.length)
+        .map((a) => a._id);
+
+      if (!divergenceAlertIds.length) return;
+
+      const recentDivergences = await AlertHistory.aggregate([
+        {
+          $match: {
+            alertId: { $in: divergenceAlertIds },
+            "divergence.pivot2.time": { $exists: true },
+          },
+        },
+        { $sort: { triggeredAt: -1 } },
+        { $group: { _id: "$alertId", divergence: { $first: "$divergence" } } },
+      ]);
+
+      if (!this.lastFiredDivergence) this.lastFiredDivergence = new Map();
+      for (const r of recentDivergences) {
+        const signature = `${r.divergence.timeframe}:${r.divergence.type}:${r.divergence.pivot2?.time}`;
+        this.lastFiredDivergence.set(r._id.toString(), signature);
+      }
+      console.log(
+        `🔁 Rehydrated divergence dedup memory for ${recentDivergences.length} alerts`
+      );
+    } catch (err) {
+      console.error("❌ Error rehydrating divergence dedup memory:", err.message);
     }
   }
 
@@ -509,6 +550,8 @@ class RealTimeAlertProcessor {
       });
 
       console.log(`📊 Active symbols: ${this.activeAlerts.size}`);
+
+      await this.rehydrateDivergenceDedup(validAlerts);
 
       // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
       // This ensures the engine only processes symbols with valid alerts
@@ -863,9 +906,23 @@ class RealTimeAlertProcessor {
 
   // Update active symbols cache for micro-batch filtering
   async updateMicroBatchActiveSymbols() {
+    // Creating alerts in bulk calls this once per alert, so hundreds of these
+    // run against a collection that is still being written to. Each one replaces
+    // the engine's whole symbol set, so a query that started early but resolved
+    // late would overwrite the complete set with its own partial snapshot —
+    // monitoring silently dropped to a fraction of the symbols and stayed there
+    // until the worker was restarted. Collapse the burst into one refresh, and
+    // never let an older result land after a newer one.
+    this.symbolsRefreshSeq = (this.symbolsRefreshSeq || 0) + 1;
+    const seq = this.symbolsRefreshSeq;
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (seq !== this.symbolsRefreshSeq) return; // a newer refresh superseded this one
+
     try {
       // Get all active alerts to determine which symbols we need to monitor
       const alerts = await Alert.find({ status: "active" }).lean();
+      if (seq !== this.symbolsRefreshSeq) return; // newer refresh already applied
 
       // Update micro-batch engine's active symbols
       this.microBatchEngine.updateActiveSymbols(alerts);
@@ -5658,6 +5715,30 @@ class RealTimeAlertProcessor {
       clearInterval(this.heartbeatInterval);
     }
 
+    // Safety net: if the engine's symbol set ever drifts from what's actually in
+    // the database, monitoring goes quiet for the missing symbols without any
+    // error being raised — the only symptom is alerts that never arrive. Compare
+    // the two periodically and repair rather than relying on every write path
+    // getting it right.
+    if (this.symbolReconcileInterval) {
+      clearInterval(this.symbolReconcileInterval);
+    }
+    this.symbolReconcileInterval = setInterval(async () => {
+      try {
+        const alerts = await Alert.find({ status: "active" }).lean();
+        const expected = new Set(alerts.map((a) => a.symbol).filter(Boolean));
+        const tracked = this.microBatchEngine?.activeSymbolsSet;
+        if (!tracked || tracked.size === expected.size) return;
+
+        console.warn(
+          `⚠️ Symbol set drift: engine has ${tracked.size}, database has ${expected.size} — repairing`
+        );
+        this.microBatchEngine.updateActiveSymbols(alerts);
+      } catch (error) {
+        console.error("❌ Error reconciling active symbols:", error.message);
+      }
+    }, 60 * 1000);
+
     // Send heartbeat every 30 seconds
     this.heartbeatInterval = setInterval(async () => {
       try {
@@ -5697,6 +5778,10 @@ class RealTimeAlertProcessor {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
       console.log("💓 Heartbeat stopped");
+    }
+    if (this.symbolReconcileInterval) {
+      clearInterval(this.symbolReconcileInterval);
+      this.symbolReconcileInterval = null;
     }
   }
 
