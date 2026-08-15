@@ -13,10 +13,11 @@ const alertSchema = new mongoose.Schema(
       index: true,
     },
     conditions: {
-      // Basic conditions (required)
+      // Min Daily is usually required, but an Independent Divergence Trigger
+      // is a complete alert condition on its own and must be creatable without it.
       minDaily: {
         type: String,
-        required: true,
+        default: "",
       },
       changePercent: {
         timeframe: {
@@ -65,6 +66,14 @@ const alertSchema = new mongoose.Schema(
           default: "ABOVE",
         },
       },
+      rsiDivergence: {
+        timeframes: [String],
+        bullish: { type: Boolean, default: false },
+        bullishHidden: { type: Boolean, default: false },
+        bearish: { type: Boolean, default: false },
+        bearishHidden: { type: Boolean, default: false },
+        condition: { type: String, default: "" },
+      },
       macd: {
         timeframes: [String],
         fastPeriod: {
@@ -97,6 +106,25 @@ const alertSchema = new mongoose.Schema(
         },
         percentage: {
           type: String,
+        },
+      },
+      // Open Interest change against the baseline at the candle boundary.
+      // Nested form is required for the "type" key: a bare `type: String`
+      // would be read as this field's own Mongoose type, not a sub-field.
+      oiChange: {
+        timeframes: [String],
+        type: {
+          type: String,
+          enum: ["PERCENTAGE", "VALUE"],
+          default: "PERCENTAGE",
+        },
+        value: {
+          type: String,
+        },
+        direction: {
+          type: String,
+          enum: ["increase", "decrease", "both"],
+          default: "increase",
         },
       },
     },

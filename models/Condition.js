@@ -34,6 +34,15 @@ const conditionSchema = new mongoose.Schema(
             period: { type: String },
             timeframes: [{ type: String }],
         },
+        rsiDivergence: {
+            enabled: { type: Boolean, default: false },
+            bullish: { type: Boolean, default: false },
+            bullishHidden: { type: Boolean, default: false },
+            bearish: { type: Boolean, default: false },
+            bearishHidden: { type: Boolean, default: false },
+            condition: { type: String, default: "" },
+            timeframes: [{ type: String }],
+        },
         // MACD Condition (Fast EMA vs Slow EMA)
         macd: {
             enabled: { type: Boolean, default: false },
@@ -47,6 +56,14 @@ const conditionSchema = new mongoose.Schema(
             enabled: { type: Boolean, default: false },
             condition: { type: String }, // INCREASING, DECREASING
             percentage: { type: String },
+            timeframes: [{ type: String }],
+        },
+        // OI Change Condition
+        oiChange: {
+            enabled: { type: Boolean, default: false },
+            type: { type: String }, // PERCENTAGE, VALUE
+            value: { type: String },
+            direction: { type: String }, // increase, decrease, both
             timeframes: [{ type: String }],
         },
         // Minimum Daily Volume

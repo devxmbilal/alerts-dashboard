@@ -91,8 +91,11 @@ export async function GET(request) {
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
+      // Tells nginx not to buffer this response. Without it a proxy holds each
+      // event in its buffer and the dashboard only updates on a manual refresh.
+      "X-Accel-Buffering": "no",
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "Cache-Control",
     },

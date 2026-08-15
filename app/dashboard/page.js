@@ -39,7 +39,7 @@ import { FavoritesProvider } from "../../contexts/FavoritesContext";
 import { useThemeMode } from "../ThemeProvider";
 import { useRouter } from "next/navigation";
 
-export default function Dashboard() {
+export function DashboardContent() {
   const router = useRouter();
   const theme = useTheme();
   const { mode, toggleTheme } = useThemeMode();
@@ -610,9 +610,6 @@ export default function Dashboard() {
   }
 
   return (
-    <SocketProvider>
-      <AlertProvider>
-        <FavoritesProvider>
           <Box
             sx={{
               minHeight: "100vh",
@@ -826,6 +823,15 @@ export default function Dashboard() {
             {/* Mobile Drawer */}
             {renderMobileDrawer()}
           </Box>
+  );
+}
+
+export default function Dashboard() {
+  return (
+    <SocketProvider>
+      <AlertProvider>
+        <FavoritesProvider>
+          <DashboardContent />
         </FavoritesProvider>
       </AlertProvider>
     </SocketProvider>

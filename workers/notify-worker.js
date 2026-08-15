@@ -126,6 +126,7 @@ redisSubscriber.on("message", async (channel, message) => {
             volume: history.triggerData?.volume24h,
             priceChangePercent: history.triggerData?.priceChangePercent,
             triggeredAt: history.triggeredAt,
+            divergence: history.divergence || null,
           };
 
           // Send notifications (reuse existing logic)
@@ -237,6 +238,7 @@ redisSubscriber.on("message", async (channel, message) => {
       volume: history.triggerData?.volume24h,
       priceChangePercent: history.triggerData?.priceChangePercent,
       triggeredAt: history.triggeredAt,
+      divergence: history.divergence || null,
     };
 
     // Email

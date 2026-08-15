@@ -14,7 +14,7 @@ module.exports = {
       name: "alerts-dashboard",
       script: "node_modules/.bin/next",
       args: "start -p 3005",
-      cwd: "/var/www/alerts-dashboard",
+      cwd: "/home/ubuntu/alerts-dashboard",
       instances: 1,
       autorestart: true,
       watch: false,
@@ -40,7 +40,7 @@ module.exports = {
     {
       name: "binance-worker",
       script: "workers/binance-worker.js",
-      cwd: "/var/www/alerts-dashboard",
+      cwd: "/home/ubuntu/alerts-dashboard",
       instances: 1,
       autorestart: true,
       watch: false,
@@ -62,7 +62,7 @@ module.exports = {
     {
       name: "alert-worker",
       script: "workers/alert-worker.js",
-      cwd: "/var/www/alerts-dashboard",
+      cwd: "/home/ubuntu/alerts-dashboard",
       instances: 1,
       autorestart: true,
       watch: false,
@@ -84,7 +84,7 @@ module.exports = {
     {
       name: "cleanup-worker",
       script: "workers/cleanup-worker.js",
-      cwd: "/var/www/alerts-dashboard",
+      cwd: "/home/ubuntu/alerts-dashboard",
       instances: 1,
       autorestart: true,
       watch: false,
@@ -103,7 +103,7 @@ module.exports = {
     {
       name: "notify-worker",
       script: "workers/notify-worker.js",
-      cwd: "/var/www/alerts-dashboard",
+      cwd: "/home/ubuntu/alerts-dashboard",
       instances: 1,
       autorestart: true,
       watch: false,
@@ -125,7 +125,7 @@ module.exports = {
     {
       name: "db-queue-worker",
       script: "workers/db-queue-worker.js",
-      cwd: "/var/www/alerts-dashboard",
+      cwd: "/home/ubuntu/alerts-dashboard",
       instances: 1,
       autorestart: true,
       watch: false,
@@ -147,7 +147,7 @@ module.exports = {
     {
       name: "real-time-worker",
       script: "workers/real-time-alert-worker.js",
-      cwd: "/var/www/alerts-dashboard",
+      cwd: "/home/ubuntu/alerts-dashboard",
       instances: 1,
       autorestart: true,
       watch: false,

@@ -38,20 +38,25 @@ import {
   DialogContentText,
   DialogActions,
   Snackbar,
+  ToggleButton,
+  ToggleButtonGroup,
+  Select,
+  Radio,
+  Tooltip,
 } from "@mui/material";
 import { styled } from "@mui/material/styles";
-import {
-  Check as CheckIcon,
-  Close as CloseIcon,
-  ExpandMore as ExpandMoreIcon,
-  NotificationsActive as NotificationsActiveIcon,
-  TrendingUp as TrendingUpIcon,
-  TrendingDown as TrendingDownIcon,
-  Speed as SpeedIcon,
-  Timeline as TimelineIcon,
-  Star as StarIcon,
-  ShowChart as ShowChartIcon,
-} from "@mui/icons-material";
+import CheckIcon from "@mui/icons-material/Check";
+import CloseIcon from "@mui/icons-material/Close";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import NotificationsActiveIcon from "@mui/icons-material/NotificationsActive";
+import TrendingUpIcon from "@mui/icons-material/TrendingUp";
+import TrendingDownIcon from "@mui/icons-material/TrendingDown";
+import SpeedIcon from "@mui/icons-material/Speed";
+import TimelineIcon from "@mui/icons-material/Timeline";
+import StarIcon from "@mui/icons-material/Star";
+import ShowChartIcon from "@mui/icons-material/ShowChart";
+import BarChartIcon from "@mui/icons-material/BarChart";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import { useAlert } from "../contexts/AlertContext";
 import { useSocket } from "../contexts/SocketContext";
 import { useFavorites } from "../contexts/FavoritesContext";
@@ -116,7 +121,7 @@ const CustomTextField = styled(TextField)(({ theme }) => ({
 }));
 
 const FilterSidebar = forwardRef(
-  ({ selectedSymbol, onCreateAlert, onAlertsCreated, onClose }, ref) => {
+  ({ selectedSymbol, onCreateAlert, onAlertsCreated, onClose, exchange, setExchange }, ref) => {
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down("md"));
 
@@ -137,6 +142,9 @@ const FilterSidebar = forwardRef(
       rsiRange: {},
       macd: {},
       volume: {},
+      volumeEma: {},
+      rsiDivergence: {},
+      oiChange: {},
     });
 
     const [isCreating, setIsCreating] = useState(false);
@@ -164,6 +172,9 @@ const FilterSidebar = forwardRef(
           rsiRange: {},
           macd: {},
           volume: {},
+          volumeEma: {},
+          rsiDivergence: {},
+          oiChange: {},
         });
 
         // 🔥 Also delete conditions from database
@@ -215,6 +226,9 @@ const FilterSidebar = forwardRef(
                 rsiRange: {},
                 macd: {},
                 volume: {},
+                volumeEma: {},
+                rsiDivergence: {},
+                oiChange: {},
               };
 
               // Min Daily
@@ -273,6 +287,18 @@ const FilterSidebar = forwardRef(
                 });
                 loadedFilters.volume.condition = saved.volume.condition || "INCREASING";
                 loadedFilters.volume.percentage = saved.volume.percentage || "";
+              }
+
+              // RSI Divergence
+              if (saved.rsiDivergence?.enabled && saved.rsiDivergence?.timeframes?.length > 0) {
+                saved.rsiDivergence.timeframes.forEach(tf => {
+                  loadedFilters.rsiDivergence[tf] = true;
+                });
+                loadedFilters.rsiDivergence.bullish = saved.rsiDivergence.bullish || false;
+                loadedFilters.rsiDivergence.bullishHidden = saved.rsiDivergence.bullishHidden || false;
+                loadedFilters.rsiDivergence.bearish = saved.rsiDivergence.bearish || false;
+                loadedFilters.rsiDivergence.bearishHidden = saved.rsiDivergence.bearishHidden || false;
+                loadedFilters.rsiDivergence.condition = saved.rsiDivergence.condition || "independent";
               }
 
               setFilters(loadedFilters);
@@ -352,8 +378,25 @@ const FilterSidebar = forwardRef(
       const hasRsiRange = Object.values(filters.rsiRange).some((value) => value === true);
       const hasMacd = filters.macd && Object.values(filters.macd).some((value) => value === true);
       const hasVolume = Object.values(filters.volume).some((value) => value === true);
+      const hasVolumeEma = filters.volumeEma && Object.values(filters.volumeEma).some((value) => value === true);
+      // Divergence needs BOTH a timeframe and a divergence type to be a usable trigger
+      const rsiDivHasTimeframe =
+        filters.rsiDivergence &&
+        Object.keys(filters.rsiDivergence).some(
+          (key) =>
+            !["bullish", "bullishHidden", "bearish", "bearishHidden", "condition"].includes(key) &&
+            filters.rsiDivergence[key] === true
+        );
+      const rsiDivHasType = !!(
+        filters.rsiDivergence?.bullish ||
+        filters.rsiDivergence?.bullishHidden ||
+        filters.rsiDivergence?.bearish ||
+        filters.rsiDivergence?.bearishHidden
+      );
+      const hasRsiDivergence = rsiDivHasTimeframe && rsiDivHasType;
+      const hasOiChange = filters.oiChange && Object.values(filters.oiChange).some((value) => value === true) && filters.oiChange.value;
 
-      // Validation 1: Min Daily is required
+      // Validation 1: Min Daily is always required
       if (!hasMinDaily) {
         setErrorMessage("Please set: Min Daily volume");
         setIsCreating(false);
@@ -361,8 +404,8 @@ const FilterSidebar = forwardRef(
       }
 
       // Validation 2: At least one other condition must be set
-      if (!hasChangePercent && !hasAlertCount && !hasCandle && !hasRsiRange && !hasMacd && !hasVolume) {
-        setErrorMessage("Please set at least one condition (Change %, MACD, Volume, etc.)");
+      if (!hasChangePercent && !hasAlertCount && !hasCandle && !hasRsiRange && !hasMacd && !hasVolume && !hasVolumeEma && !hasRsiDivergence && !hasOiChange) {
+        setErrorMessage("Please set at least one condition (Change %, RSI, RSI Divergence, etc.)");
         setIsCreating(false);
         return;
       }
@@ -387,9 +430,10 @@ const FilterSidebar = forwardRef(
           return;
         }
 
-        const alertConditions = {
-          minDaily: minDailyKey,
-        };
+        const alertConditions = {};
+        if (minDailyKey) {
+          alertConditions.minDaily = minDailyKey;
+        }
 
         if (hasChangePercent) {
           const changePercentKey = Object.keys(filters.changePercent).find(
@@ -477,6 +521,49 @@ const FilterSidebar = forwardRef(
           };
         }
 
+        if (hasVolumeEma) {
+          const volumeEmaTimeframes = Object.keys(filters.volumeEma).filter(
+            (key) =>
+              !["emaPeriod", "condition"].includes(key) &&
+              filters.volumeEma[key] === true
+          );
+          alertConditions.volumeEma = {
+            timeframes: volumeEmaTimeframes,
+            emaPeriod: filters.volumeEma.emaPeriod || "20",
+            condition: filters.volumeEma.condition || "CROSSING_UP",
+          };
+        }
+
+        if (hasRsiDivergence) {
+          const rsiDivTimeframes = Object.keys(filters.rsiDivergence).filter(
+            (key) =>
+              !["bullish", "bullishHidden", "bearish", "bearishHidden", "condition"].includes(key) &&
+              filters.rsiDivergence[key] === true
+          );
+          alertConditions.rsiDivergence = {
+            timeframes: rsiDivTimeframes,
+            bullish: filters.rsiDivergence.bullish || false,
+            bullishHidden: filters.rsiDivergence.bullishHidden || false,
+            bearish: filters.rsiDivergence.bearish || false,
+            bearishHidden: filters.rsiDivergence.bearishHidden || false,
+            condition: filters.rsiDivergence.condition || "independent",
+          };
+        }
+
+        if (hasOiChange) {
+          const oiTimeframes = Object.keys(filters.oiChange).filter(
+            (key) =>
+              !["type", "value", "direction"].includes(key) &&
+              filters.oiChange[key] === true
+          );
+          alertConditions.oiChange = {
+            timeframes: oiTimeframes,
+            type: filters.oiChange.type || "PERCENTAGE",
+            value: filters.oiChange.value,
+            direction: filters.oiChange.direction || "increase",
+          };
+        }
+
         // Remove undefined conditions
         Object.keys(alertConditions).forEach((key) => {
           if (alertConditions[key] === undefined) {
@@ -497,6 +584,7 @@ const FilterSidebar = forwardRef(
             Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({
+            exchange: exchange,
             conditions: alertConditions,
             notificationSettings: {
               email: true,
@@ -578,6 +666,9 @@ const FilterSidebar = forwardRef(
         if (response.ok) {
           const data = await response.json();
           console.log("✅ All alerts removed:", data);
+          
+          // 🔥 Dispatch event to clear frontend notification queue
+          window.dispatchEvent(new CustomEvent('alertsCleared'));
 
           // Reset filter state
           setFilters({
@@ -588,6 +679,8 @@ const FilterSidebar = forwardRef(
             rsiRange: {},
             macd: {},
             volume: {},
+            volumeEma: {},
+            rsiDivergence: {},
           });
 
           // 🔥 Delete conditions from database
@@ -631,12 +724,13 @@ const FilterSidebar = forwardRef(
 
     // Get active filters count
     const activeFiltersCount = useMemo(() => {
-      return Object.values(filters).filter((filter) =>
-        Object.values(filter).some(
+      return Object.values(filters).filter((filter) => {
+        if (!filter) return false;
+        return Object.values(filter).some(
           (value) =>
             value === true || (typeof value === "string" && value.trim() !== "")
-        )
-      ).length;
+        );
+      }).length;
     }, [filters]);
 
     // Min Daily Volume options - matching the image
@@ -697,6 +791,8 @@ const FilterSidebar = forwardRef(
       { value: "4HR", label: "4HR" },
       { value: "12HR", label: "12HR" },
       { value: "D", label: "D" },
+      { value: "W", label: "W" },
+      { value: "M", label: "M" },
     ];
 
     // RSI Range condition options - matching the image
@@ -742,6 +838,38 @@ const FilterSidebar = forwardRef(
       { value: "BELOW", label: "BELOW" },
     ];
 
+    // Volume EMA timeframe options
+    const volumeEmaTimeframeOptions = [
+      { value: "5MIN", label: "5MIN" },
+      { value: "15MIN", label: "15MIN" },
+      { value: "1HR", label: "1HR" },
+      { value: "4HR", label: "4HR" },
+      { value: "12HR", label: "12HR" },
+      { value: "D", label: "D" },
+    ];
+
+    // Volume EMA condition options
+    const volumeEmaConditionOptions = [
+      { value: "CROSSING_UP", label: "CROSSING UP" },
+      { value: "CROSSING_DOWN", label: "CROSSING DOWN" },
+    ];
+
+    // OI Change timeframe options
+    const oiTimeframeOptions = [
+      { value: "5MIN", label: "5MIN" },
+      { value: "15MIN", label: "15MIN" },
+      { value: "1HR", label: "1HR" },
+      { value: "4HR", label: "4HR" },
+      { value: "D", label: "D" },
+      { value: "W", label: "W" },
+    ];
+
+    // OI Change Type options
+    const oiTypeOptions = [
+      { value: "PERCENTAGE", label: "Percentage" },
+      { value: "VALUE", label: "Value" },
+    ];
+
     return (
       <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
         {/* Header */}
@@ -785,6 +913,36 @@ const FilterSidebar = forwardRef(
           }}
           className="filter-sidebar-scrollbar"
         >
+          {/* Exchange Toggle - Temporarily disabled for RSI Divergence work
+          <Box sx={{ mb: 2, mt: 1, px: 1 }}>
+            <ToggleButtonGroup
+              color="primary"
+              value={exchange}
+              exclusive
+              onChange={(e, newExchange) => {
+                if (newExchange !== null) setExchange(newExchange);
+              }}
+              aria-label="Exchange Selection"
+              fullWidth
+              size="small"
+              sx={{
+                "& .MuiToggleButton-root": {
+                  color: "text.secondary",
+                  borderColor: "divider",
+                  "&.Mui-selected": {
+                    color: "primary.main",
+                    backgroundColor: "rgba(144, 202, 249, 0.16)",
+                  },
+                },
+              }}
+            >
+              <ToggleButton value="binance">Binance Spot</ToggleButton>
+              <ToggleButton value="alpha">Binance Alpha</ToggleButton>
+            </ToggleButtonGroup>
+          </Box>
+          */}
+
+
           {/* Min Daily Volume Filter */}
           <DarkAccordion>
             <AccordionSummary
@@ -1122,122 +1280,29 @@ const FilterSidebar = forwardRef(
             </AccordionDetails>
           </DarkAccordion>
 
-          {false && (
-            <>
-              {/* MACD Filter */}
-              <DarkAccordion>
-            <AccordionSummary
-              expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
-            >
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                <ShowChartIcon sx={{ color: "#ff9800" }} />
-                <Typography sx={{ color: "text.primary" }}>MACD</Typography>
-              </Box>
-            </AccordionSummary>
-            <AccordionDetails>
-              {/* Timeframe checkboxes */}
-              <Grid container spacing={1} sx={{ mb: 2 }}>
-                {macdTimeframeOptions.map((option) => (
-                  <Grid item xs={4} key={option.value}>
-                    <FormControlLabel
-                      control={
-                        <CustomCheckbox
-                          checked={filters.macd[option.value] || false}
-                          onChange={() =>
-                            handleCheckboxChange("macd", option.value)
-                          }
-                          size="small"
-                        />
-                      }
-                      label={option.label}
-                      sx={{
-                        color: "text.primary",
-                        "& .MuiTypography-root": {
-                          fontSize: "14px",
-                        },
-                      }}
-                    />
-                  </Grid>
-                ))}
-              </Grid>
-
-              {/* Input fields */}
-              <Grid container spacing={1} sx={{ mb: 2 }}>
-                <Grid item xs={6}>
-                  <CustomTextField
-                    fullWidth
-                    size="small"
-                    type="number"
-                    label="Fast Period"
-                    value={filters.macd.fastPeriod || ""}
-                    onChange={(e) =>
-                      handleInputChange("macd", "fastPeriod", e.target.value)
-                    }
-                    inputProps={{ min: 1, max: 200 }}
-                    InputLabelProps={{ shrink: true }}
-                    placeholder="12"
-                  />
-                </Grid>
-                <Grid item xs={6}>
-                  <CustomTextField
-                    fullWidth
-                    size="small"
-                    type="number"
-                    label="Slow Period"
-                    value={filters.macd.slowPeriod || ""}
-                    onChange={(e) =>
-                      handleInputChange("macd", "slowPeriod", e.target.value)
-                    }
-                    inputProps={{ min: 1, max: 200 }}
-                    InputLabelProps={{ shrink: true }}
-                    placeholder="26"
-                  />
-                </Grid>
-              </Grid>
-
-              {/* Condition dropdown */}
-              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                Condition:
-              </Typography>
-              <CustomTextField
-                select
-                fullWidth
-                size="small"
-                value={filters.macd.condition || "ABOVE"}
-                onChange={(e) =>
-                  handleInputChange("macd", "condition", e.target.value)
-                }
-              >
-                {macdConditionOptions.map((option) => (
-                  <MenuItem key={option.value} value={option.value}>
-                    {option.label}
-                  </MenuItem>
-                ))}
-              </CustomTextField>
-            </AccordionDetails>
-          </DarkAccordion>
-
-          {/* Volume Filter */}
+          {/* Divergence Filter */}
           <DarkAccordion>
             <AccordionSummary
               expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
             >
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                <SpeedIcon sx={{ color: "#607d8b" }} />
-                <Typography sx={{ color: "text.primary" }}>Volume</Typography>
+                <TimelineIcon sx={{ color: "#00bfa5" }} />
+                <Typography sx={{ color: "text.primary" }}>
+                  Divergence
+                </Typography>
               </Box>
             </AccordionSummary>
             <AccordionDetails>
               {/* Timeframe checkboxes */}
               <Grid container spacing={1} sx={{ mb: 2 }}>
-                {volumeTimeframeOptions.map((option) => (
+                {rsiTimeframeOptions.map((option) => (
                   <Grid item xs={4} key={option.value}>
                     <FormControlLabel
                       control={
                         <CustomCheckbox
-                          checked={filters.volume[option.value] || false}
+                          checked={filters?.rsiDivergence?.[option.value] || false}
                           onChange={() =>
-                            handleCheckboxChange("volume", option.value)
+                            handleCheckboxChange("rsiDivergence", option.value)
                           }
                         />
                       }
@@ -1253,51 +1318,362 @@ const FilterSidebar = forwardRef(
                 ))}
               </Grid>
 
-              {/* Condition dropdown */}
+              {/* Divergence Type checkboxes */}
               <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                Condition:
+                Divergence Types:
+              </Typography>
+              <Grid container spacing={1} sx={{ mb: 2 }}>
+                <Grid item xs={12}>
+                  <FormControlLabel
+                    control={
+                      <CustomCheckbox
+                        checked={filters?.rsiDivergence?.bullish || false}
+                        onChange={(e) =>
+                          handleInputChange("rsiDivergence", "bullish", e.target.checked)
+                        }
+                      />
+                    }
+                    label="Bullish Divergence"
+                    sx={{ color: "text.primary" }}
+                  />
+                </Grid>
+                <Grid item xs={12}>
+                  <FormControlLabel
+                    control={
+                      <CustomCheckbox
+                        checked={filters?.rsiDivergence?.bullishHidden || false}
+                        onChange={(e) =>
+                          handleInputChange("rsiDivergence", "bullishHidden", e.target.checked)
+                        }
+                      />
+                    }
+                    label="Bullish Hidden Divergence"
+                    sx={{ color: "text.primary" }}
+                  />
+                </Grid>
+                <Grid item xs={12}>
+                  <FormControlLabel
+                    control={
+                      <CustomCheckbox
+                        checked={filters?.rsiDivergence?.bearish || false}
+                        onChange={(e) =>
+                          handleInputChange("rsiDivergence", "bearish", e.target.checked)
+                        }
+                      />
+                    }
+                    label="Bearish Divergence"
+                    sx={{ color: "text.primary" }}
+                  />
+                </Grid>
+                <Grid item xs={12}>
+                  <FormControlLabel
+                    control={
+                      <CustomCheckbox
+                        checked={filters?.rsiDivergence?.bearishHidden || false}
+                        onChange={(e) =>
+                          handleInputChange("rsiDivergence", "bearishHidden", e.target.checked)
+                        }
+                      />
+                    }
+                    label="Bearish Hidden Divergence"
+                    sx={{ color: "text.primary" }}
+                  />
+                </Grid>
+              </Grid>
+
+              {/* Divergence Condition: label + info tooltip, dropdown below */}
+              <Box sx={{ mt: 2, mb: 1 }}>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+                  <Typography variant="body1" sx={{ color: "text.primary", fontWeight: 600 }}>
+                    Divergence Condition
+                  </Typography>
+                  <Tooltip
+                    placement="top-start"
+                    slotProps={{
+                      tooltip: {
+                        sx: {
+                          bgcolor: theme.palette.background.paper,
+                          color: theme.palette.text.primary,
+                          border: "1px solid",
+                          borderColor: theme.palette.divider,
+                          boxShadow: theme.shadows[4],
+                          maxWidth: 320,
+                        },
+                      },
+                    }}
+                    title={
+                      <Box sx={{ p: 1 }}>
+                        <Typography variant="body2" sx={{ fontWeight: "bold", mb: 0.5 }}>
+                          Independent Trigger
+                        </Typography>
+                        <Typography variant="caption" sx={{ display: "block", mb: 1.5 }}>
+                          Waits for the next candle to close. For Bullish: Next candle
+                          closes and fails to go below the low of the previous candle.
+                          For Bearish: Next candle closes and fails to go above the high
+                          of the previous candle.
+                        </Typography>
+                        <Typography variant="body2" sx={{ fontWeight: "bold", mb: 0.5 }}>
+                          Previous Candle
+                        </Typography>
+                        <Typography variant="caption" sx={{ display: "block", mb: 1.5 }}>
+                          Alerts trigger immediately after the candle forming the
+                          divergence closes.
+                        </Typography>
+                        <Typography variant="body2" sx={{ fontWeight: "bold", mb: 0.5 }}>
+                          Conditional Trigger
+                        </Typography>
+                        <Typography variant="caption" sx={{ display: "block" }}>
+                          Alerts trigger in real-time on the current active candle before
+                          it closes.
+                        </Typography>
+                      </Box>
+                    }
+                  >
+                    <InfoOutlinedIcon sx={{ fontSize: 18, color: "primary.main", cursor: "pointer" }} />
+                  </Tooltip>
+                </Box>
+
+                <CustomTextField
+                  select
+                  fullWidth
+                  size="small"
+                  value={filters?.rsiDivergence?.condition || "independent"}
+                  onChange={(e) =>
+                    handleInputChange("rsiDivergence", "condition", e.target.value)
+                  }
+                >
+                  <MenuItem value="independent">Independent Trigger</MenuItem>
+                  <MenuItem value="previous">Previous Candle</MenuItem>
+                  <MenuItem value="conditional">Conditional Trigger</MenuItem>
+                </CustomTextField>
+              </Box>
+            </AccordionDetails>
+          </DarkAccordion>
+
+          {/* OI Change Filter */}
+          <DarkAccordion>
+            <AccordionSummary
+              expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
+            >
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <TimelineIcon sx={{ color: "#3f51b5" }} />
+                <Typography sx={{ color: "text.primary" }}>OI Change</Typography>
+              </Box>
+            </AccordionSummary>
+            <AccordionDetails>
+              {/* Timeframes */}
+              <Grid container spacing={1} sx={{ mb: 2 }}>
+                {oiTimeframeOptions.map((option) => (
+                  <Grid item xs={4} key={option.value}>
+                    <FormControlLabel
+                      control={
+                        <CustomCheckbox
+                          checked={filters?.oiChange?.[option.value] || false}
+                          onChange={() =>
+                            handleCheckboxChange("oiChange", option.value)
+                          }
+                        />
+                      }
+                      label={option.label}
+                      sx={{
+                        color: "text.primary",
+                        "& .MuiFormControlLabel-label": {
+                          fontSize: "14px",
+                        },
+                      }}
+                    />
+                  </Grid>
+                ))}
+              </Grid>
+
+              {/* Scroll Down option: Percentage or Value */}
+              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+                Type:
               </Typography>
               <CustomTextField
                 select
                 fullWidth
                 size="small"
-                value={filters.volume.condition || "INCREASING"}
+                value={filters?.oiChange?.type || "PERCENTAGE"}
                 onChange={(e) =>
-                  handleInputChange("volume", "condition", e.target.value)
+                  handleInputChange("oiChange", "type", e.target.value)
                 }
                 sx={{ mb: 2 }}
               >
-                {volumeConditionOptions.map((option) => (
+                {oiTypeOptions.map((option) => (
                   <MenuItem key={option.value} value={option.value}>
                     {option.label}
                   </MenuItem>
                 ))}
               </CustomTextField>
 
-              {/* Percentage input */}
+              {/* Percentage (BOX) or Value (BOX) */}
               <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                Percentage %:
+                {filters?.oiChange?.type === "PERCENTAGE" ? "Percentage %:" : "Value:"}
               </Typography>
               <CustomTextField
                 fullWidth
                 size="small"
-                placeholder="Enter percentage"
-                value={filters.volume.percentage || ""}
+                type="number"
+                placeholder={filters?.oiChange?.type === "PERCENTAGE" ? "Enter %" : "Enter value"}
+                value={filters?.oiChange?.value || ""}
                 onChange={(e) =>
-                  handleInputChange("volume", "percentage", e.target.value)
+                  handleInputChange("oiChange", "value", e.target.value)
+                }
+                InputProps={
+                  filters?.oiChange?.type === "PERCENTAGE"
+                    ? { endAdornment: <InputAdornment position="end">%</InputAdornment> }
+                    : undefined
+                }
+                sx={{ mb: 2 }}
+              />
+
+              {/* Direction Dropdown */}
+              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+                Direction:
+              </Typography>
+              <CustomTextField
+                select
+                fullWidth
+                size="small"
+                value={filters?.oiChange?.direction || "increase"}
+                onChange={(e) =>
+                  handleInputChange("oiChange", "direction", e.target.value)
                 }
                 InputProps={{
-                  endAdornment: (
-                    <InputAdornment position="end">%</InputAdornment>
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      {filters?.oiChange?.direction === "increase" ? (
+                        <TrendingUpIcon sx={{ fontSize: 18, color: "#4caf50" }} />
+                      ) : filters?.oiChange?.direction === "decrease" ? (
+                        <TrendingDownIcon sx={{ fontSize: 18, color: "#f44336" }} />
+                      ) : (
+                        <ShowChartIcon sx={{ fontSize: 18, color: "#ff9800" }} />
+                      )}
+                    </InputAdornment>
                   ),
                 }}
-              />
+              >
+                <MenuItem value="increase">
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <TrendingUpIcon sx={{ fontSize: 18, color: "#4caf50" }} />
+                    Increasing
+                  </Box>
+                </MenuItem>
+                <MenuItem value="decrease">
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <TrendingDownIcon sx={{ fontSize: 18, color: "#f44336" }} />
+                    Decreasing
+                  </Box>
+                </MenuItem>
+                <MenuItem value="both">
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <ShowChartIcon sx={{ fontSize: 18, color: "#ff9800" }} />
+                    Both
+                  </Box>
+                </MenuItem>
+              </CustomTextField>
             </AccordionDetails>
           </DarkAccordion>
+
+          {false && (
+            <>
+              {/* MACD Filter */}
+              <DarkAccordion>
+                <AccordionSummary
+                  expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
+                >
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <ShowChartIcon sx={{ color: "#ff9800" }} />
+                    <Typography sx={{ color: "text.primary" }}>MACD</Typography>
+                  </Box>
+                </AccordionSummary>
+                <AccordionDetails>
+                  {/* Timeframe checkboxes */}
+                  <Grid container spacing={1} sx={{ mb: 2 }}>
+                    {macdTimeframeOptions.map((option) => (
+                      <Grid item xs={4} key={option.value}>
+                        <FormControlLabel
+                          control={
+                            <CustomCheckbox
+                              checked={filters.macd[option.value] || false}
+                              onChange={() =>
+                                handleCheckboxChange("macd", option.value)
+                              }
+                              size="small"
+                            />
+                          }
+                          label={option.label}
+                          sx={{
+                            color: "text.primary",
+                            "& .MuiTypography-root": {
+                              fontSize: "14px",
+                            },
+                          }}
+                        />
+                      </Grid>
+                    ))}
+                  </Grid>
+
+                  {/* Input fields */}
+                  <Grid container spacing={1} sx={{ mb: 2 }}>
+                    <Grid item xs={6}>
+                      <CustomTextField
+                        fullWidth
+                        size="small"
+                        type="number"
+                        label="Fast Period"
+                        value={filters.macd.fastPeriod || ""}
+                        onChange={(e) =>
+                          handleInputChange("macd", "fastPeriod", e.target.value)
+                        }
+                        inputProps={{ min: 1, max: 200 }}
+                        InputLabelProps={{ shrink: true }}
+                        placeholder="12"
+                      />
+                    </Grid>
+                    <Grid item xs={6}>
+                      <CustomTextField
+                        fullWidth
+                        size="small"
+                        type="number"
+                        label="Slow Period"
+                        value={filters.macd.slowPeriod || ""}
+                        onChange={(e) =>
+                          handleInputChange("macd", "slowPeriod", e.target.value)
+                        }
+                        inputProps={{ min: 1, max: 200 }}
+                        InputLabelProps={{ shrink: true }}
+                        placeholder="26"
+                      />
+                    </Grid>
+                  </Grid>
+
+                  {/* Condition dropdown */}
+                  <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+                    Condition:
+                  </Typography>
+                  <CustomTextField
+                    select
+                    fullWidth
+                    size="small"
+                    value={filters.macd.condition || "ABOVE"}
+                    onChange={(e) =>
+                      handleInputChange("macd", "condition", e.target.value)
+                    }
+                  >
+                    {macdConditionOptions.map((option) => (
+                      <MenuItem key={option.value} value={option.value}>
+                        {option.label}
+                      </MenuItem>
+                    ))}
+                  </CustomTextField>
+                </AccordionDetails>
+              </DarkAccordion>
             </>
           )}
 
-          {/* 🔥 UI FIX: Moved buttons here - after Volume accordion, inside filters area */}
+          {/* 🔥 UI FIX: Moved buttons here - after Volume EMA accordion, inside filters area */}
           <Box sx={{ p: 1, mt: 2 }}>
             <Button
               fullWidth

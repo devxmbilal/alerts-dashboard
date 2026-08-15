@@ -69,6 +69,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
       priceChangePercent:
         alertData.triggeredChange || alertData.priceChangePercent,
       triggeredAt: alertData.triggeredAt || new Date().toISOString(),
+      divergence: alertData.divergence || null,
       read: false,
     };
 
@@ -117,7 +118,17 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
     // Load existing alert history
     loadAlertHistory();
 
+    const handleAlertsCleared = () => {
+      console.log("🧹 Clearing alerts from frontend queue");
+      alertQueueRef.current = [];
+      setAlertHistory([]);
+      setNewAlertCount(0);
+    };
+
+    window.addEventListener('alertsCleared', handleAlertsCleared);
+
     return () => {
+      window.removeEventListener('alertsCleared', handleAlertsCleared);
       if (eventSourceRef.current) {
         console.log("🗱️ Cleaning up EventSource on unmount");
         eventSourceRef.current.close();
@@ -281,6 +292,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
           volume: alert.triggerData?.volume24h,
           priceChangePercent: alert.triggerData?.priceChangePercent,
           triggeredAt: alert.triggeredAt,
+          divergence: alert.divergence || null,
           read: alert.status === "acknowledged",
         }));
 
@@ -390,6 +402,39 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
   const getChangeColor = (change) => {
     return change >= 0 ? "#4caf50" : "#f44336";
   };
+
+  // Pivot timestamps are shown in UTC because that is what the chart the line
+  // gets drawn on reads in — mirrors formatPivotLabelUTC in TelegramService.
+  const utcDate = (ms) =>
+    new Date(ms).toLocaleDateString("en-GB", { timeZone: "UTC", day: "2-digit", month: "short" });
+  const utcTime = (ms) =>
+    new Date(ms).toLocaleTimeString("en-GB", {
+      timeZone: "UTC",
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+  const formatPivotUTC = (ms, timeframe, otherMs) => {
+    if (!ms) return null;
+    if (["D", "W", "M"].includes(timeframe)) return utcDate(ms);
+    const sameDay = otherMs && utcDate(ms) === utcDate(otherMs);
+    return sameDay ? utcTime(ms) : `${utcDate(ms)} ${utcTime(ms)}`;
+  };
+
+  const formatPivotPrice = (val) =>
+    typeof val === "number" && !isNaN(val)
+      ? val.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")
+      : null;
+
+  // One-line label for which divergence fired, mirroring the Telegram message
+  const getDivergenceMeta = (type) =>
+    ({
+      bullish: { name: "Regular Bullish Divergence", color: "#4caf50" },
+      bullishHidden: { name: "Hidden Bullish Divergence", color: "#4caf50" },
+      bearish: { name: "Regular Bearish Divergence", color: "#f44336" },
+      bearishHidden: { name: "Hidden Bearish Divergence", color: "#f44336" },
+    }[type] || null);
 
   const formatConditions = (conditions) => {
     if (typeof conditions === "string") {
@@ -597,7 +642,55 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                       }
                       secondary={
                         <Box sx={{ mt: 0.5, lineHeight: 1.8 }}>
-                          {/* Target & Actual */}
+                          {/* Divergence — single line noting what fired, mirrors the Telegram message */}
+                          {alert.divergence &&
+                            getDivergenceMeta(alert.divergence.type) && (
+                              <Typography
+                                variant="body2"
+                                sx={{
+                                  color: getDivergenceMeta(alert.divergence.type).color,
+                                  fontWeight: 700,
+                                  fontSize: "0.8rem",
+                                  display: "block",
+                                  mb: 0.5,
+                                }}
+                              >
+                                📍 {alert.divergence.timeframe}{" "}
+                                {alert.divergence.label ||
+                                  getDivergenceMeta(alert.divergence.type).name}
+                              </Typography>
+                            )}
+
+                          {/* The two pivots the divergence was measured between, so the
+                              same line can be redrawn by hand on the chart to check it */}
+                          {alert.divergence?.pivot1?.time &&
+                            alert.divergence?.pivot2?.time && (
+                              <Typography
+                                variant="body2"
+                                sx={{
+                                  color: "text.secondary",
+                                  fontSize: "0.75rem",
+                                  display: "block",
+                                  mb: 0.5,
+                                }}
+                              >
+                                📏 Draw:{" "}
+                                {formatPivotUTC(
+                                  alert.divergence.pivot2.time,
+                                  alert.divergence.timeframe,
+                                  alert.divergence.pivot1.time
+                                )}{" "}
+                                (${formatPivotPrice(alert.divergence.pivot2.price)}) →{" "}
+                                {formatPivotUTC(
+                                  alert.divergence.pivot1.time,
+                                  alert.divergence.timeframe,
+                                  alert.divergence.pivot2.time
+                                )}{" "}
+                                (${formatPivotPrice(alert.divergence.pivot1.price)}) UTC
+                              </Typography>
+                            )}
+
+                          {/* Actual Change — mirrors the Telegram message, no Target/Timeframe/Direction */}
                           <Typography
                             variant="body2"
                             sx={{
@@ -607,7 +700,6 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                               fontSize: "0.8rem",
                             }}
                           >
-                            <strong>Target:</strong> {alert.targetValue || 1} |{" "}
                             <strong>Actual Change ({alert.timeframe || "5MIN"}):</strong>{" "}
                             <span
                               style={{
@@ -621,14 +713,10 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                                 ? alert.actualValue.toFixed(3)
                                 : alert.priceChangePercent}
                               %
-                            </span>{" "}
-                            | <strong>Timeframe:</strong>{" "}
-                            {alert.timeframe || "5MIN"} |{" "}
-                            <strong>Direction:</strong>{" "}
-                            {alert.direction || "increase"}
+                            </span>
                           </Typography>
 
-                          {/* Price */}
+                          {/* Current Price */}
                           <Typography
                             variant="body2"
                             sx={{
@@ -639,7 +727,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                               fontWeight: 600,
                             }}
                           >
-                            <strong>Price:</strong> {formatPrice(alert.price)}
+                            <strong>Current Price:</strong> {formatPrice(alert.price)}
                           </Typography>
 
                           {/* Last Price */}
@@ -656,7 +744,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                             {formatPrice(alert.baselinePrice || alert.price)}
                           </Typography>
 
-                          {/* Change in price */}
+                          {/* 24h Change */}
                           <Typography
                             variant="body2"
                             sx={{
@@ -666,17 +754,15 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                               fontSize: "0.8rem",
                             }}
                           >
-                            <strong>Change in price:</strong>{" "}
+                            <strong>24h Change:</strong>{" "}
                             <span
                               style={{
-                                color: getChangeColor(
-                                  alert.changeFromBaselinePercent
-                                ),
+                                color: getChangeColor(alert.priceChangePercent),
                                 fontWeight: 600,
                               }}
                             >
-                              {alert.changeFromBaselinePercent !== undefined
-                                ? alert.changeFromBaselinePercent.toFixed(3)
+                              {alert.priceChangePercent !== undefined
+                                ? alert.priceChangePercent.toFixed(3)
                                 : "N/A"}
                               %
                             </span>

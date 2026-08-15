@@ -4,6 +4,53 @@ import axios from "axios";
 
 dotenv.config();
 
+// Labels a divergence pivot so its candle can be found on the chart. What
+// identifies a candle depends on the timeframe: a daily/weekly/monthly candle
+// is its date (they all open at the same clock time, so the time is noise),
+// while an intraday candle is its time of day — with the date added only when
+// the two pivots fall on different days and the time alone would be ambiguous.
+const PKT = "Asia/Karachi";
+const pktDate = (ms) =>
+  new Date(ms).toLocaleDateString("en-PK", { timeZone: PKT, day: "2-digit", month: "short" });
+const pktTime = (ms) =>
+  new Date(ms).toLocaleTimeString("en-PK", {
+    timeZone: PKT,
+    hour12: true,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+export function formatPivotLabel(ms, timeframe, otherMs) {
+  if (!ms) return null;
+
+  if (["D", "W", "M"].includes(timeframe)) return pktDate(ms);
+
+  const sameDay = otherMs && pktDate(ms) === pktDate(otherMs);
+  return sameDay ? pktTime(ms) : `${pktDate(ms)} ${pktTime(ms)}`;
+}
+
+// Same idea as above but in UTC, which is what the chart the line is drawn on
+// reads in — a local-time label had to be converted by hand before the two
+// candles could be located.
+const utcDate = (ms) =>
+  new Date(ms).toLocaleDateString("en-GB", { timeZone: "UTC", day: "2-digit", month: "short" });
+const utcTime = (ms) =>
+  new Date(ms).toLocaleTimeString("en-GB", {
+    timeZone: "UTC",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+export function formatPivotLabelUTC(ms, timeframe, otherMs) {
+  if (!ms) return null;
+
+  if (["D", "W", "M"].includes(timeframe)) return utcDate(ms);
+
+  const sameDay = otherMs && utcDate(ms) === utcDate(otherMs);
+  return sameDay ? utcTime(ms) : `${utcDate(ms)} ${utcTime(ms)}`;
+}
+
 class TelegramService {
   constructor() {
     this.botToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -130,6 +177,7 @@ class TelegramService {
       volume,
       triggeredAt,
       isUpdate,
+      divergence,
     } = alertData;
 
     const changeEmoji =
@@ -168,12 +216,14 @@ class TelegramService {
       day: "numeric",
     });
 
+    const divergenceLine = this.formatDivergenceLine(divergence);
+
     return `
 🚨 *ALERT TRIGGERED!* 🚨
 
 *${symbol || "Unknown"}*
 ━━━━━━━━━━━━━━━
-
+${divergenceLine ? divergenceLine + "\n" : ""}
 📊 Actual Change (${alertData.timeframe || "5MIN"}): \`${safeNumber(actualValue)}%\`
 💵 Current Price: \`$${safePrice(triggeredPrice)}\`
 📍 Last Price: \`$${safePrice(baselinePrice)}\`
@@ -184,6 +234,43 @@ ${changeEmoji} 24h Change: \`${safeNumber(priceChangePercent)}%\`
 
 ━━━━━━━━━━━━━━━
     `.trim();
+  }
+
+  // Note for RSI divergence alerts — which divergence fired and on which
+  // timeframe, then the two pivots it was measured between (time + price, in
+  // UTC) so the same line can be redrawn by hand on the chart to check the call.
+  formatDivergenceLine(divergence) {
+    if (!divergence || !divergence.type) return "";
+
+    const LABELS = {
+      bullish: "Regular Bullish Divergence",
+      bullishHidden: "Hidden Bullish Divergence",
+      bearish: "Regular Bearish Divergence",
+      bearishHidden: "Hidden Bearish Divergence",
+    };
+
+    const label = divergence.label || LABELS[divergence.type];
+    if (!label) return "";
+
+    const timeframe = divergence.timeframe || "";
+    const typeLine = `📍 ${timeframe ? timeframe + " " : ""}${label}`;
+
+    // pivot2 is the older anchor, pivot1 the just-closed candle — draw from
+    // pivot2 to pivot1, which is the direction a trader reads the line in.
+    const t2 = formatPivotLabelUTC(divergence.pivot2?.time, timeframe, divergence.pivot1?.time);
+    const t1 = formatPivotLabelUTC(divergence.pivot1?.time, timeframe, divergence.pivot2?.time);
+
+    const fmtPrice = (val) =>
+      typeof val === "number" && !isNaN(val)
+        ? val.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")
+        : null;
+
+    const p2 = fmtPrice(divergence.pivot2?.price);
+    const p1 = fmtPrice(divergence.pivot1?.price);
+
+    if (!t1 || !t2 || !p1 || !p2) return typeLine;
+
+    return `${typeLine}\n📏 Draw: \`${t2} ($${p2})\` → \`${t1} ($${p1})\` UTC`;
   }
 
   // =============== LOW-LEVEL SENDS (rate-limited) ===============

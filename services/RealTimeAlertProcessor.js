@@ -20,6 +20,9 @@ class RealTimeAlertProcessor {
     this.alertIds = new Set(); // Track which alert IDs are currently active
     this.alertBaselines = new Map(); // Track baseline prices for change calculations
     this.redisSubscribed = false; // Track Redis subscription status
+    // Returned by acquireAlertLock when Redis itself is unavailable, so the
+    // caller can tell infrastructure trouble apart from real lock contention.
+    this.NO_REDIS_LOCK = "__no_redis_lock__";
     this.candleData = new Map(); // Track candle data for timeframe-based changes
     // Concurrency limit for parallel alert processing - INCREASED for 95% accuracy
     this.processLimit = pLimit(200); // 🔥 SPEED: 200 concurrent (was 100)
@@ -61,6 +64,18 @@ class RealTimeAlertProcessor {
 
     // 🛡️ CIRCUIT BREAKER - Prevent infinite retry loops
     this.rsiFailures = new Map(); // Track RSI calculation failures
+
+    // 🔥 OI CHANGE - Open Interest polling infrastructure
+    this.oiQueue = []; // Queue for OI fetch requests
+    this.isProcessingOiQueue = false; // OI queue processing state
+    this.oiApiBanUntil = 0; // OI API ban timestamp
+    this.oiCache = new Map(); // Cache: "SYMBOL" -> { openInterest: number, timestamp: number }
+    this.oiBaselines = new Map(); // Baseline: "SYMBOL_TIMEFRAME" -> { oi: number, candleStart: number }
+    this.oiUnsupportedSymbols = new Set(); // Symbols with no Binance Futures market
+    this.oiPollingInterval = null; // Interval handle for OI polling loop
+    this.OI_POLL_INTERVAL_MS = 30000; // Poll OI every 30 seconds
+    this.OI_CACHE_TTL_MS = 25000; // Cache OI for 25 seconds (slightly less than poll interval)
+    this.pendingOiRequests = new Set(); // Prevent duplicate OI requests
   }
 
   // Get or create Redis publisher connection (reused for performance)
@@ -182,8 +197,10 @@ class RealTimeAlertProcessor {
       });
 
       this.redisClient.on("close", () => {
-        console.warn("⚠️ Redis cache client connection closed");
-        this.redisClient = null;
+        // Deliberately keep the client: ioredis reconnects it on its own.
+        // Nulling it here made the next call construct a second client while
+        // the first kept retrying forever — one orphan per blip.
+        console.warn("⚠️ Redis cache client connection closed (auto-reconnecting)");
       });
 
       console.log("✅ Redis cache client initialized");
@@ -218,8 +235,8 @@ class RealTimeAlertProcessor {
       });
 
       this.dbQueueClient.on("close", () => {
-        console.warn("⚠️ Redis DB queue client connection closed");
-        this.dbQueueClient = null;
+        // Same reasoning as the cache client — let ioredis reconnect this one.
+        console.warn("⚠️ Redis DB queue client connection closed (auto-reconnecting)");
       });
 
       console.log("✅ Redis DB queue client initialized");
@@ -235,7 +252,10 @@ class RealTimeAlertProcessor {
     try {
       const redis = await this.initRedisClient();
       if (!redis) {
-        return null; // If Redis unavailable, allow processing (fallback)
+        // Redis is down, not busy. Returning null here would read as "someone
+        // else holds the lock" and drop the alert, so hand back a sentinel that
+        // lets processing continue unlocked.
+        return this.NO_REDIS_LOCK;
       }
 
       const lockKey = `lock:alert:${alertId}`;
@@ -254,13 +274,17 @@ class RealTimeAlertProcessor {
         `❌ Error acquiring lock for alert ${alertId}:`,
         error.message
       );
-      return null; // On error, allow processing (fail open)
+      // A command error means the lock state is unknown, which is an
+      // infrastructure problem rather than contention — fail open, as the
+      // duplicate-suppression below (lastFiredDivergence / alertCount) still holds.
+      return this.NO_REDIS_LOCK;
     }
   }
 
   // Release Redis lock for alert processing
   async releaseAlertLock(alertId, token) {
     try {
+      if (token === this.NO_REDIS_LOCK) return false; // nothing was ever taken
       const redis = await this.initRedisClient();
       if (!redis) {
         return false;
@@ -388,10 +412,51 @@ class RealTimeAlertProcessor {
         `✅ Cached ${alerts.length} alerts for ${Object.keys(alertsBySymbol).length
         } symbols in Redis`
       );
+
+      await this.rehydrateDivergenceDedup(alerts);
+
       return true;
     } catch (error) {
       console.error("❌ Error loading alerts to Redis cache:", error);
       return false;
+    }
+  }
+
+  // Divergence dedup only lives in memory, so a restart forgets which pivot it
+  // already alerted on — a divergence on a slow timeframe (12HR, D, W) can still
+  // be "the same one" hours later, and the fresh process would fire it again as
+  // if new. Rehydrate from each alert's last saved divergence trigger so a
+  // restart doesn't repeat an alert already sent. This runs on every full alert
+  // load, which is exactly when the in-memory dedup map is empty and needs it.
+  async rehydrateDivergenceDedup(alerts) {
+    try {
+      const divergenceAlertIds = alerts
+        .filter((a) => a.conditions?.rsiDivergence?.timeframes?.length)
+        .map((a) => a._id);
+
+      if (!divergenceAlertIds.length) return;
+
+      const recentDivergences = await AlertHistory.aggregate([
+        {
+          $match: {
+            alertId: { $in: divergenceAlertIds },
+            "divergence.pivot2.time": { $exists: true },
+          },
+        },
+        { $sort: { triggeredAt: -1 } },
+        { $group: { _id: "$alertId", divergence: { $first: "$divergence" } } },
+      ]);
+
+      if (!this.lastFiredDivergence) this.lastFiredDivergence = new Map();
+      for (const r of recentDivergences) {
+        const signature = `${r.divergence.timeframe}:${r.divergence.type}:${r.divergence.pivot2?.time}`;
+        this.lastFiredDivergence.set(r._id.toString(), signature);
+      }
+      console.log(
+        `🔁 Rehydrated divergence dedup memory for ${recentDivergences.length} alerts`
+      );
+    } catch (err) {
+      console.error("❌ Error rehydrating divergence dedup memory:", err.message);
     }
   }
 
@@ -510,6 +575,8 @@ class RealTimeAlertProcessor {
 
       console.log(`📊 Active symbols: ${this.activeAlerts.size}`);
 
+      await this.rehydrateDivergenceDedup(validAlerts);
+
       // 🔥 CRITICAL FIX: Update MicroBatchEngine's activeSymbolsSet
       // This ensures the engine only processes symbols with valid alerts
       await this.updateMicroBatchActiveSymbols();
@@ -565,11 +632,25 @@ class RealTimeAlertProcessor {
       }
       this.binanceWebSockets = [];
 
+      // A generation tag for this subscription round. Each chunk reconnects
+      // itself below, which would otherwise keep resurrecting a chunk that a
+      // later full resubscribe (active-symbol-set changed) already replaced.
+      // Only a chunk stamped with the still-current generation may reconnect.
+      this._wsGeneration = (this._wsGeneration || 0) + 1;
+      const generation = this._wsGeneration;
+
+      // Updated on every ticker message. The watchdog below force-reconnects
+      // the whole feed if this goes stale — catches a connection that silently
+      // stops delivering data without ever firing "close" or "error" (a network
+      // black hole rather than a clean disconnect), which per-chunk reconnect
+      // can't detect since neither event tells it anything is wrong.
+      this.lastWsMessageAt = Date.now();
+
       let connectedCount = 0;
+      let initialConnectDone = false;
       let msgCount = 0;
 
-      for (let chunkIdx = 0; chunkIdx < symbolChunks.length; chunkIdx++) {
-        const chunk = symbolChunks[chunkIdx];
+      const connectChunk = (chunk, chunkIdx) => {
         const streams = chunk.map(s => `${s.toLowerCase()}@ticker`).join('/');
         const wsUrl = `wss://data-stream.binance.vision/stream?streams=${streams}`;
 
@@ -577,11 +658,18 @@ class RealTimeAlertProcessor {
         this.binanceWebSockets.push(ws);
 
         ws.on("open", () => {
-          connectedCount++;
           console.log(`✅ WebSocket ${chunkIdx + 1}/${symbolChunks.length} connected (${chunk.length} symbols)`);
-          if (connectedCount === symbolChunks.length) {
+          if (!initialConnectDone) {
+            connectedCount++;
+            if (connectedCount === symbolChunks.length) {
+              initialConnectDone = true;
+              this.isWebSocketRunning = true;
+              console.log(`🚀 All ${symbolChunks.length} WebSocket connections established - LIVE`);
+            }
+          } else {
+            // A chunk came back after a micro-disconnect — the feed as a whole
+            // was already live, this just restores the piece that dropped.
             this.isWebSocketRunning = true;
-            console.log(`🚀 All ${symbolChunks.length} WebSocket connections established - LIVE`);
           }
         });
 
@@ -594,6 +682,7 @@ class RealTimeAlertProcessor {
             if (!ticker || !ticker.s) return;
 
             msgCount++;
+            this.lastWsMessageAt = Date.now();
 
             // Build array format compatible with existing micro-batch engine
             const tickerArray = [ticker];
@@ -642,21 +731,50 @@ class RealTimeAlertProcessor {
         });
 
         ws.on("close", () => {
-          console.log(`⚠️ WebSocket ${chunkIdx + 1} closed, reconnecting in 3 seconds...`);
-          this.isWebSocketRunning = false;
-          // Remove from array
           const idx = this.binanceWebSockets.indexOf(ws);
           if (idx > -1) this.binanceWebSockets.splice(idx, 1);
-          // Full reconnect if all connections lost
-          if (this.binanceWebSockets.length === 0) {
-            this.binanceWebSocket = null;
-            setTimeout(() => this.startWebSocketPriceFeed(), 3000);
-          }
+
+          // A newer full resubscribe already replaced this chunk — let it go
+          // quietly instead of resurrecting a connection nobody tracks anymore.
+          if (generation !== this._wsGeneration) return;
+
+          console.log(`⚠️ WebSocket ${chunkIdx + 1} closed, reconnecting just this chunk in 3 seconds...`);
+          // A micro-disconnect on one chunk used to require every other chunk
+          // to also drop before anything reconnected — that chunk's ~200
+          // symbols went dark until the rest of the market happened to fail
+          // too. Reconnect only the chunk that actually dropped.
+          this.isWebSocketRunning = false;
+          setTimeout(() => {
+            if (generation !== this._wsGeneration) return;
+            connectChunk(chunk, chunkIdx);
+          }, 3000);
         });
+      };
+
+      for (let chunkIdx = 0; chunkIdx < symbolChunks.length; chunkIdx++) {
+        connectChunk(symbolChunks[chunkIdx], chunkIdx);
       }
 
       // Keep reference for backward compatibility
       this.binanceWebSocket = this.binanceWebSockets[0] || null;
+
+      // Watchdog: force a full resubscribe if the entire feed goes quiet. A
+      // clean disconnect is already handled per-chunk above; this exists for
+      // the case where a connection stops delivering data without closing.
+      if (this._wsWatchdogInterval) clearInterval(this._wsWatchdogInterval);
+      this._wsWatchdogInterval = setInterval(() => {
+        const silentMs = Date.now() - (this.lastWsMessageAt || 0);
+        if (silentMs > 45000) {
+          console.warn(`⚠️ WebSocket feed silent for ${Math.round(silentMs / 1000)}s — forcing full resubscribe`);
+          this._wsGeneration = (this._wsGeneration || 0) + 1; // orphan any pending per-chunk reconnects
+          for (const ws of this.binanceWebSockets) {
+            try { ws.close(); } catch (e) { /* ignore */ }
+          }
+          this.binanceWebSockets = [];
+          this.isWebSocketRunning = false;
+          this.startWebSocketPriceFeed();
+        }
+      }, 20000);
     } catch (error) {
       console.error("❌ Error starting WebSocket:", error);
       this.isWebSocketRunning = false;
@@ -790,6 +908,9 @@ class RealTimeAlertProcessor {
     // Step 5: Start WebSocket connection (uses active symbols list)
     this.startWebSocketPriceFeed();
 
+    // Step 5.5: Start OI polling for symbols with OI conditions
+    this.startOIPolling();
+
     // Step 6: Subscribe to alert management events
     await this.subscribeToAlertManagement();
 
@@ -832,6 +953,9 @@ class RealTimeAlertProcessor {
     if (this.microBatchEngine) {
       this.microBatchEngine.shutdown();
     }
+
+    // Stop OI polling
+    this.stopOIPolling();
   }
 
   // ============================================
@@ -863,9 +987,23 @@ class RealTimeAlertProcessor {
 
   // Update active symbols cache for micro-batch filtering
   async updateMicroBatchActiveSymbols() {
+    // Creating alerts in bulk calls this once per alert, so hundreds of these
+    // run against a collection that is still being written to. Each one replaces
+    // the engine's whole symbol set, so a query that started early but resolved
+    // late would overwrite the complete set with its own partial snapshot —
+    // monitoring silently dropped to a fraction of the symbols and stayed there
+    // until the worker was restarted. Collapse the burst into one refresh, and
+    // never let an older result land after a newer one.
+    this.symbolsRefreshSeq = (this.symbolsRefreshSeq || 0) + 1;
+    const seq = this.symbolsRefreshSeq;
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (seq !== this.symbolsRefreshSeq) return; // a newer refresh superseded this one
+
     try {
       // Get all active alerts to determine which symbols we need to monitor
       const alerts = await Alert.find({ status: "active" }).lean();
+      if (seq !== this.symbolsRefreshSeq) return; // newer refresh already applied
 
       // Update micro-batch engine's active symbols
       this.microBatchEngine.updateActiveSymbols(alerts);
@@ -873,6 +1011,20 @@ class RealTimeAlertProcessor {
       console.log(
         `📊 Updated micro-batch active symbols: ${alerts.length} alerts`
       );
+
+      // The live WebSocket subscribes to an explicit stream list built once
+      // from activeSymbolsSet at connect time — updating the set here never
+      // touched the socket, so a symbol added after startup sat in
+      // activeSymbolsSet, correctly passed every filter, and still never
+      // received a single price tick to evaluate. Only resubscribe once the
+      // feed is already running: at startup this fires before
+      // startWebSocketPriceFeed's own first connect, which already opens
+      // against the current set, so re-triggering here would just be a
+      // redundant reconnect on every boot.
+      if (this.isWebSocketRunning) {
+        this.isWebSocketRunning = false;
+        this.startWebSocketPriceFeed();
+      }
     } catch (error) {
       console.error("❌ Error updating micro-batch active symbols:", error);
     }
@@ -994,7 +1146,7 @@ class RealTimeAlertProcessor {
           // based on the previous candle's performance at the junction.
           // This ensures the 2% check is FRESH for the new candle.
           const freshBaseline = parseFloat(liveData.price) || originalBaselinePrice;
-          
+
           // Set effectiveBaseline so the change% check below uses the NEW (reset) baseline
           // This ensures the very first tick of a new candle starts at 0% change.
           effectiveBaseline = freshBaseline;
@@ -1150,44 +1302,59 @@ class RealTimeAlertProcessor {
       // If the baseline was reset (EffectiveBaseline is current price), the change is 0.
       const livePrice = parseFloat(liveData.price) || 0;
       const calcBaseline = (typeof effectiveBaseline !== 'undefined') ? effectiveBaseline : originalBaselinePrice;
-      
+
       const actualChangePercent = calcBaseline > 0
         ? ((livePrice - calcBaseline) / calcBaseline) * 100
         : 0;
 
-      // 🛡️ MINIMUM CHANGE THRESHOLD - Prevent 0% change alerts
-      const MIN_CHANGE_THRESHOLD = 0.001; // 0.001% minimum change required
-      const hasMinimumChange = Math.abs(actualChangePercent) >= MIN_CHANGE_THRESHOLD;
+      // An Independent Divergence Trigger fires on the divergence alone and must not be
+      // gated on price direction — a bullish divergence forms while price is still FALLING,
+      // so the default "increase" direction would otherwise swallow every bullish signal.
+      // Any divergence mode fires on the divergence alone, so none of them may be
+      // gated on price direction.
+      const divergenceCfg = alert.conditions?.rsiDivergence;
+      const isIndependentDivergence = divergenceCfg?.timeframes?.length > 0;
 
-      if (!hasMinimumChange) {
-        return { triggered: false, reason: "change_below_threshold" };
+      if (!isIndependentDivergence) {
+        // 🛡️ MINIMUM CHANGE THRESHOLD - Prevent 0% change alerts
+        const MIN_CHANGE_THRESHOLD = 0.001; // 0.001% minimum change required
+        const hasMinimumChange = Math.abs(actualChangePercent) >= MIN_CHANGE_THRESHOLD;
+
+        if (!hasMinimumChange) {
+          return { triggered: false, reason: "change_below_threshold" };
+        }
+
+        const priceChanged = livePrice !== originalBaselinePrice;
+
+        if (direction === "increase" && livePrice <= originalBaselinePrice) {
+          return { triggered: false, reason: "price_not_increased" };
+        }
+
+        if (direction === "decrease" && livePrice >= originalBaselinePrice) {
+          return { triggered: false, reason: "price_not_decreased" };
+        }
+
+        if (!priceChanged) {
+          return { triggered: false, reason: "price_unchanged" };
+        }
       }
 
-      const priceChanged = livePrice !== originalBaselinePrice;
-
-      if (direction === "increase" && livePrice <= originalBaselinePrice) {
-        return { triggered: false, reason: "price_not_increased" };
-      }
-
-      if (direction === "decrease" && livePrice >= originalBaselinePrice) {
-        return { triggered: false, reason: "price_not_decreased" };
-      }
-
-      if (!priceChanged) {
-        return { triggered: false, reason: "price_unchanged" };
-      }
+      // Collects details from the conditions that matched (e.g. which divergence fired)
+      // so the alert message can explain WHY it triggered.
+      const triggerContext = {};
 
       // Check alert conditions - pass correct baseline for Change Percent calculation
       const conditionsMet = await this.checkAlertConditionsWithLiveData(
         alert,
         liveData,
-        calcBaseline // 🔥 CRITICAL: Use the same baseline we used for our pre-check
+        calcBaseline, // 🔥 CRITICAL: Use the same baseline we used for our pre-check
+        triggerContext
       );
 
       if (conditionsMet) {
         // Trigger the alert (this will apply the lock)
         // 🔥 FIX: Pass original baseline so correct % is saved in history
-        await this.triggerAlertWithLiveData(alert, liveData, originalBaselinePrice);
+        await this.triggerAlertWithLiveData(alert, liveData, originalBaselinePrice, triggerContext);
 
         return { triggered: true, reason: "conditions_met" };
       } else {
@@ -1200,7 +1367,7 @@ class RealTimeAlertProcessor {
   }
 
   // OPTIMIZED: Check conditions with live data - hierarchical and only check set conditions
-  async checkAlertConditionsWithLiveData(alert, liveData, originalBaselinePrice = null) {
+  async checkAlertConditionsWithLiveData(alert, liveData, originalBaselinePrice = null, triggerContext = {}) {
     try {
       const conditions = alert.conditions;
 
@@ -1214,7 +1381,8 @@ class RealTimeAlertProcessor {
         conditions,
         liveData,
         alert,
-        baselinePriceForCheck // 🔥 Pass original baseline for % change calculation
+        baselinePriceForCheck, // 🔥 Pass original baseline for % change calculation
+        triggerContext
       );
 
       if (activeConditions.length === 0) {
@@ -1233,6 +1401,21 @@ class RealTimeAlertProcessor {
           }
         })
       );
+
+      // Check if any condition triggered a bypass (Independent Trigger)
+      const bypassCondition = conditionResults.find(r => r.bypassOthers);
+      if (bypassCondition) {
+        // Min Daily is a hard prerequisite, not one of the "other conditions" an
+        // independent divergence is allowed to bypass — it keeps illiquid symbols out.
+        const minDailyIndex = activeConditions.findIndex(
+          (c) => c.name === "Min Daily Volume"
+        );
+        if (minDailyIndex !== -1 && !conditionResults[minDailyIndex].passed) {
+          return false;
+        }
+        console.log(`🚀 Bypass Trigger Activated: ${bypassCondition.reason}`);
+        return true;
+      }
 
       // Check if all conditions passed
       for (let i = 0; i < conditionResults.length; i++) {
@@ -1255,8 +1438,190 @@ class RealTimeAlertProcessor {
     }
   }
 
+  // True when the alert has a trigger condition other than RSI divergence.
+  // Min Daily is excluded — it only filters which symbols qualify, it never fires an alert.
+  hasNonDivergenceTrigger(conditions = {}) {
+    return !!(
+      conditions.changePercent?.percentage ||
+      conditions.volume?.timeframes?.length > 0 ||
+      conditions.rsiRange?.timeframes?.length > 0 ||
+      conditions.candle?.timeframes?.length > 0 ||
+      conditions.macd?.timeframes?.length > 0 ||
+      conditions.openInterest?.timeframes?.length > 0 ||
+      conditions.oiChange?.timeframes?.length > 0
+    );
+  }
+
+  // ============================================
+  // 🔥 OI CHANGE: Polling & Evaluation Logic
+  // ============================================
+
+  startOIPolling() {
+    if (this.oiPollingInterval) {
+      clearInterval(this.oiPollingInterval);
+    }
+    console.log("🚀 Starting OI Polling for active symbols...");
+    this.pollOIForActiveSymbols(); // Initial poll
+    this.oiPollingInterval = setInterval(() => {
+      this.pollOIForActiveSymbols();
+    }, this.OI_POLL_INTERVAL_MS);
+  }
+
+  stopOIPolling() {
+    if (this.oiPollingInterval) {
+      clearInterval(this.oiPollingInterval);
+      this.oiPollingInterval = null;
+      console.log("🛑 Stopped OI Polling");
+    }
+  }
+
+  async pollOIForActiveSymbols() {
+    if (this.isProcessingOiQueue) return;
+    this.isProcessingOiQueue = true;
+
+    try {
+      if (Date.now() < this.oiApiBanUntil) {
+        return;
+      }
+
+      const activeSymbols = Array.from(this.microBatchEngine.activeSymbolsSet);
+      if (activeSymbols.length === 0) return;
+
+      // Group symbols into batches to avoid rate limits
+      const BATCH_SIZE = 10;
+      for (let i = 0; i < activeSymbols.length; i += BATCH_SIZE) {
+        const batch = activeSymbols.slice(i, i + BATCH_SIZE);
+        
+        await Promise.all(batch.map(async (symbol) => {
+          try {
+            // No Futures market for this symbol — asking again every cycle just
+            // burns rate limit on a request that cannot succeed.
+            if (this.oiUnsupportedSymbols.has(symbol)) return;
+
+            const cached = this.oiCache.get(symbol);
+            if (cached && (Date.now() - cached.timestamp < this.OI_CACHE_TTL_MS)) {
+              return; // Use cache
+            }
+
+            const futuresSymbol = symbol.toUpperCase();
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            
+            const response = await fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${futuresSymbol}`, {
+              signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+
+            if (response.status === 418 || response.status === 429) {
+              const retryAfter = response.headers.get("Retry-After") || 60;
+              this.oiApiBanUntil = Date.now() + (parseInt(retryAfter) * 1000);
+              console.warn(`⚠️ OI API Rate Limited. Banned until ${new Date(this.oiApiBanUntil).toLocaleTimeString()}`);
+              return;
+            }
+
+            if (response.status === 400) {
+              // -1121 is Binance's "Invalid symbol" — the pair has no Futures
+              // market, so this is permanent rather than a transient failure.
+              const body = await response.json().catch(() => null);
+              if (body && body.code === -1121) {
+                this.oiUnsupportedSymbols.add(symbol);
+                console.log(`ℹ️ ${symbol} has no Binance Futures market — OI Change will be skipped for it`);
+              }
+              return;
+            }
+
+            if (response.ok) {
+              const data = await response.json();
+              if (data.openInterest) {
+                this.oiCache.set(symbol, {
+                  openInterest: parseFloat(data.openInterest),
+                  timestamp: Date.now()
+                });
+              }
+            }
+          } catch (err) {
+            // Silently fail on network errors for individual symbols to avoid log spam
+          }
+        }));
+
+        // Small delay between batches
+        if (i + BATCH_SIZE < activeSymbols.length) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+    } finally {
+      this.isProcessingOiQueue = false;
+    }
+  }
+
+  async evaluateOIChangeConditions(condition, alert, liveData) {
+    const symbol = alert.symbol;
+    const timeframes = condition.timeframes;
+    if (!timeframes || timeframes.length === 0) return false;
+
+    // No Futures market — the filter cannot be evaluated for this symbol at all.
+    // null means "not applicable", which the caller treats as a skip, not a fail.
+    if (this.oiUnsupportedSymbols.has(symbol)) return null;
+
+    // Get current OI from cache
+    const currentOiData = this.oiCache.get(symbol);
+    if (!currentOiData) return false; // Supported, just not polled yet — wait
+    
+    const currentOI = currentOiData.openInterest;
+    let anyTimeframePassed = false;
+
+    for (const timeframe of timeframes) {
+      const timeframeMs = this.getTimeframeMs(timeframe);
+      const currentTime = Date.now();
+      const currentCandleStart = Math.floor(currentTime / timeframeMs) * timeframeMs;
+      
+      const baselineKey = `${symbol}_${timeframe}`;
+      let baselineData = this.oiBaselines.get(baselineKey);
+
+      // Initialize baseline if missing or we crossed into a new candle
+      if (!baselineData || currentCandleStart > baselineData.candleStart) {
+        baselineData = {
+          oi: currentOI,
+          candleStart: currentCandleStart
+        };
+        this.oiBaselines.set(baselineKey, baselineData);
+        // During init, change is 0%
+        continue; 
+      }
+
+      const baselineOI = baselineData.oi;
+      if (baselineOI <= 0) continue;
+
+      let calculatedChange = 0;
+      if (condition.type === "PERCENTAGE") {
+        calculatedChange = ((currentOI - baselineOI) / baselineOI) * 100;
+      } else {
+        calculatedChange = currentOI - baselineOI;
+      }
+
+      const threshold = parseFloat(condition.value);
+      if (isNaN(threshold)) continue;
+
+      let passed = false;
+      if (condition.direction === "increase") {
+        passed = calculatedChange >= threshold;
+      } else if (condition.direction === "decrease") {
+        passed = calculatedChange <= -threshold;
+      } else if (condition.direction === "both") {
+        passed = Math.abs(calculatedChange) >= threshold;
+      }
+
+      if (passed) {
+        anyTimeframePassed = true;
+        break; // One timeframe passing is enough
+      }
+    }
+
+    return anyTimeframePassed;
+  }
+
   // OPTIMIZATION HELPER: Get only active/set conditions in priority order
-  getActiveConditions(conditions, liveData, alert, baselinePriceForCheck = null) {
+  getActiveConditions(conditions, liveData, alert, baselinePriceForCheck = null, triggerContext = {}) {
     const activeConditions = [];
 
     // 🔥 CRITICAL: Use passed baseline for calculations
@@ -1335,7 +1700,7 @@ class RealTimeAlertProcessor {
           const changeFromBaseline =
             ((liveData.price - effectiveBaseline) / effectiveBaseline) *
             100;
-          
+
           // 🛡️ NaN Protection
           if (Number.isNaN(changeFromBaseline)) {
             return { passed: false, reason: "Calculation error (NaN)" };
@@ -1473,6 +1838,88 @@ class RealTimeAlertProcessor {
       });
     }
 
+    // Priority 5.5: RSI Divergence
+    if (this.isConditionSet(conditions.rsiDivergence?.timeframes)) {
+      activeConditions.push({
+        name: "RSI Divergence",
+        priority: 5.5,
+        check: async () => {
+          if (
+            !conditions.rsiDivergence.timeframes ||
+            conditions.rsiDivergence.timeframes.length === 0
+          ) {
+            return {
+              passed: false,
+              reason: "No timeframes configured for RSI Divergence",
+            };
+          }
+
+          const triggerMode = this.resolveDivergenceTriggerMode(
+            conditions.rsiDivergence.condition
+          );
+
+          const divMatch = await this.evaluateRSIDivergence(
+            conditions.rsiDivergence,
+            alert.symbol,
+            14, // rsiPeriod
+            triggerMode
+          );
+
+          if (divMatch === null || (typeof divMatch === "object" && divMatch.found === undefined)) {
+            return { passed: true, reason: "RSI data loading — skipped this tick" };
+          }
+
+          // Record what fired so the alert message can show the divergence detail
+          if (divMatch.found) {
+            triggerContext.divergence = {
+              type: divMatch.type,
+              label: divMatch.label,
+              timeframe: divMatch.timeframe,
+              rsiPeriod: divMatch.rsiPeriod,
+              isBearish: divMatch.isBearish,
+              barsBetween: divMatch.barsBetween,
+              pivot1: divMatch.pivot1,
+              pivot2: divMatch.pivot2,
+              trigger: triggerMode,
+              // Keyed on the anchor only. The measured end is the current candle and
+              // moves forward every bar, so including it would re-alert on the same
+              // divergence for as long as it holds.
+              signature: `${divMatch.timeframe}:${divMatch.type}:${divMatch.pivot2?.time}`,
+              // Divergence is the ONLY trigger → notifications show a divergence-only template
+              divergenceOnly: !this.hasNonDivergenceTrigger(conditions),
+            };
+          }
+
+          if (!divMatch.found) {
+            return {
+              passed: false,
+              reason: `No divergence found (${triggerMode} trigger)`,
+            };
+          }
+
+          // The same confirmed pivot stays valid for a couple of bars — alert on it once
+          const alertKey = alert._id?.toString();
+          if (
+            this.lastFiredDivergence?.get(alertKey) ===
+            triggerContext.divergence.signature
+          ) {
+            return {
+              passed: false,
+              reason: `Divergence (${divMatch.type}) already alerted for this pivot`,
+            };
+          }
+
+          // Every mode fires on the divergence alone; they differ only in which
+          // candle was measured, which evaluateRSIDivergence has already applied.
+          return {
+            passed: true,
+            bypassOthers: true,
+            reason: `RSI Divergence (${divMatch.type}) — ${triggerMode} trigger`,
+          };
+        },
+      });
+    }
+
     // Priority 6: Volume (medium-high cost)
     if (this.isConditionSet(conditions.volume?.timeframes)) {
       activeConditions.push({
@@ -1546,7 +1993,7 @@ class RealTimeAlertProcessor {
     if (this.isConditionSet(conditions.openInterest?.timeframes)) {
       activeConditions.push({
         name: "Open Interest",
-        priority: 7,
+        priority: 8,
         check: async () => {
           // Only check if timeframes are actually set
           if (
@@ -1569,6 +2016,81 @@ class RealTimeAlertProcessor {
             reason: openInterestMatch
               ? "Open Interest condition met"
               : "Open Interest condition not met",
+          };
+        },
+      });
+    }
+
+    // Priority 8.5: OI Change (replaces old openInterest)
+    if (this.isConditionSet(conditions.oiChange?.timeframes)) {
+      activeConditions.push({
+        name: "OI Change",
+        priority: 8.5,
+        check: async () => {
+          if (
+            !conditions.oiChange.timeframes ||
+            conditions.oiChange.timeframes.length === 0
+          ) {
+            return {
+              passed: false,
+              reason: "No timeframes configured for OI Change condition",
+            };
+          }
+
+          const oiChangeMatch = await this.evaluateOIChangeConditions(
+            conditions.oiChange,
+            alert,
+            liveData
+          );
+          
+          if (oiChangeMatch === null) {
+            // Symbol has no Futures market, so there is no OI to test against.
+            // Failing here would silently kill every alert on those symbols.
+            return {
+              passed: true,
+              reason: "No Futures market for this symbol — OI Change check skipped",
+            };
+          }
+          
+          return {
+            passed: oiChangeMatch,
+            reason: oiChangeMatch
+              ? "OI Change condition met"
+              : "OI Change condition not met",
+          };
+        },
+      });
+    }
+
+    // Priority 9: Volume EMA Crossing (checks if volume bar crosses above EMA line)
+    if (this.isConditionSet(conditions.volumeEma?.timeframes)) {
+      activeConditions.push({
+        name: "Volume EMA",
+        priority: 9,
+        check: async () => {
+          if (
+            !conditions.volumeEma.timeframes ||
+            conditions.volumeEma.timeframes.length === 0
+          ) {
+            return {
+              passed: false,
+              reason: "No timeframes configured for Volume EMA condition",
+            };
+          }
+
+          const volumeEmaMatch = await this.evaluateVolumeEmaCrossing(
+            conditions.volumeEma,
+            liveData,
+            alert.symbol
+          );
+          if (volumeEmaMatch === null) {
+            return { passed: false, reason: "Volume EMA data loading — blocked until ready" };
+          }
+          return {
+            passed: volumeEmaMatch,
+            reason: volumeEmaMatch
+              ? "Volume EMA crossing up condition met"
+              : "Volume EMA crossing up condition not met",
           };
         },
       });
@@ -1612,7 +2134,7 @@ class RealTimeAlertProcessor {
 
   // Trigger alert with live data and update baseline
   // 🔥 FIX: Added originalBaselinePrice parameter to preserve correct change %
-  async triggerAlertWithLiveData(alert, liveData, originalBaselinePrice = null) {
+  async triggerAlertWithLiveData(alert, liveData, originalBaselinePrice = null, triggerContext = {}) {
     // CRITICAL: Check if alert is ALREADY locked (Alert Count condition)
     if (isAlertLocked(alert)) {
       const lockUntil = new Date(alert.conditions.alertCount.lockUntil);
@@ -1694,6 +2216,8 @@ class RealTimeAlertProcessor {
           changeFromBaseline: changeFromBaseline,
           changeFromBaselinePercent: changeFromBaselinePercent,
         },
+        // Present only when an RSI divergence took part in this trigger
+        divergence: triggerContext.divergence || undefined,
         triggeredAt: new Date(),
         conditions: this.getAlertConditionsText(alert.conditions),
       };
@@ -1718,6 +2242,16 @@ class RealTimeAlertProcessor {
       console.log(
         `✅ Alert history saved: ${savedAlertHistory._id} for ${alert.symbol}`
       );
+
+      // Remember which divergence pivot we just alerted on, so the same confirmed
+      // pivot does not re-fire on every tick while it stays valid.
+      if (triggerContext.divergence?.signature) {
+        if (!this.lastFiredDivergence) this.lastFiredDivergence = new Map();
+        this.lastFiredDivergence.set(
+          alert._id?.toString(),
+          triggerContext.divergence.signature
+        );
+      }
 
       // Update alert with latest price and new baseline
       const updateData = {
@@ -1906,15 +2440,17 @@ class RealTimeAlertProcessor {
       const symbols = Array.from(this.activeAlerts.keys());
 
       // Try to get from Redis cache first
-      const redis = await import("../utils/redis.js");
+      const { getRedisClient } = await import("../utils/redis.js");
+      const redisClient = getRedisClient();
 
       for (const symbol of symbols) {
         try {
-          let priceData = await redis.default.get(`crypto:${symbol}`);
-          if (!priceData) {
-            priceData = await redis.default.get(
-              `crypto:${symbol.toLowerCase()}`
-            );
+          let priceData = null;
+          if (redisClient) {
+            priceData = await redisClient.get(`crypto:${symbol}`);
+            if (!priceData) {
+              priceData = await redisClient.get(`crypto:${symbol.toLowerCase()}`);
+            }
           }
 
           if (priceData) {
@@ -2118,7 +2654,7 @@ class RealTimeAlertProcessor {
             baselinePrice: newBaselinePrice,
             baselineVolume: newBaselineVolume,
             baselineTimestamp: new Date(),
-          }).catch(() => {});
+          }).catch(() => { });
 
           // Skip alert check this tick — next tick will evaluate with the fresh baseline
           return false;
@@ -2304,6 +2840,23 @@ class RealTimeAlertProcessor {
           alert.symbol
         );
         if (rsiMatch === false) {
+          // null means data still loading — skip check, don't fail alert
+          conditionsMet = false;
+        }
+      }
+
+      // Check RSI Divergence conditions (optional)
+      if (
+        conditionsMet &&
+        conditions.rsiDivergence &&
+        conditions.rsiDivergence.timeframes &&
+        conditions.rsiDivergence.timeframes.length > 0
+      ) {
+        const divMatch = await this.evaluateRSIDivergence(
+          conditions.rsiDivergence,
+          alert.symbol
+        );
+        if (!divMatch?.found) {
           // null means data still loading — skip check, don't fail alert
           conditionsMet = false;
         }
@@ -2670,6 +3223,12 @@ class RealTimeAlertProcessor {
       );
     }
 
+    if (conditions.oiChange) {
+      parts.push(
+        `OI Change: ${conditions.oiChange.direction} ${conditions.oiChange.value}${conditions.oiChange.type === "PERCENTAGE" ? "%" : " absolute"}`
+      );
+    }
+
     return parts.join(", ");
   }
 
@@ -2721,6 +3280,7 @@ class RealTimeAlertProcessor {
           volume24h: parseFloat(priceData.volume || priceData.volume24h) || 0,
         },
         baselineData: alertHistory.baselineData,
+        divergence: alertHistory.divergence || null,
         // Additional fields for backward compatibility
         alertId: alert._id?.toString(),
         _id: alertHistory._id?.toString(),
@@ -2753,7 +3313,10 @@ class RealTimeAlertProcessor {
     }
   }
 
-  async calculateRSI(symbol, timeframe, period = 14) {
+  // Fetch full OHLC candles, cached per candle boundary.
+  // Divergence needs the real candle wicks (high/low), not just closes — comparing
+  // closes only is line-chart divergence and disagrees with what TradingView draws.
+  async getHistoricalOHLC(symbol, timeframe, period = 14) {
     const key = `${symbol}_${timeframe}_${period}`;
     const timeframeMs = this.getTimeframeMs(timeframe);
     const currentCandleStart = Math.floor(Date.now() / timeframeMs) * timeframeMs;
@@ -2761,8 +3324,11 @@ class RealTimeAlertProcessor {
     if (!this.rsiDataCache) this.rsiDataCache = new Map();
     let historyEntry = this.rsiDataCache.get(key);
 
-    // Re-fetch klines if: no data, or a new candle has started since last fetch
-    const needsFresh = !historyEntry || historyEntry.candleStart !== currentCandleStart;
+    // Re-fetch klines if: no data, cached entry predates OHLC support, or a new candle started
+    const needsFresh =
+      !historyEntry ||
+      !historyEntry.highs ||
+      historyEntry.candleStart !== currentCandleStart;
 
     if (needsFresh) {
       if (Date.now() < this.apiBanUntil) return null; // API banned, skip
@@ -2782,10 +3348,12 @@ class RealTimeAlertProcessor {
         if (!response.ok) return null;
 
         const klines = await response.json();
-        const closes = klines.map(k => parseFloat(k[4]));
 
         historyEntry = {
-          closes,
+          closes: klines.map(k => parseFloat(k[4])),
+          highs: klines.map(k => parseFloat(k[2])),
+          lows: klines.map(k => parseFloat(k[3])),
+          openTimes: klines.map(k => k[0]),
           candleStart: currentCandleStart,
           fetchedAt: Date.now(),
         };
@@ -2796,7 +3364,17 @@ class RealTimeAlertProcessor {
       }
     }
 
-    let closes = historyEntry.closes;
+    return historyEntry;
+  }
+
+  async getHistoricalCloses(symbol, timeframe, period = 14) {
+    const ohlc = await this.getHistoricalOHLC(symbol, timeframe, period);
+    return ohlc ? ohlc.closes : null;
+  }
+
+  async calculateRSI(symbol, timeframe, period = 14) {
+    let closes = await this.getHistoricalCloses(symbol, timeframe, period);
+
     if (!closes || closes.length < period + 1) return null;
 
     // 2. Add current live price for real-time RSI (overwrite the forming candle)
@@ -3008,6 +3586,99 @@ class RealTimeAlertProcessor {
     const rsi = 100 - 100 / (1 + rs);
 
     return rsi;
+  }
+
+  // Calculate historical RSI array for divergence detection
+  computeRSIArray(closes, period) {
+    if (closes.length < period + 1) return [];
+
+    const rsiArray = new Array(closes.length).fill(null);
+    const changes = [];
+    for (let i = 1; i < closes.length; i++) {
+      changes.push(closes[i] - closes[i - 1]);
+    }
+
+    const gains = changes.map(change => (change > 0 ? change : 0));
+    const losses = changes.map(change => (change < 0 ? Math.abs(change) : 0));
+
+    let avgGain = 0;
+    let avgLoss = 0;
+
+    for (let i = 0; i < period; i++) {
+      avgGain += gains[i];
+      avgLoss += losses[i];
+    }
+
+    avgGain = avgGain / period;
+    avgLoss = avgLoss / period;
+
+    // First RSI value
+    let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    rsiArray[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + rs);
+
+    // Calculate rest of RSI using Wilder's smoothing
+    for (let i = period; i < changes.length; i++) {
+      avgGain = (avgGain * (period - 1) + gains[i]) / period;
+      avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+
+      if (avgLoss === 0) {
+        rsiArray[i + 1] = 100;
+      } else {
+        rs = avgGain / avgLoss;
+        rsiArray[i + 1] = 100 - 100 / (1 + rs);
+      }
+    }
+
+    return rsiArray;
+  }
+
+  // Detect Swing Highs (peaks) or Swing Lows (valleys)
+  // Returns array of objects: { index, value }
+  findSwings(data, type, leftBars = 2, rightBars = 2) {
+    const swings = [];
+    for (let i = leftBars; i < data.length - rightBars; i++) {
+      const val = data[i];
+      if (val === null || val === undefined) continue;
+
+      let isSwing = true;
+
+      // Ties are allowed on the left and rejected on the right, so a flat
+      // bottom/top resolves to its last bar. Requiring a strict extreme on both
+      // sides skips these outright — and flat stretches are common, since a quiet
+      // market repeats the same close and RSI for several candles in a row. Those
+      // skipped lows were the real swings, which left the divergence check pairing
+      // up two unrelated points hours apart.
+      for (let j = i - leftBars; j < i; j++) {
+        const compareVal = data[j];
+        if (compareVal === null || compareVal === undefined) {
+          isSwing = false;
+          break;
+        }
+        if (type === "high" ? val < compareVal : val > compareVal) {
+          isSwing = false;
+          break;
+        }
+      }
+
+      if (isSwing) {
+        for (let j = i + 1; j <= i + rightBars; j++) {
+          const compareVal = data[j];
+          if (compareVal === null || compareVal === undefined) {
+            isSwing = false;
+            break;
+          }
+          if (type === "high" ? val <= compareVal : val >= compareVal) {
+            isSwing = false;
+            break;
+          }
+        }
+      }
+
+      if (isSwing) {
+        swings.push({ index: i, value: val });
+      }
+    }
+    return swings;
   }
 
   // Helper: Delay function
@@ -3479,6 +4150,419 @@ class RealTimeAlertProcessor {
     }
   }
 
+  // RSI Divergence — mirrors TradingView's built-in "Divergence Indicator":
+  // pivots are detected on the RSI oscillator, and price is compared using the
+  // candle LOW (bullish) / HIGH (bearish) at those pivot bars — real OHLC wicks,
+  // not closing prices.
+  // The dropdown stores one of three trigger modes. Older alerts were written by
+  // a two-option dropdown that stored "condition1"/"condition2"/"" — both of those
+  // evaluated the just-closed candle, which is exactly what "previous" does, so
+  // they map there and keep behaving the way they always did.
+  resolveDivergenceTriggerMode(raw) {
+    return ["independent", "previous", "conditional"].includes(raw) ? raw : "previous";
+  }
+
+  async evaluateRSIDivergence(condition, symbol, rsiPeriod = 14, triggerMode = "previous") {
+    if (!condition || !condition.timeframes || condition.timeframes.length === 0) return { found: false };
+
+    // Client-requested: for these two coins only, print WHY every rejected
+    // candidate was rejected — proof the filtering is deliberate, not a bug.
+    // Logging only; no threshold or control flow below is touched by this flag.
+    const isDiagSymbol = symbol === "BTCUSDT" || symbol === "ETHUSDT" || symbol === "XAUTUSDT";
+
+    // Conditional reads the candle that is still forming; the other two wait for
+    // a close. Independent additionally holds back one further bar, which then
+    // has to confirm the signal rather than contribute to it.
+    const useLiveCandle = triggerMode === "conditional";
+    const CONFIRM_BARS = triggerMode === "independent" ? 1 : 0;
+
+    // If no specific divergence type is selected, return false
+    if (!condition.bullish && !condition.bullishHidden && !condition.bearish && !condition.bearishHidden) {
+      return { found: false };
+    }
+
+    // Point A is a fully confirmed past pivot — 5 bars clear on both sides, so it
+    // is a solid, already-settled swing that a trader would anchor a line to.
+    const LB_LEFT = 5;
+    const LB_RIGHT_ANCHOR = 5;
+
+    // Point B is the candle that just closed. Requiring B to also be a confirmed
+    // pivot meant waiting several candles into the future before the divergence
+    // could be reported, which put the alert well past the point it was tradeable
+    // (20 hours on 4HR). Measuring the just-closed candle against the settled
+    // anchor keeps the span wide while removing that wait entirely.
+    // How far back the anchor may sit, in bars. One fixed window applied the same
+    // bar count to a 5m chart and a Weekly one, which are read over completely
+    // different horizons, so the span is split into two tiers instead. Timeframes
+    // are resolved through getBinanceInterval so every alias ("1HR", "1H",
+    // "1HOUR") lands in the same tier — note "1m" (minute) and "1M" (month) are
+    // deliberately distinct keys here, and only the lowercase one is short.
+    const SHORT_INTERVALS = new Set(["1m", "3m", "5m", "15m", "30m", "1h"]);
+
+    // Quality gates. All three are on, but the ATR bar and the regular-divergence
+    // RSI zone sit at deliberately loose settings: strict values cut volume to a
+    // level the client considered too quiet, while removing the gates entirely
+    // let through signals whose line could not be drawn at all.
+    //   ENABLE_ATR_FILTER  — legs must separate by >= MIN_MOVE_ATR candle ranges
+    //   ENABLE_RSI_ZONE    — regular divergences confined to oversold/overbought
+    //   ENABLE_LINE_CHECK  — no intermediate candle may pierce the drawn line
+    const ENABLE_ATR_FILTER = true;
+    const ENABLE_RSI_ZONE = true;
+    const ENABLE_LINE_CHECK = true;
+
+    // Strict noise filters so the divergence is clearly visible on the chart
+    const MIN_RSI_DIFF = 3;           // RSI points between the two points
+    // Measured in the symbol's own typical candle range rather than a flat
+    // percentage. A fixed 0.3% is a different demand on every coin: BTC's candles
+    // run 3-3.6x smaller than the median liquid pair, so the flat bar quietly made
+    // this an altcoin-only filter and BTC-class coins produced no signals at all.
+    const MIN_MOVE_ATR = 0.5;         // legs must separate by >= half a typical candle
+    const FALLBACK_PRICE_DIFF_PCT = 0.3; // used only if ATR cannot be computed
+    // Floor under the relative test. On a pegged pair every candle is minute, so a
+    // move of one "typical candle" can still be 0.004% — real by the symbol's own
+    // yardstick, meaningless to trade. Sits well below one ATR on the calmest real
+    // coin (BTC runs ~0.10% on 5m), so it only removes pegged pairs.
+    const ABSOLUTE_MIN_PRICE_PCT = 0.05;
+    const MIN_STRENGTH = 4;           // RSI points x price %
+
+    // A divergence is only real if the line a trader draws survives every bar
+    // between the two points. Tiny tolerance so one noisy wick does not void
+    // an otherwise clean line.
+    const LINE_PRICE_TOL = 0.0002;    // 0.02% of price
+    const LINE_RSI_TOL = 0.5;         // RSI points
+
+    // Where the current candle must sit on RSI for the signal to be worth acting
+    // on. Regular divergences call a reversal, so they stay near the extremes.
+    // Hidden divergences call a continuation — they form on a pullback inside a
+    // trend and live mid-range, so judging them by the reversal zone threw away
+    // 98% of them and is why no hidden alert ever fired.
+    const REGULAR_BULLISH_RSI = 50;   // regular bullish: current candle at or below
+    const REGULAR_BEARISH_RSI = 60;   // regular bearish: current candle at or above
+    const HIDDEN_BULLISH_RSI = 60;    // hidden bullish: current candle at or below
+    const HIDDEN_BEARISH_RSI = 40;    // hidden bearish: current candle at or above
+
+    for (const timeframe of condition.timeframes) {
+      // Short charts (up to 1h) run a 10-30 bar window; 4h and above run 14-60.
+      const isShortTimeframe = SHORT_INTERVALS.has(this.getBinanceInterval(timeframe));
+      const RANGE_LOWER = isShortTimeframe ? 10 : 14; // Min bars between anchor and current candle
+      const RANGE_UPPER = isShortTimeframe ? 30 : 60; // Max bars between anchor and current candle
+
+      const ohlc = await this.getHistoricalOHLC(symbol, timeframe, rsiPeriod);
+      if (!ohlc || !ohlc.closes || !ohlc.highs || !ohlc.lows) continue;
+
+      const closes = [...ohlc.closes];
+      const highs = [...ohlc.highs];
+      const lows = [...ohlc.lows];
+      const openTimes = ohlc.openTimes || [];
+
+      if (!useLiveCandle) {
+        // Drop the still-forming candle so signals only fire on a closed bar
+        closes.pop();
+        highs.pop();
+        lows.pop();
+      } else {
+        // Fold the live price into the forming candle (extends the wick if needed)
+        const livePrice = parseFloat(this.livePrices[symbol]?.price);
+        const last = closes.length - 1;
+        if (livePrice && last >= 0) {
+          closes[last] = livePrice;
+          highs[last] = Math.max(highs[last], livePrice);
+          lows[last] = Math.min(lows[last], livePrice);
+        }
+      }
+
+      if (closes.length < rsiPeriod + LB_LEFT + LB_RIGHT_ANCHOR + RANGE_LOWER + 1 + CONFIRM_BARS) continue;
+
+      const rsiArray = this.computeRSIArray(closes, rsiPeriod);
+      if (!rsiArray || rsiArray.length === 0) continue;
+
+      // In Independent Trigger mode the newest closed candle is the confirmation
+      // bar, so the divergence itself is measured on the one before it.
+      const lastIndex = closes.length - 1 - CONFIRM_BARS;
+      if (lastIndex < 0) continue;
+
+      // Average true range over the last 14 closed bars, as a % of price. This is
+      // the yardstick the price move below is measured against.
+      const ATR_BARS = 14;
+      let atrPct = null;
+      if (lastIndex >= ATR_BARS) {
+        let sum = 0;
+        let usable = true;
+        for (let i = lastIndex - ATR_BARS + 1; i <= lastIndex; i++) {
+          const prevClose = closes[i - 1];
+          if (!isFinite(highs[i]) || !isFinite(lows[i]) || !isFinite(prevClose) || !closes[i]) {
+            usable = false;
+            break;
+          }
+          const trueRange = Math.max(
+            highs[i] - lows[i],
+            Math.abs(highs[i] - prevClose),
+            Math.abs(lows[i] - prevClose)
+          );
+          sum += trueRange / closes[i];
+        }
+        if (usable) atrPct = (sum / ATR_BARS) * 100;
+      }
+
+      // Point B is the candle that just closed; Point A is a settled pivot behind
+      // it. The anchors are scanned newest-first so the line is drawn from the
+      // closest qualifying swing, which is the one a trader would pick.
+      const evaluate = (pivotsAnchor, priceSeries, checks, isBearishSide = false) => {
+        if (!pivotsAnchor.length) return null;
+
+        const p1 = {
+          index: lastIndex,
+          price: priceSeries[lastIndex],
+          rsi: rsiArray[lastIndex],
+        };
+        if (!isFinite(p1.price) || p1.rsi === null || p1.rsi === undefined) return null;
+
+        // Independent Trigger: the candle that closed after the divergence has to
+        // hold it — a bullish signal is void if that candle printed a lower low,
+        // a bearish one if it printed a higher high. priceSeries is lows on the
+        // bullish side and highs on the bearish side, so one comparison covers both.
+        if (CONFIRM_BARS > 0) {
+          const confirmPrice = priceSeries[lastIndex + 1];
+          if (!isFinite(confirmPrice)) return null;
+          const held = isBearishSide
+            ? confirmPrice <= p1.price
+            : confirmPrice >= p1.price;
+          if (!held) {
+            if (isDiagSymbol) {
+              console.log(
+                `🔬 ${symbol} ${timeframe} signal rejected: next candle broke the ${isBearishSide ? "high" : "low"} (${confirmPrice} vs ${p1.price}) — Independent Trigger not confirmed`
+              );
+            }
+            return null;
+          }
+        }
+
+        // Each type owns its zone, so bail early only when the candle is outside
+        // every enabled one — this keeps the cheap rejection that used to happen
+        // here before the zone became per-type.
+        if (ENABLE_RSI_ZONE && !checks.some((check) => check.enabled && check.zone(p1.rsi))) {
+          if (isDiagSymbol) {
+            console.log(
+              `🔬 ${symbol} ${timeframe} signal rejected: current RSI ${p1.rsi.toFixed(2)} is outside every enabled zone (no anchor was even checked)`
+            );
+          }
+          return null;
+        }
+
+        for (let j = pivotsAnchor.length - 1; j >= 0; j--) {
+          const anchorPivot = pivotsAnchor[j];
+          if (anchorPivot.index >= p1.index) continue;
+
+          const barsBetween = p1.index - anchorPivot.index;
+          if (barsBetween < RANGE_LOWER) {
+            if (isDiagSymbol) {
+              console.log(
+                `🔬 ${symbol} ${timeframe} signal rejected: gap is ${barsBetween} bars (below the ${RANGE_LOWER}-${RANGE_UPPER} bar rule)`
+              );
+            }
+            continue;
+          }
+          if (barsBetween > RANGE_UPPER) {
+            if (isDiagSymbol) {
+              console.log(
+                `🔬 ${symbol} ${timeframe} signal rejected: gap is ${barsBetween} bars (exceeds the ${RANGE_LOWER}-${RANGE_UPPER} bar rule)`
+              );
+            }
+            break; // all further pivots are even older
+          }
+
+          const p2 = {
+            index: anchorPivot.index,
+            price: priceSeries[anchorPivot.index],
+            rsi: anchorPivot.value,
+          };
+
+          if (!isFinite(p2.price) || p2.rsi === null) continue;
+
+          // Both legs must actually separate — otherwise this is chart noise
+          const rsiDiff = Math.abs(p1.rsi - p2.rsi);
+          const priceDiffPct = p2.price !== 0 ? Math.abs((p1.price - p2.price) / p2.price) * 100 : 0;
+
+          // Express the move in candles-worth of range so the same threshold means
+          // the same thing on a calm major and a jumpy altcoin.
+          const hasAtr = atrPct !== null && atrPct > 0;
+          const move = hasAtr ? priceDiffPct / atrPct : priceDiffPct;
+          const minMove = hasAtr ? MIN_MOVE_ATR : FALLBACK_PRICE_DIFF_PCT;
+
+          if (priceDiffPct < ABSOLUTE_MIN_PRICE_PCT) {
+            if (isDiagSymbol) {
+              console.log(
+                `🔬 ${symbol} ${timeframe} signal rejected (gap ${barsBetween}b): price diff ${priceDiffPct.toFixed(4)}% is below the ${ABSOLUTE_MIN_PRICE_PCT}% absolute floor`
+              );
+            }
+            continue;
+          }
+          if (rsiDiff < MIN_RSI_DIFF) {
+            if (isDiagSymbol) {
+              console.log(
+                `🔬 ${symbol} ${timeframe} signal rejected (gap ${barsBetween}b): RSI diff ${rsiDiff.toFixed(2)} is below the required ${MIN_RSI_DIFF}`
+              );
+            }
+            continue;
+          }
+          if (ENABLE_ATR_FILTER && move < minMove) {
+            if (isDiagSymbol) {
+              console.log(
+                `🔬 ${symbol} ${timeframe} signal rejected (gap ${barsBetween}b): price diff failed ${hasAtr ? "ATR filter" : "min-move filter"} — moved ${move.toFixed(2)}${hasAtr ? " ATR" : "%"}, needed ${minMove}${hasAtr ? " ATR" : "%"} (raw price diff ${priceDiffPct.toFixed(3)}%${hasAtr ? `, ATR ${atrPct.toFixed(3)}%` : ""})`
+              );
+            }
+            continue;
+          }
+          if (rsiDiff * move < MIN_STRENGTH) {
+            if (isDiagSymbol) {
+              console.log(
+                `🔬 ${symbol} ${timeframe} signal rejected (gap ${barsBetween}b): strength ${(rsiDiff * move).toFixed(2)} is below the required ${MIN_STRENGTH} (RSI diff ${rsiDiff.toFixed(2)} x move ${move.toFixed(2)})`
+              );
+            }
+            continue;
+          }
+
+          // Point B is the just-closed candle, which may already have bounced off
+          // the real extreme. When that happens the definition still passes, but the
+          // bar sitting at the true extreme pierces both the price and the RSI line —
+          // so nothing is drawable on the chart and the signal looks wrong to anyone
+          // checking it. Reject the pair unless both lines survive every bar between.
+          const span = p1.index - p2.index;
+          let lineIntact = true;
+          for (let i = p2.index + 1; i < p1.index; i++) {
+            const f = (i - p2.index) / span;
+            const priceLine = p2.price + (p1.price - p2.price) * f;
+            const rsiLine = p2.rsi + (p1.rsi - p2.rsi) * f;
+            const barPrice = priceSeries[i];
+            const barRsi = rsiArray[i];
+            if (!isFinite(barPrice) || barRsi === null || barRsi === undefined) continue;
+
+            if (isBearishSide) {
+              // Line sits above the highs — nothing may poke through the top
+              if (barPrice > priceLine * (1 + LINE_PRICE_TOL) || barRsi > rsiLine + LINE_RSI_TOL) {
+                lineIntact = false;
+                break;
+              }
+            } else {
+              // Line sits below the lows — nothing may drop through the bottom
+              if (barPrice < priceLine * (1 - LINE_PRICE_TOL) || barRsi < rsiLine - LINE_RSI_TOL) {
+                lineIntact = false;
+                break;
+              }
+            }
+          }
+          if (ENABLE_LINE_CHECK && !lineIntact) {
+            if (isDiagSymbol) {
+              console.log(
+                `🔬 ${symbol} ${timeframe} signal rejected (gap ${barsBetween}b): trendline broken by an intermediate candle — not drawable on the chart`
+              );
+            }
+            continue;
+          }
+
+          for (const check of checks) {
+            if (!check.enabled) continue;
+            if (ENABLE_RSI_ZONE && !check.zone(p1.rsi)) {
+              if (isDiagSymbol) {
+                console.log(
+                  `🔬 ${symbol} ${timeframe} ${check.type} rejected (gap ${barsBetween}b): current RSI ${p1.rsi.toFixed(2)} is outside the ${check.label} zone`
+                );
+              }
+              continue;
+            }
+            // p1 = current closed candle, p2 = confirmed anchor pivot
+            if (!check.test(p1.price, p2.price, p1.rsi, p2.rsi)) {
+              if (isDiagSymbol) {
+                console.log(
+                  `🔬 ${symbol} ${timeframe} ${check.type} rejected (gap ${barsBetween}b): price/RSI pattern does not match the ${check.label} definition`
+                );
+              }
+              continue;
+            }
+
+            return {
+              type: check.type,
+              isBearish: check.isBearish,
+              label: check.label,
+              barsBetween,
+              pivot1: { price: p1.price, rsi: p1.rsi, time: openTimes[p1.index] || null },
+              pivot2: { price: p2.price, rsi: p2.rsi, time: openTimes[p2.index] || null },
+            };
+          }
+        }
+        return null;
+      };
+
+      let hit = null;
+
+      // Bullish → swing LOWS: RSI pivot lows anchor the swing, price is the candle low there
+      if (condition.bullish || condition.bullishHidden) {
+        hit = evaluate(
+          this.findSwings(rsiArray, "low", LB_LEFT, LB_RIGHT_ANCHOR),
+          lows,
+          [
+            {
+              enabled: condition.bullish,
+              type: "bullish",
+              isBearish: false,
+              label: "Regular Bullish Divergence",
+              zone: (rsi) => rsi <= REGULAR_BULLISH_RSI,
+              // Price Lower Low + RSI Higher Low
+              test: (price1, price2, rsi1, rsi2) => price1 < price2 && rsi1 > rsi2,
+            },
+            {
+              enabled: condition.bullishHidden,
+              type: "bullishHidden",
+              isBearish: false,
+              label: "Hidden Bullish Divergence",
+              zone: (rsi) => rsi <= HIDDEN_BULLISH_RSI,
+              // Price Higher Low + RSI Lower Low
+              test: (price1, price2, rsi1, rsi2) => price1 > price2 && rsi1 < rsi2,
+            },
+          ]
+        );
+      }
+
+      // Bearish → swing HIGHS: RSI pivot highs anchor the swing, price is the candle high there
+      if (!hit && (condition.bearish || condition.bearishHidden)) {
+        hit = evaluate(
+          this.findSwings(rsiArray, "high", LB_LEFT, LB_RIGHT_ANCHOR),
+          highs,
+          [
+            {
+              enabled: condition.bearish,
+              type: "bearish",
+              isBearish: true,
+              label: "Regular Bearish Divergence",
+              zone: (rsi) => rsi >= REGULAR_BEARISH_RSI,
+              // Price Higher High + RSI Lower High
+              test: (price1, price2, rsi1, rsi2) => price1 > price2 && rsi1 < rsi2,
+            },
+            {
+              enabled: condition.bearishHidden,
+              type: "bearishHidden",
+              isBearish: true,
+              label: "Hidden Bearish Divergence",
+              zone: (rsi) => rsi >= HIDDEN_BEARISH_RSI,
+              // Price Lower High + RSI Higher High
+              test: (price1, price2, rsi1, rsi2) => price1 < price2 && rsi1 > rsi2,
+            },
+          ],
+          true
+        );
+      }
+
+      if (hit) {
+        console.log(
+          `🔀 ${hit.label} on ${symbol} ${timeframe} — price ${hit.pivot2.price} → ${hit.pivot1.price}, RSI ${hit.pivot2.rsi.toFixed(2)} → ${hit.pivot1.rsi.toFixed(2)} (${hit.barsBetween} bars apart)`
+        );
+        return { found: true, timeframe, rsiPeriod, ...hit };
+      }
+    }
+
+    return { found: false };
+  }
+
   async evaluateRSIConditions(rsiConditions, priceData, symbol = null) {
     const { condition, level, period, timeframes } = rsiConditions;
     const targetLevel = parseFloat(level) || 50;
@@ -3572,11 +4656,11 @@ class RealTimeAlertProcessor {
     if (!values || values.length < period) return null;
     const multiplier = 2 / (period + 1);
     const emaArray = new Array(values.length).fill(null);
-    
+
     // SMA for the first valid period
     let ema = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
     emaArray[period - 1] = ema;
-    
+
     // EMA for the rest of the array
     for (let i = period; i < values.length; i++) {
       ema = (values[i] - ema) * multiplier + ema;
@@ -3587,33 +4671,33 @@ class RealTimeAlertProcessor {
 
   computeMACDFromCloses(closes, fastPeriod, slowPeriod, signalPeriod = 9) {
     if (!closes || closes.length < slowPeriod + signalPeriod) return null;
-    
+
     // 1. Calculate Fast and Slow EMAs for the entire closes array
     const fastEMAs = this.computeEMAArray(closes, fastPeriod);
     const slowEMAs = this.computeEMAArray(closes, slowPeriod);
-    
+
     if (!fastEMAs || !slowEMAs) return null;
-    
+
     // 2. Calculate the MACD Line array (Fast EMA - Slow EMA)
     const validMacdValues = [];
     const startIndex = slowPeriod - 1; // Index where slowEMA starts having values
-    
+
     for (let i = startIndex; i < closes.length; i++) {
       validMacdValues.push(fastEMAs[i] - slowEMAs[i]);
     }
-    
+
     // 3. Calculate Signal Line (EMA of MACD Line)
     const signalEMAs = this.computeEMAArray(validMacdValues, signalPeriod);
-    
+
     if (!signalEMAs) return null;
-    
+
     // 4. Get the current and previous values
     const currentMacdLine = validMacdValues[validMacdValues.length - 1];
     const currentSignalLine = signalEMAs[signalEMAs.length - 1];
-    
+
     const prevMacdLine = validMacdValues[validMacdValues.length - 2];
     const prevSignalLine = signalEMAs[signalEMAs.length - 2];
-    
+
     return {
       macdLine: currentMacdLine,
       signalLine: currentSignalLine,
@@ -3988,7 +5072,7 @@ class RealTimeAlertProcessor {
     const timeframeMs = this.getTimeframeMs(tf);
     const currentBoundary = Math.floor(Date.now() / timeframeMs) * timeframeMs;
     const elapsedMs = Date.now() - currentBoundary;
-    
+
     let projectedVolume = currentCandleVolume;
     // Only project if at least 1% of the candle has formed (avoids wild spikes right at the start)
     if (elapsedMs > 0 && (elapsedMs / timeframeMs) > 0.01) {
@@ -4025,9 +5109,114 @@ class RealTimeAlertProcessor {
     return conditionMet;
   }
 
+  // ==================== Volume EMA Crossing ====================
+  // Alerts when the volume bar crosses above the Volume EMA line
+  // Uses same REST API approach as MACD/RSI to avoid drift
+  async evaluateVolumeEmaCrossing(volumeEmaConditions, priceData, symbol) {
+    const { timeframes, emaPeriod, condition } = volumeEmaConditions;
+    const period = parseInt(emaPeriod) || 20;
 
+    if (!symbol || !timeframes || timeframes.length === 0) {
+      return false;
+    }
 
+    console.log(`📊 Volume EMA Check: ${symbol} | Period: ${period} | Condition: ${condition} | Timeframes: [${timeframes.join(", ")}]`);
 
+    // ALL selected timeframes must pass (same logic as MACD)
+    for (const timeframe of timeframes) {
+      const result = await this.getVolumeEmaData(symbol, timeframe, period);
+
+      if (!result) {
+        console.log(`   ⏳ [${timeframe}] Volume EMA data not ready — skipping`);
+        return null; // Data not ready
+      }
+
+      const { prevVolume, prevEma, currentVolume, currentEma } = result;
+
+      let crossed = false;
+      if (condition === "CROSSING_UP") {
+        // Previous volume was below EMA, current volume is above EMA
+        crossed = prevVolume < prevEma && currentVolume > currentEma;
+      } else if (condition === "CROSSING_DOWN") {
+        // Previous volume was above EMA, current volume is below EMA
+        crossed = prevVolume > prevEma && currentVolume < currentEma;
+      }
+
+      console.log(
+        `   ${crossed ? "✅" : "❌"} [${timeframe}] Vol: ${currentVolume.toFixed(2)} | EMA(${period}): ${currentEma.toFixed(2)} | PrevVol: ${prevVolume.toFixed(2)} | PrevEMA: ${prevEma.toFixed(2)} | ${condition}: ${crossed}`
+      );
+
+      if (!crossed) {
+        return false; // If any timeframe fails, the whole condition fails
+      }
+    }
+
+    return true; // All timeframes passed
+  }
+
+  // Fetch volume data and compute Volume EMA (cached per candle boundary)
+  async getVolumeEmaData(symbol, timeframe, emaPeriod) {
+    const key = `${symbol}_${timeframe}_volema_${emaPeriod}`;
+    const timeframeMs = this.getTimeframeMs(timeframe);
+    const currentCandleStart = Math.floor(Date.now() / timeframeMs) * timeframeMs;
+
+    if (!this.volumeEmaCache) this.volumeEmaCache = new Map();
+    let cached = this.volumeEmaCache.get(key);
+
+    // Use cache if from the same candle
+    if (cached && cached.candleStart === currentCandleStart) {
+      return cached;
+    }
+
+    // Fetch fresh klines from Binance
+    if (Date.now() < this.apiBanUntil) return null;
+
+    try {
+      const binanceInterval = this.getBinanceInterval(timeframe);
+      const limit = Math.max(emaPeriod * 5, 100); // Need enough for EMA convergence
+      const response = await fetch(
+        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`
+      );
+
+      if (response.status === 418 || response.status === 429) {
+        this.apiBanUntil = Date.now() + 120 * 1000;
+        return null;
+      }
+
+      if (!response.ok) return null;
+
+      const klines = await response.json();
+      if (!klines || klines.length < emaPeriod + 2) return null;
+
+      // Extract base asset volumes (index [5] in klines)
+      const volumes = klines.map((k) => parseFloat(k[5]));
+
+      // Compute EMA of volumes
+      const emaArray = this.computeEMAArray(volumes, emaPeriod);
+      if (!emaArray) return null;
+
+      // Get current and previous values
+      const lastIdx = volumes.length - 1;
+      const prevIdx = volumes.length - 2;
+
+      if (emaArray[lastIdx] === null || emaArray[prevIdx] === null) return null;
+
+      const result = {
+        currentVolume: volumes[lastIdx],
+        currentEma: emaArray[lastIdx],
+        prevVolume: volumes[prevIdx],
+        prevEma: emaArray[prevIdx],
+        candleStart: currentCandleStart,
+        timestamp: Date.now(),
+      };
+
+      this.volumeEmaCache.set(key, result);
+      return result;
+    } catch (err) {
+      console.error(`❌ Volume EMA klines fetch failed for ${symbol} ${timeframe}: ${err.message}`);
+      return null;
+    }
+  }
 
 
   async getUserFavorites(userId) {
@@ -5036,6 +6225,30 @@ class RealTimeAlertProcessor {
       clearInterval(this.heartbeatInterval);
     }
 
+    // Safety net: if the engine's symbol set ever drifts from what's actually in
+    // the database, monitoring goes quiet for the missing symbols without any
+    // error being raised — the only symptom is alerts that never arrive. Compare
+    // the two periodically and repair rather than relying on every write path
+    // getting it right.
+    if (this.symbolReconcileInterval) {
+      clearInterval(this.symbolReconcileInterval);
+    }
+    this.symbolReconcileInterval = setInterval(async () => {
+      try {
+        const alerts = await Alert.find({ status: "active" }).lean();
+        const expected = new Set(alerts.map((a) => a.symbol).filter(Boolean));
+        const tracked = this.microBatchEngine?.activeSymbolsSet;
+        if (!tracked || tracked.size === expected.size) return;
+
+        console.warn(
+          `⚠️ Symbol set drift: engine has ${tracked.size}, database has ${expected.size} — repairing`
+        );
+        this.microBatchEngine.updateActiveSymbols(alerts);
+      } catch (error) {
+        console.error("❌ Error reconciling active symbols:", error.message);
+      }
+    }, 60 * 1000);
+
     // Send heartbeat every 30 seconds
     this.heartbeatInterval = setInterval(async () => {
       try {
@@ -5075,6 +6288,10 @@ class RealTimeAlertProcessor {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
       console.log("💓 Heartbeat stopped");
+    }
+    if (this.symbolReconcileInterval) {
+      clearInterval(this.symbolReconcileInterval);
+      this.symbolReconcileInterval = null;
     }
   }
 

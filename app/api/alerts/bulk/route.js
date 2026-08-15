@@ -51,7 +51,7 @@ export async function POST(request) {
       );
     }
 
-    // Validate: at least minDaily is required, other conditions are optional
+    // Validate: minDaily is always required
     if (!conditions.minDaily) {
       return NextResponse.json(
         {
@@ -72,11 +72,13 @@ export async function POST(request) {
     const hasCandle = conditions.candle?.timeframes?.length > 0;
     const hasAlertCount = conditions.alertCount?.timeframe;
     const hasOpenInterest = conditions.openInterest?.timeframes?.length > 0;
+    const hasOiChange = conditions.oiChange?.timeframes?.length > 0;
+    const hasRSIDivergence = conditions.rsiDivergence?.timeframes?.length > 0;
 
-    if (!hasChangePercent && !hasMACD && !hasVolume && !hasRSI && !hasCandle && !hasAlertCount && !hasOpenInterest) {
+    if (!hasChangePercent && !hasMACD && !hasVolume && !hasRSI && !hasCandle && !hasAlertCount && !hasOpenInterest && !hasOiChange && !hasRSIDivergence) {
       return NextResponse.json(
         {
-          error: "At least one filter condition (Change %, MACD, Volume, RSI, etc.) is required along with Min Daily",
+          error: "At least one filter condition (Change %, MACD, Volume, RSI, RSI Divergence, OI Change, etc.) is required along with Min Daily",
         },
         { status: 400 }
       );
@@ -132,15 +134,18 @@ export async function POST(request) {
 
     try {
       // Get current prices from Redis or API
-      const redis = await import("../../../../utils/redis.js");
+      const { getRedisClient } = await import("../../../../utils/redis.js");
+      const redisClient = getRedisClient();
+
       for (const symbol of favoriteSymbols) {
         try {
           // Try both formats: original case and lowercase
-          let priceData = await redis.default.get(`crypto:${symbol}`);
-          if (!priceData) {
-            priceData = await redis.default.get(
-              `crypto:${symbol.toLowerCase()}`
-            );
+          let priceData = null;
+          if (redisClient) {
+            priceData = await redisClient.get(`crypto:${symbol}`);
+            if (!priceData) {
+              priceData = await redisClient.get(`crypto:${symbol.toLowerCase()}`);
+            }
           }
 
           if (priceData) {
@@ -198,8 +203,8 @@ export async function POST(request) {
     // Fetch open interest for symbols if openInterest condition is present
     const openInterestData = {};
     if (
-      conditions.openInterest &&
-      conditions.openInterest.timeframes?.length > 0
+      (conditions.openInterest && conditions.openInterest.timeframes?.length > 0) ||
+      (conditions.oiChange && conditions.oiChange.timeframes?.length > 0)
     ) {
       console.log("📊 Fetching Open Interest data from Binance Futures API...");
       for (const symbol of favoriteSymbols) {
@@ -337,15 +342,8 @@ export async function POST(request) {
       );
     }
 
-    // Add alerts to real-time monitoring
+    // Add alerts to real-time monitoring via Redis Pub/Sub
     try {
-      const RealTimeAlertProcessor = (
-        await import("../../../../services/RealTimeAlertProcessor.js")
-      ).default;
-
-      for (const alert of createdAlerts) {
-        await RealTimeAlertProcessor.addAlert(alert._id.toString());
-      }
 
       // Publish Redis message for bulk alerts created
       const alertIds = createdAlerts.map((alert) => alert._id.toString());
@@ -373,13 +371,7 @@ export async function POST(request) {
       // Don't fail the API call if monitoring fails
     }
 
-    // Force refresh alerts to ensure worker has latest data
-    try {
-      await RealTimeAlertProcessor.forceRefreshAlerts();
-    } catch (refreshError) {
-      console.warn("⚠️ Error refreshing alerts:", refreshError.message);
-    }
-
+    // (PM2 Worker will pick up the Redis message and refresh active alerts automatically)
 
     return NextResponse.json({
       success: true,

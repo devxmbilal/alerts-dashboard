@@ -61,12 +61,12 @@
     "socket.io-client": "^4.8.1",
     "ssh2": "^1.17.0",
     "ws": "^8.18.3",
-    "ws-server": "^1.0.0"
+    "ws-server": "^1.0.0",
+    "@tailwindcss/postcss": "^4",
+    "tailwindcss": "^4"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
     "concurrently": "^9.2.1",
-    "cross-env": "^10.1.0",
-    "tailwindcss": "^4"
+    "cross-env": "^10.1.0"
   }
 }

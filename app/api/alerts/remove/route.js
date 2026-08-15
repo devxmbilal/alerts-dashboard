@@ -47,15 +47,8 @@ export async function POST(request) {
       symbol: { $in: symbols },
     }).select("_id");
 
-    // Remove alerts from real-time monitoring first
+    // Remove alerts from real-time monitoring via Redis Pub/Sub
     try {
-      const RealTimeAlertProcessor = (
-        await import("../../../../services/RealTimeAlertProcessor.js")
-      ).default;
-
-      for (const alert of alertsToDelete) {
-        await RealTimeAlertProcessor.removeAlert(alert._id.toString());
-      }
 
       // Publish Redis message for alerts removed
       for (const alert of alertsToDelete) {
