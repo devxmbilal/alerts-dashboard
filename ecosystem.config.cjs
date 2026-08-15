@@ -22,7 +22,7 @@ module.exports = {
       env_file: ".env",
       env: {
         NODE_ENV: "production",
-        PORT: 3005,
+        PORT: 3000,
         LOG_LEVEL: "error", // Only log errors in production
       },
       // Wait for binance-worker to populate Redis before accepting requests

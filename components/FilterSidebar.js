@@ -1498,7 +1498,6 @@ const FilterSidebar = forwardRef(
                 onChange={(e) =>
                   handleInputChange("oiChange", "type", e.target.value)
                 }
-                sx={{ mb: 2 }}
               >
                 {oiTypeOptions.map((option) => (
                   <MenuItem key={option.value} value={option.value}>

@@ -1,0 +1,33 @@
+#!/bin/bash
+TARGET="/home/ubuntu/alerts-dashboard"
+GIT_DIR="/home/ubuntu/alerts-dashboard-bare.git"
+BRANCH="main"
+
+while read oldrev newrev ref
+do
+    if [[ $ref = refs/heads/$BRANCH ]];
+    then
+        echo "=========================================="
+        echo "🚀 Deploying updates to AWS Production..."
+        echo "=========================================="
+        
+        # Checkout the code to the target directory
+        git --work-tree=$TARGET --git-dir=$GIT_DIR checkout -f $BRANCH
+        
+        # Navigate to target directory and build
+        cd $TARGET
+        echo "📦 Installing dependencies..."
+        npm install
+        
+        echo "🔨 Building the application..."
+        npm run build
+        
+        echo "🔄 Restarting services via PM2..."
+        pm2 restart alerts-dashboard
+        pm2 restart alert-worker
+        pm2 save
+        
+        echo "✅ Deployment completed successfully!"
+        echo "=========================================="
+    fi
+done
