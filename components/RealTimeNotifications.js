@@ -709,9 +709,11 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                                 fontWeight: 600,
                               }}
                             >
-                              {alert.actualValue !== undefined
+                              {typeof alert.actualValue === "number" && !isNaN(alert.actualValue)
                                 ? alert.actualValue.toFixed(3)
-                                : alert.priceChangePercent}
+                                : typeof alert.priceChangePercent === "number" && !isNaN(alert.priceChangePercent)
+                                  ? alert.priceChangePercent.toFixed(3)
+                                  : "N/A"}
                               %
                             </span>
                           </Typography>
@@ -761,7 +763,7 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
                                 fontWeight: 600,
                               }}
                             >
-                              {alert.priceChangePercent !== undefined
+                              {typeof alert.priceChangePercent === "number" && !isNaN(alert.priceChangePercent)
                                 ? alert.priceChangePercent.toFixed(3)
                                 : "N/A"}
                               %
