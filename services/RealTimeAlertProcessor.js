@@ -1402,21 +1402,9 @@ class RealTimeAlertProcessor {
         })
       );
 
-      // Check if any condition triggered a bypass (Independent Trigger)
-      const bypassCondition = conditionResults.find(r => r.bypassOthers);
-      if (bypassCondition) {
-        // Min Daily is a hard prerequisite, not one of the "other conditions" an
-        // independent divergence is allowed to bypass — it keeps illiquid symbols out.
-        const minDailyIndex = activeConditions.findIndex(
-          (c) => c.name === "Min Daily Volume"
-        );
-        if (minDailyIndex !== -1 && !conditionResults[minDailyIndex].passed) {
-          return false;
-        }
-        console.log(`🚀 Bypass Trigger Activated: ${bypassCondition.reason}`);
-        return true;
-      }
-
+      // Strict AND pipeline: every active condition — Min Daily, Divergence, OI
+      // Change, RSI Range, Candle, Volume, MACD, Volume EMA — must independently
+      // pass. Nothing here is allowed to short-circuit another selected filter.
       // Check if all conditions passed
       for (let i = 0; i < conditionResults.length; i++) {
         const result = conditionResults[i];
@@ -1911,9 +1899,11 @@ class RealTimeAlertProcessor {
 
           // Every mode fires on the divergence alone; they differ only in which
           // candle was measured, which evaluateRSIDivergence has already applied.
+          // Falls through to the normal all-conditions-must-pass check below, so
+          // any other filter selected alongside Divergence (OI Change, RSI Range,
+          // Candle, ...) still has to pass in its own right.
           return {
             passed: true,
-            bypassOthers: true,
             reason: `RSI Divergence (${divMatch.type}) — ${triggerMode} trigger`,
           };
         },
