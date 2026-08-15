@@ -1407,10 +1407,8 @@ const FilterSidebar = forwardRef(
                           Independent Trigger
                         </Typography>
                         <Typography variant="caption" sx={{ display: "block", mb: 1.5 }}>
-                          Waits for the next candle to close. For Bullish: Next candle
-                          closes and fails to go below the low of the previous candle.
-                          For Bearish: Next candle closes and fails to go above the high
-                          of the previous candle.
+                          Independent: Wait for the next candle to close Green (for
+                          Bullish) or Red (for Bearish).
                         </Typography>
                         <Typography variant="body2" sx={{ fontWeight: "bold", mb: 0.5 }}>
                           Previous Candle
@@ -1498,6 +1496,7 @@ const FilterSidebar = forwardRef(
                 onChange={(e) =>
                   handleInputChange("oiChange", "type", e.target.value)
                 }
+                sx={{ mb: 2 }}
               >
                 {oiTypeOptions.map((option) => (
                   <MenuItem key={option.value} value={option.value}>

@@ -3341,6 +3341,7 @@ class RealTimeAlertProcessor {
 
         historyEntry = {
           closes: klines.map(k => parseFloat(k[4])),
+          opens: klines.map(k => parseFloat(k[1])),
           highs: klines.map(k => parseFloat(k[2])),
           lows: klines.map(k => parseFloat(k[3])),
           openTimes: klines.map(k => k[0]),
@@ -4244,9 +4245,10 @@ class RealTimeAlertProcessor {
       const RANGE_UPPER = isShortTimeframe ? 30 : 60; // Max bars between anchor and current candle
 
       const ohlc = await this.getHistoricalOHLC(symbol, timeframe, rsiPeriod);
-      if (!ohlc || !ohlc.closes || !ohlc.highs || !ohlc.lows) continue;
+      if (!ohlc || !ohlc.closes || !ohlc.opens || !ohlc.highs || !ohlc.lows) continue;
 
       const closes = [...ohlc.closes];
+      const opens = [...ohlc.opens];
       const highs = [...ohlc.highs];
       const lows = [...ohlc.lows];
       const openTimes = ohlc.openTimes || [];
@@ -4254,6 +4256,7 @@ class RealTimeAlertProcessor {
       if (!useLiveCandle) {
         // Drop the still-forming candle so signals only fire on a closed bar
         closes.pop();
+        opens.pop();
         highs.pop();
         lows.pop();
       } else {
@@ -4314,19 +4317,19 @@ class RealTimeAlertProcessor {
         if (!isFinite(p1.price) || p1.rsi === null || p1.rsi === undefined) return null;
 
         // Independent Trigger: the candle that closed after the divergence has to
-        // hold it — a bullish signal is void if that candle printed a lower low,
-        // a bearish one if it printed a higher high. priceSeries is lows on the
-        // bullish side and highs on the bearish side, so one comparison covers both.
+        // confirm it with momentum — a bullish signal needs that candle to close
+        // Green (close > open), a bearish one needs it to close Red (close < open).
         if (CONFIRM_BARS > 0) {
-          const confirmPrice = priceSeries[lastIndex + 1];
-          if (!isFinite(confirmPrice)) return null;
+          const confirmOpen = opens[lastIndex + 1];
+          const confirmClose = closes[lastIndex + 1];
+          if (!isFinite(confirmOpen) || !isFinite(confirmClose)) return null;
           const held = isBearishSide
-            ? confirmPrice <= p1.price
-            : confirmPrice >= p1.price;
+            ? confirmClose < confirmOpen
+            : confirmClose > confirmOpen;
           if (!held) {
             if (isDiagSymbol) {
               console.log(
-                `🔬 ${symbol} ${timeframe} signal rejected: next candle broke the ${isBearishSide ? "high" : "low"} (${confirmPrice} vs ${p1.price}) — Independent Trigger not confirmed`
+                `🔬 ${symbol} ${timeframe} signal rejected: confirmation candle did not close ${isBearishSide ? "Red" : "Green"} (open ${confirmOpen}, close ${confirmClose}) — Independent Trigger not confirmed`
               );
             }
             return null;
