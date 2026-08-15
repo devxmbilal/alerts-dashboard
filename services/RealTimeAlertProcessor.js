@@ -4175,6 +4175,12 @@ class RealTimeAlertProcessor {
     // is a solid, already-settled swing that a trader would anchor a line to.
     const LB_LEFT = 5;
     const LB_RIGHT_ANCHOR = 5;
+    // Hidden Bearish anchors specifically need a wider lookback: with only 5
+    // bars clear on each side, a small bump inside a chop range can qualify as
+    // a "swing high" even though it isn't the peak a trader would actually draw
+    // a line from. Regular Bearish is untouched — its own RSI-zone/ATR/line
+    // gates already filter out weak setups without this.
+    const LB_LEFT_HIDDEN_BEARISH = 8;
 
     // Point B is the candle that just closed. Requiring B to also be a confirmed
     // pivot meant waiting several candles into the future before the divergence
@@ -4297,7 +4303,7 @@ class RealTimeAlertProcessor {
       // Point B is the candle that just closed; Point A is a settled pivot behind
       // it. The anchors are scanned newest-first so the line is drawn from the
       // closest qualifying swing, which is the one a trader would pick.
-      const evaluate = (pivotsAnchor, priceSeries, checks, isBearishSide = false) => {
+      const evaluate = (pivotsAnchor, priceSeries, checks, isBearishSide = false, strictAnchorIndices = null) => {
         if (!pivotsAnchor.length) return null;
 
         const p1 = {
@@ -4452,6 +4458,14 @@ class RealTimeAlertProcessor {
 
           for (const check of checks) {
             if (!check.enabled) continue;
+            if (check.requiresStrictAnchor && strictAnchorIndices && !strictAnchorIndices.has(anchorPivot.index)) {
+              if (isDiagSymbol) {
+                console.log(
+                  `🔬 ${symbol} ${timeframe} ${check.type} rejected (gap ${barsBetween}b): anchor is not a wide-enough swing high for Hidden Bearish`
+                );
+              }
+              continue;
+            }
             if (ENABLE_RSI_ZONE && !check.zone(p1.rsi)) {
               if (isDiagSymbol) {
                 console.log(
@@ -4534,11 +4548,15 @@ class RealTimeAlertProcessor {
               isBearish: true,
               label: "Hidden Bearish Divergence",
               zone: (rsi) => rsi >= HIDDEN_BEARISH_RSI,
+              requiresStrictAnchor: true,
               // Price Lower High + RSI Higher High
               test: (price1, price2, rsi1, rsi2) => price1 < price2 && rsi1 > rsi2,
             },
           ],
-          true
+          true,
+          new Set(
+            this.findSwings(rsiArray, "high", LB_LEFT_HIDDEN_BEARISH, LB_LEFT_HIDDEN_BEARISH).map((a) => a.index)
+          )
         );
       }
 
