@@ -406,23 +406,29 @@ const MarketPanel = forwardRef(
             <ToggleButton value="favorites">Favorites</ToggleButton>
           </ToggleButtonGroup>
 
-            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
               <Tooltip title="Add all to favorites">
                 <span>
                   <IconButton
-                    size="small"
                     onClick={handleAddAllFavorites}
                     disabled={bulkOperationLoading || allFavorited}
                     sx={{
-                      color: "#ffd700",
-                      "&:hover": { backgroundColor: "rgba(255, 215, 0, 0.1)" },
-                      "&:disabled": { color: "#666" },
+                      color: "#1976d2",
+                      border: "1px solid",
+                      borderColor: "#1976d2",
+                      borderRadius: 1,
+                      p: 0.75,
+                      "&:hover": {
+                        backgroundColor: "rgba(25, 118, 210, 0.12)",
+                        borderColor: "#1565c0",
+                      },
+                      "&:disabled": { color: "#666", borderColor: "#444" },
                     }}
                   >
                     {bulkOperationLoading ? (
-                      <CircularProgress size={18} />
+                      <CircularProgress size={24} />
                     ) : (
-                      <AddIcon fontSize="small" />
+                      <AddIcon sx={{ fontSize: 24 }} />
                     )}
                   </IconButton>
                 </span>
@@ -431,16 +437,22 @@ const MarketPanel = forwardRef(
               <Tooltip title="Remove all favorites">
                 <span>
                   <IconButton
-                    size="small"
                     onClick={handleClearAllFavorites}
                     disabled={bulkOperationLoading || favoriteCount === 0}
                     sx={{
-                      color: "#ff6b6b",
-                      "&:hover": { backgroundColor: "rgba(255, 107, 107, 0.1)" },
-                      "&:disabled": { color: "#666" },
+                      color: "#f44336",
+                      border: "1px solid",
+                      borderColor: "#f44336",
+                      borderRadius: 1,
+                      p: 0.75,
+                      "&:hover": {
+                        backgroundColor: "rgba(244, 67, 54, 0.12)",
+                        borderColor: "#d32f2f",
+                      },
+                      "&:disabled": { color: "#666", borderColor: "#444" },
                     }}
                   >
-                    <DeleteOutlineIcon fontSize="small" />
+                    <DeleteOutlineIcon sx={{ fontSize: 24 }} />
                   </IconButton>
                 </span>
               </Tooltip>
