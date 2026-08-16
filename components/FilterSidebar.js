@@ -145,6 +145,7 @@ const FilterSidebar = forwardRef(
       volumeEma: {},
       rsiDivergence: {},
       oiChange: {},
+      cvd: {},
     });
 
     const [isCreating, setIsCreating] = useState(false);
@@ -175,6 +176,7 @@ const FilterSidebar = forwardRef(
           volumeEma: {},
           rsiDivergence: {},
           oiChange: {},
+          cvd: {},
         });
 
         // 🔥 Also delete conditions from database
@@ -229,6 +231,7 @@ const FilterSidebar = forwardRef(
                 volumeEma: {},
                 rsiDivergence: {},
                 oiChange: {},
+                cvd: {},
               };
 
               // Min Daily
@@ -868,6 +871,41 @@ const FilterSidebar = forwardRef(
     const oiTypeOptions = [
       { value: "PERCENTAGE", label: "Percentage" },
       { value: "VALUE", label: "Value" },
+    ];
+
+    // CVD timeframe options — same set as Divergence, since CVD Divergence
+    // reuses that engine and should offer the same range.
+    const cvdTimeframeOptions = [
+      { value: "5MIN", label: "5MIN" },
+      { value: "15MIN", label: "15MIN" },
+      { value: "1HR", label: "1HR" },
+      { value: "4HR", label: "4HR" },
+      { value: "12HR", label: "12HR" },
+      { value: "D", label: "D" },
+      { value: "W", label: "W" },
+      { value: "M", label: "M" },
+    ];
+
+    const cvdModeOptions = [
+      { value: "surge", label: "Delta Surge" },
+      { value: "absorption", label: "Smart Money Absorption" },
+      { value: "divergence", label: "CVD Divergence" },
+    ];
+
+    const cvdSurgeTypeOptions = [
+      { value: "PERCENTAGE", label: "% of Candle Volume" },
+      { value: "VALUE", label: "Raw Value" },
+    ];
+
+    const cvdTriggerOptions = [
+      { value: "previous", label: "Previous Candle" },
+      { value: "independent", label: "Independent Trigger" },
+    ];
+
+    const cvdResetAnchorOptions = [
+      { value: "daily", label: "Daily Reset (UTC)" },
+      { value: "weekly", label: "Weekly Reset" },
+      { value: "rolling", label: "Rolling Window" },
     ];
 
     return (
@@ -1570,6 +1608,287 @@ const FilterSidebar = forwardRef(
                     Both
                   </Box>
                 </MenuItem>
+              </CustomTextField>
+            </AccordionDetails>
+          </DarkAccordion>
+
+          {/* CVD (Cumulative Volume Delta) Filter */}
+          <DarkAccordion>
+            <AccordionSummary
+              expandIcon={<ExpandMoreIcon sx={{ color: "text.primary" }} />}
+            >
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <BarChartIcon sx={{ color: "#00bcd4" }} />
+                <Typography sx={{ color: "text.primary" }}>CVD</Typography>
+              </Box>
+            </AccordionSummary>
+            <AccordionDetails>
+              {/* Step 1: Timeframes */}
+              <Grid container spacing={1} sx={{ mb: 2 }}>
+                {cvdTimeframeOptions.map((option) => (
+                  <Grid item xs={4} key={option.value}>
+                    <FormControlLabel
+                      control={
+                        <CustomCheckbox
+                          checked={filters?.cvd?.[option.value] || false}
+                          onChange={() =>
+                            handleCheckboxChange("cvd", option.value)
+                          }
+                        />
+                      }
+                      label={option.label}
+                      sx={{
+                        color: "text.primary",
+                        "& .MuiFormControlLabel-label": {
+                          fontSize: "14px",
+                        },
+                      }}
+                    />
+                  </Grid>
+                ))}
+              </Grid>
+
+              {/* Step 2: Mode */}
+              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+                Mode:
+              </Typography>
+              <CustomTextField
+                select
+                fullWidth
+                size="small"
+                value={filters?.cvd?.mode || "surge"}
+                onChange={(e) =>
+                  handleInputChange("cvd", "mode", e.target.value)
+                }
+                sx={{ mb: 2 }}
+              >
+                {cvdModeOptions.map((option) => (
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuItem>
+                ))}
+              </CustomTextField>
+
+              {/* Step 3: Mode-specific fields */}
+              {(filters?.cvd?.mode || "surge") === "surge" && (
+                <>
+                  <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+                    Type:
+                  </Typography>
+                  <CustomTextField
+                    select
+                    fullWidth
+                    size="small"
+                    value={filters?.cvd?.type || "PERCENTAGE"}
+                    onChange={(e) =>
+                      handleInputChange("cvd", "type", e.target.value)
+                    }
+                    sx={{ mb: 2 }}
+                  >
+                    {cvdSurgeTypeOptions.map((option) => (
+                      <MenuItem key={option.value} value={option.value}>
+                        {option.label}
+                      </MenuItem>
+                    ))}
+                  </CustomTextField>
+
+                  <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+                    {filters?.cvd?.type === "VALUE" ? "Value:" : "Threshold %:"}
+                  </Typography>
+                  <CustomTextField
+                    fullWidth
+                    size="small"
+                    type="number"
+                    placeholder={filters?.cvd?.type === "VALUE" ? "Enter value" : "Enter %"}
+                    value={filters?.cvd?.value || ""}
+                    onChange={(e) =>
+                      handleInputChange("cvd", "value", e.target.value)
+                    }
+                    InputProps={
+                      filters?.cvd?.type !== "VALUE"
+                        ? { endAdornment: <InputAdornment position="end">%</InputAdornment> }
+                        : undefined
+                    }
+                    sx={{ mb: 2 }}
+                  />
+
+                  <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+                    Direction:
+                  </Typography>
+                  <CustomTextField
+                    select
+                    fullWidth
+                    size="small"
+                    value={filters?.cvd?.direction || "increase"}
+                    onChange={(e) =>
+                      handleInputChange("cvd", "direction", e.target.value)
+                    }
+                    sx={{ mb: 2 }}
+                  >
+                    <MenuItem value="increase">
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                        <TrendingUpIcon sx={{ fontSize: 18, color: "#4caf50" }} />
+                        Buy-Dominant
+                      </Box>
+                    </MenuItem>
+                    <MenuItem value="decrease">
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                        <TrendingDownIcon sx={{ fontSize: 18, color: "#f44336" }} />
+                        Sell-Dominant
+                      </Box>
+                    </MenuItem>
+                    <MenuItem value="both">
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                        <ShowChartIcon sx={{ fontSize: 18, color: "#ff9800" }} />
+                        Both
+                      </Box>
+                    </MenuItem>
+                  </CustomTextField>
+                </>
+              )}
+
+              {filters?.cvd?.mode === "absorption" && (
+                <>
+                  <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+                    Absorption Types:
+                  </Typography>
+                  <Grid container spacing={1} sx={{ mb: 2 }}>
+                    <Grid item xs={12}>
+                      <FormControlLabel
+                        control={
+                          <CustomCheckbox
+                            checked={filters?.cvd?.bullishAbsorption || false}
+                            onChange={(e) =>
+                              handleInputChange("cvd", "bullishAbsorption", e.target.checked)
+                            }
+                          />
+                        }
+                        label="Bullish Absorption (Red candle, buyers absorbing)"
+                        sx={{ color: "text.primary" }}
+                      />
+                    </Grid>
+                    <Grid item xs={12}>
+                      <FormControlLabel
+                        control={
+                          <CustomCheckbox
+                            checked={filters?.cvd?.bearishAbsorption || false}
+                            onChange={(e) =>
+                              handleInputChange("cvd", "bearishAbsorption", e.target.checked)
+                            }
+                          />
+                        }
+                        label="Bearish Absorption (Green candle, sellers absorbing)"
+                        sx={{ color: "text.primary" }}
+                      />
+                    </Grid>
+                  </Grid>
+                </>
+              )}
+
+              {filters?.cvd?.mode === "divergence" && (
+                <>
+                  <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+                    Divergence Types:
+                  </Typography>
+                  <Grid container spacing={1} sx={{ mb: 2 }}>
+                    <Grid item xs={12}>
+                      <FormControlLabel
+                        control={
+                          <CustomCheckbox
+                            checked={filters?.cvd?.bullish || false}
+                            onChange={(e) =>
+                              handleInputChange("cvd", "bullish", e.target.checked)
+                            }
+                          />
+                        }
+                        label="Regular Bullish"
+                        sx={{ color: "text.primary" }}
+                      />
+                    </Grid>
+                    <Grid item xs={12}>
+                      <FormControlLabel
+                        control={
+                          <CustomCheckbox
+                            checked={filters?.cvd?.bullishHidden || false}
+                            onChange={(e) =>
+                              handleInputChange("cvd", "bullishHidden", e.target.checked)
+                            }
+                          />
+                        }
+                        label="Hidden Bullish"
+                        sx={{ color: "text.primary" }}
+                      />
+                    </Grid>
+                    <Grid item xs={12}>
+                      <FormControlLabel
+                        control={
+                          <CustomCheckbox
+                            checked={filters?.cvd?.bearish || false}
+                            onChange={(e) =>
+                              handleInputChange("cvd", "bearish", e.target.checked)
+                            }
+                          />
+                        }
+                        label="Regular Bearish"
+                        sx={{ color: "text.primary" }}
+                      />
+                    </Grid>
+                    <Grid item xs={12}>
+                      <FormControlLabel
+                        control={
+                          <CustomCheckbox
+                            checked={filters?.cvd?.bearishHidden || false}
+                            onChange={(e) =>
+                              handleInputChange("cvd", "bearishHidden", e.target.checked)
+                            }
+                          />
+                        }
+                        label="Hidden Bearish"
+                        sx={{ color: "text.primary" }}
+                      />
+                    </Grid>
+                  </Grid>
+
+                  <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+                    Trigger Mode:
+                  </Typography>
+                  <CustomTextField
+                    select
+                    fullWidth
+                    size="small"
+                    value={filters?.cvd?.condition || "previous"}
+                    onChange={(e) =>
+                      handleInputChange("cvd", "condition", e.target.value)
+                    }
+                    sx={{ mb: 2 }}
+                  >
+                    {cvdTriggerOptions.map((option) => (
+                      <MenuItem key={option.value} value={option.value}>
+                        {option.label}
+                      </MenuItem>
+                    ))}
+                  </CustomTextField>
+                </>
+              )}
+
+              {/* Step 4: Reset Anchor */}
+              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+                Reset Anchor:
+              </Typography>
+              <CustomTextField
+                select
+                fullWidth
+                size="small"
+                value={filters?.cvd?.resetAnchor || "daily"}
+                onChange={(e) =>
+                  handleInputChange("cvd", "resetAnchor", e.target.value)
+                }
+              >
+                {cvdResetAnchorOptions.map((option) => (
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuItem>
+                ))}
               </CustomTextField>
             </AccordionDetails>
           </DarkAccordion>
