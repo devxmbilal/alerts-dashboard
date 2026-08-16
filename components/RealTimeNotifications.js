@@ -445,12 +445,12 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
       const parts = [];
 
       if (conditions.minDaily) {
-        parts.push(`Min Daily: ${conditions.minDaily}`);
+        parts.push(`Daily min Volume: ${conditions.minDaily}`);
       }
 
       if (conditions.changePercent) {
         parts.push(
-          `Change: ${conditions.changePercent.percentage}% (${conditions.changePercent.timeframe})`
+          `Price Change: ${conditions.changePercent.percentage}% (${conditions.changePercent.timeframe})`
         );
       }
 

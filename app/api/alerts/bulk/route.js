@@ -55,7 +55,7 @@ export async function POST(request) {
     if (!conditions.minDaily) {
       return NextResponse.json(
         {
-          error: "Min Daily volume condition is required",
+          error: "Daily min Volume condition is required",
           details: {
             minDaily: conditions.minDaily,
           },
@@ -78,7 +78,7 @@ export async function POST(request) {
     if (!hasChangePercent && !hasMACD && !hasVolume && !hasRSI && !hasCandle && !hasAlertCount && !hasOpenInterest && !hasOiChange && !hasRSIDivergence) {
       return NextResponse.json(
         {
-          error: "At least one filter condition (Change %, MACD, Volume, RSI, RSI Divergence, OI Change, etc.) is required along with Min Daily",
+          error: "At least one filter condition (Price Change, MACD, Volume, RSI, RSI Divergence, OI Change, etc.) is required along with Daily min Volume",
         },
         { status: 400 }
       );

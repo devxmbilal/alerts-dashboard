@@ -398,14 +398,14 @@ const FilterSidebar = forwardRef(
 
       // Validation 1: Min Daily is always required
       if (!hasMinDaily) {
-        setErrorMessage("Please set: Min Daily volume");
+        setErrorMessage("Please set: Daily min Volume");
         setIsCreating(false);
         return;
       }
 
       // Validation 2: At least one other condition must be set
       if (!hasChangePercent && !hasAlertCount && !hasCandle && !hasRsiRange && !hasMacd && !hasVolume && !hasVolumeEma && !hasRsiDivergence && !hasOiChange) {
-        setErrorMessage("Please set at least one condition (Change %, RSI, RSI Divergence, etc.)");
+        setErrorMessage("Please set at least one condition (Price Change, RSI, RSI Divergence, etc.)");
         setIsCreating(false);
         return;
       }
@@ -425,7 +425,7 @@ const FilterSidebar = forwardRef(
         );
 
         if (!minDailyKey) {
-          setErrorMessage("Please select a Min Daily value");
+          setErrorMessage("Please select a Daily min Volume value");
           setIsCreating(false);
           return;
         }
@@ -440,7 +440,7 @@ const FilterSidebar = forwardRef(
             (key) => key !== "percentage" && filters.changePercent[key] === true
           );
           if (!changePercentKey || !filters.changePercent.percentage) {
-            setErrorMessage("Please set Change % timeframe and percentage");
+            setErrorMessage("Please set Price Change timeframe and percentage");
             setIsCreating(false);
             return;
           }
@@ -950,7 +950,7 @@ const FilterSidebar = forwardRef(
             >
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <SpeedIcon sx={{ color: "#9c27b0" }} />
-                <Typography sx={{ color: "text.primary" }}>Min. Daily</Typography>
+                <Typography sx={{ color: "text.primary" }}>Daily min Volume</Typography>
               </Box>
             </AccordionSummary>
             <AccordionDetails>
@@ -987,7 +987,7 @@ const FilterSidebar = forwardRef(
             >
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <TrendingUpIcon sx={{ color: "#f44336" }} />
-                <Typography sx={{ color: "text.primary" }}>Change %</Typography>
+                <Typography sx={{ color: "text.primary" }}>Price Change</Typography>
               </Box>
             </AccordionSummary>
             <AccordionDetails>

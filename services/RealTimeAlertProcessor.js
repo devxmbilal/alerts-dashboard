@@ -3177,12 +3177,12 @@ class RealTimeAlertProcessor {
     const parts = [];
 
     if (conditions.minDaily) {
-      parts.push(`Min Daily: ${conditions.minDaily}`);
+      parts.push(`Daily min Volume: ${conditions.minDaily}`);
     }
 
     if (conditions.changePercent) {
       parts.push(
-        `Change: ${conditions.changePercent.percentage}% (${conditions.changePercent.timeframe})`
+        `Price Change: ${conditions.changePercent.percentage}% (${conditions.changePercent.timeframe})`
       );
     }
 
@@ -4188,13 +4188,11 @@ class RealTimeAlertProcessor {
     // could be reported, which put the alert well past the point it was tradeable
     // (20 hours on 4HR). Measuring the just-closed candle against the settled
     // anchor keeps the span wide while removing that wait entirely.
-    // How far back the anchor may sit, in bars. One fixed window applied the same
-    // bar count to a 5m chart and a Weekly one, which are read over completely
-    // different horizons, so the span is split into two tiers instead. Timeframes
-    // are resolved through getBinanceInterval so every alias ("1HR", "1H",
-    // "1HOUR") lands in the same tier — note "1m" (minute) and "1M" (month) are
-    // deliberately distinct keys here, and only the lowercase one is short.
-    const SHORT_INTERVALS = new Set(["1m", "3m", "5m", "15m", "30m", "1h"]);
+    // How far back the anchor may sit, in bars. This ran as two tiers (10-30 on
+    // charts up to 1h, 14-60 above) until the client asked for one window across
+    // every timeframe, so the tiering and its interval lookup are gone.
+    const RANGE_LOWER = 14; // Min bars between anchor and current candle
+    const RANGE_UPPER = 90; // Max bars between anchor and current candle
 
     // Quality gates. All three are on, but the ATR bar and the regular-divergence
     // RSI zone sit at deliberately loose settings: strict values cut volume to a
@@ -4239,11 +4237,6 @@ class RealTimeAlertProcessor {
     const HIDDEN_BEARISH_RSI = 40;    // hidden bearish: current candle at or above
 
     for (const timeframe of condition.timeframes) {
-      // Short charts (up to 1h) run a 10-30 bar window; 4h and above run 14-60.
-      const isShortTimeframe = SHORT_INTERVALS.has(this.getBinanceInterval(timeframe));
-      const RANGE_LOWER = isShortTimeframe ? 10 : 14; // Min bars between anchor and current candle
-      const RANGE_UPPER = isShortTimeframe ? 30 : 60; // Max bars between anchor and current candle
-
       const ohlc = await this.getHistoricalOHLC(symbol, timeframe, rsiPeriod);
       if (!ohlc || !ohlc.closes || !ohlc.opens || !ohlc.highs || !ohlc.lows) continue;
 

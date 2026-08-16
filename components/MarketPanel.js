@@ -43,6 +43,9 @@ import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import CurrencyExchangeIcon from "@mui/icons-material/CurrencyExchange";
 import StarIcon from "@mui/icons-material/Star";
 import StarBorderIcon from "@mui/icons-material/StarBorder";
+import AddIcon from "@mui/icons-material/Add";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import Tooltip from "@mui/material/Tooltip";
 
 const MarketPanel = forwardRef(
   ({ onSelectCoin, onCreateAlert, onAlertsCreated }, ref) => {
@@ -222,41 +225,26 @@ const MarketPanel = forwardRef(
       }
     }, [selectAllChecked, filteredData]);
 
-    // Toggle all visible pairs favorites (add all or remove all)
+    // Add every visible pair to favorites. This used to toggle (add all when
+    // none were favorited, remove all when they were), but the single toggle
+    // button was replaced by a separate + and bin, so each one now does exactly
+    // what its icon says — removal lives in handleClearAllFavorites.
     const handleAddAllFavorites = useCallback(async () => {
       try {
         setBulkOperationLoading(true);
 
-        // Check if all visible pairs are already favorited
-        const allFavorited = filteredData.every((coin) =>
-          isFavorite(coin.symbol)
-        );
-
-        let symbolsToProcess = [];
-        let action = "";
-
-        if (allFavorited) {
-          // Remove all from favorites
-          symbolsToProcess = filteredData
-            .filter((coin) => isFavorite(coin.symbol))
-            .map((coin) => coin.symbol);
-          action = "remove";
-        } else {
-          // Add all to favorites
-          symbolsToProcess = filteredData
-            .filter((coin) => !isFavorite(coin.symbol))
-            .map((coin) => coin.symbol);
-          action = "add";
-        }
+        const symbolsToProcess = filteredData
+          .filter((coin) => !isFavorite(coin.symbol))
+          .map((coin) => coin.symbol);
 
         if (symbolsToProcess.length === 0) {
           return;
         }
 
         // Use context bulk update function
-        await bulkUpdateFavorites(symbolsToProcess, action);
+        await bulkUpdateFavorites(symbolsToProcess, "add");
       } catch (error) {
-        console.error("Error toggling all favorites:", error);
+        console.error("Error adding all favorites:", error);
       } finally {
         setBulkOperationLoading(false);
       }
@@ -379,14 +367,22 @@ const MarketPanel = forwardRef(
             {userFavorites.size} coins
           </Typography>
 
-          {/* View Toggle - exact same as client */}
+          {/* View Toggle + favourite bulk actions, on one row */}
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 1,
+              mb: 2,
+            }}
+          >
           <ToggleButtonGroup
             value={view}
             onChange={(e, value) => value && setView(value)}
             exclusive
             size="small"
             sx={{
-              mb: 2,
               "& .MuiToggleButton-root": {
                 color: "text.primary",
                 borderColor: "divider",
@@ -409,6 +405,47 @@ const MarketPanel = forwardRef(
             <ToggleButton value="market">Market</ToggleButton>
             <ToggleButton value="favorites">Favorites</ToggleButton>
           </ToggleButtonGroup>
+
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+              <Tooltip title="Add all to favorites">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={handleAddAllFavorites}
+                    disabled={bulkOperationLoading || allFavorited}
+                    sx={{
+                      color: "#ffd700",
+                      "&:hover": { backgroundColor: "rgba(255, 215, 0, 0.1)" },
+                      "&:disabled": { color: "#666" },
+                    }}
+                  >
+                    {bulkOperationLoading ? (
+                      <CircularProgress size={18} />
+                    ) : (
+                      <AddIcon fontSize="small" />
+                    )}
+                  </IconButton>
+                </span>
+              </Tooltip>
+
+              <Tooltip title="Remove all favorites">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={handleClearAllFavorites}
+                    disabled={bulkOperationLoading || favoriteCount === 0}
+                    sx={{
+                      color: "#ff6b6b",
+                      "&:hover": { backgroundColor: "rgba(255, 107, 107, 0.1)" },
+                      "&:disabled": { color: "#666" },
+                    }}
+                  >
+                    <DeleteOutlineIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Box>
+          </Box>
 
           {/* Search - exact same as client */}
           <Box sx={{ position: "relative", mb: 2 }}>
@@ -437,82 +474,11 @@ const MarketPanel = forwardRef(
             />
           </Box>
 
-          {/* Add All Favorites and Actions */}
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={handleAddAllFavorites}
-              disabled={bulkOperationLoading}
-              startIcon={
-                bulkOperationLoading ? (
-                  <CircularProgress size={16} />
-                ) : allFavorited ? (
-                  <StarBorderIcon />
-                ) : (
-                  <StarIcon />
-                )
-              }
-              sx={{
-                color: allFavorited ? "#ff6b6b" : "#ffd700",
-                borderColor: allFavorited ? "#ff6b6b" : "#ffd700",
-                "&:hover": {
-                  borderColor: allFavorited ? "#ff6b6b" : "#ffd700",
-                  backgroundColor: allFavorited
-                    ? "rgba(255, 107, 107, 0.1)"
-                    : "rgba(255, 215, 0, 0.1)",
-                },
-                "&:disabled": {
-                  color: "#666",
-                  borderColor: "#444",
-                },
-                fontSize: "0.8rem",
-                px: 2,
-              }}
-            >
-              {bulkOperationLoading
-                ? allFavorited
-                  ? "Removing..."
-                  : "Adding..."
-                : allFavorited
-                  ? "Remove All Favorites"
-                  : "Add All Favorites"}
-            </Button>
-
-            {/* Clear All Favorites Button */}
-            {favoriteCount > 0 && (
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={handleClearAllFavorites}
-                disabled={bulkOperationLoading}
-                startIcon={
-                  bulkOperationLoading ? (
-                    <CircularProgress size={16} />
-                  ) : (
-                    <StarBorderIcon />
-                  )
-                }
-                sx={{
-                  color: "#ff6b6b",
-                  borderColor: "#ff6b6b",
-                  "&:hover": {
-                    borderColor: "#ff6b6b",
-                    backgroundColor: "rgba(255, 107, 107, 0.1)",
-                  },
-                  "&:disabled": {
-                    color: "#666",
-                    borderColor: "#444",
-                  },
-                  fontSize: "0.8rem",
-                  px: 2,
-                }}
-              >
-                {bulkOperationLoading ? "Clearing..." : "Clear All Favorites"}
-              </Button>
-            )}
-
-            {checkedPairs.size > 0 && (
+          {/* Bulk actions. Add/remove-all favourites moved up next to the
+              Market/Favorites toggle as a + and a bin, so this row only carries
+              the Create Alert button and stays out of the layout without it. */}
+          {checkedPairs.size > 0 && (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
               <Button
                 size="small"
                 variant="contained"
@@ -522,28 +488,8 @@ const MarketPanel = forwardRef(
               >
                 Create Alert ({checkedPairs.size})
               </Button>
-            )}
-
-            {/* Connection Status */}
-            {/* <Box
-              sx={{ display: "flex", alignItems: "center", gap: 1, ml: "auto" }}
-            >
-              <Box
-                sx={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  backgroundColor: isConnected ? "#4caf50" : "#f44336",
-                }}
-              />
-              <Typography
-                variant="caption"
-                sx={{ color: "#888", fontSize: "0.7rem" }}
-              >
-                {isConnected ? "Live" : "Offline"} • {marketData.length} pairs
-              </Typography>
-            </Box> */}
-          </Box>
+            </Box>
+          )}
         </Box>
 
         {/* Coin List with fixed height and scrollbar */}
