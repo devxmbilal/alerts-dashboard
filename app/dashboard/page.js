@@ -25,8 +25,8 @@ import ListIcon from "@mui/icons-material/List";
 import LogoutIcon from "@mui/icons-material/Logout";
 import AccountCircleIcon from "@mui/icons-material/AccountCircle";
 import SettingsIcon from "@mui/icons-material/Settings";
-import Brightness4Icon from "@mui/icons-material/Brightness4";
-import Brightness7Icon from "@mui/icons-material/Brightness7";
+import DarkModeIcon from "@mui/icons-material/DarkMode";
+import LightModeIcon from "@mui/icons-material/LightMode";
 import TradingViewChart from "../../components/TradingViewChart";
 import MarketPanel from "../../components/MarketPanel";
 import FilterSidebar from "../../components/FilterSidebar";
@@ -682,15 +682,16 @@ export function DashboardContent() {
                   color="inherit"
                   sx={{
                     color: "text.secondary",
-                    transition: "all 0.3s ease",
+                    transition: "all 0.2s ease",
                     "&:hover": {
                       color: "primary.main",
-                      transform: "rotate(180deg)",
+                      transform: "scale(1.12)",
                     },
                   }}
                   title={mode === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
                 >
-                  {mode === "dark" ? <Brightness7Icon /> : <Brightness4Icon />}
+                  {/* Show where the click takes you: a moon in light mode, a sun in dark. */}
+                  {mode === "dark" ? <LightModeIcon /> : <DarkModeIcon />}
                 </IconButton>
                 {chartSwitchNotification && (
                   <Box

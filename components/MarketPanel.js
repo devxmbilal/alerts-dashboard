@@ -33,6 +33,10 @@ import {
   Button,
   CircularProgress,
   useTheme,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import ManageSearchIcon from "@mui/icons-material/ManageSearch";
@@ -143,6 +147,8 @@ const MarketPanel = forwardRef(
     // State for UI
     const [favoritesLoading, setFavoritesLoading] = useState(false);
     const [bulkOperationLoading, setBulkOperationLoading] = useState(false);
+    // Which bulk favourite action is awaiting confirmation: "add" | "remove" | null
+    const [pendingBulkAction, setPendingBulkAction] = useState(null);
 
     // Toggle favorite using context
     const toggleFavorite = useCallback(
@@ -407,17 +413,23 @@ const MarketPanel = forwardRef(
           </ToggleButtonGroup>
 
             <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-              <Tooltip title="Add all to favorites">
+              <Tooltip
+                title="Add all to favorites"
+                placement="bottom"
+                arrow
+                slotProps={{ popper: { modifiers: [{ name: "offset", options: { offset: [0, 6] } }] } }}
+              >
                 <span>
                   <IconButton
-                    onClick={handleAddAllFavorites}
+                    onClick={() => setPendingBulkAction("add")}
                     disabled={bulkOperationLoading || allFavorited}
                     sx={{
                       color: "#1976d2",
                       border: "1px solid",
                       borderColor: "#1976d2",
                       borderRadius: 1,
-                      p: 0.75,
+                      p: 1,
+                      cursor: "pointer",
                       "&:hover": {
                         backgroundColor: "rgba(25, 118, 210, 0.12)",
                         borderColor: "#1565c0",
@@ -426,25 +438,31 @@ const MarketPanel = forwardRef(
                     }}
                   >
                     {bulkOperationLoading ? (
-                      <CircularProgress size={24} />
+                      <CircularProgress size={28} />
                     ) : (
-                      <AddIcon sx={{ fontSize: 24 }} />
+                      <AddIcon sx={{ fontSize: 28 }} />
                     )}
                   </IconButton>
                 </span>
               </Tooltip>
 
-              <Tooltip title="Remove all favorites">
+              <Tooltip
+                title="Remove all favorites"
+                placement="bottom"
+                arrow
+                slotProps={{ popper: { modifiers: [{ name: "offset", options: { offset: [0, 6] } }] } }}
+              >
                 <span>
                   <IconButton
-                    onClick={handleClearAllFavorites}
+                    onClick={() => setPendingBulkAction("remove")}
                     disabled={bulkOperationLoading || favoriteCount === 0}
                     sx={{
                       color: "#f44336",
                       border: "1px solid",
                       borderColor: "#f44336",
                       borderRadius: 1,
-                      p: 0.75,
+                      p: 1,
+                      cursor: "pointer",
                       "&:hover": {
                         backgroundColor: "rgba(244, 67, 54, 0.12)",
                         borderColor: "#d32f2f",
@@ -452,7 +470,7 @@ const MarketPanel = forwardRef(
                       "&:disabled": { color: "#666", borderColor: "#444" },
                     }}
                   >
-                    <DeleteOutlineIcon sx={{ fontSize: 24 }} />
+                    <DeleteOutlineIcon sx={{ fontSize: 28 }} />
                   </IconButton>
                 </span>
               </Tooltip>
@@ -704,6 +722,119 @@ const MarketPanel = forwardRef(
             </Typography>
           </Box>
         </Box>
+
+        {/* Confirmation for the two bulk favourite actions. Both are one click
+            away from changing every row in the list, so neither runs unasked. */}
+        <Dialog
+          open={pendingBulkAction !== null}
+          onClose={() => !bulkOperationLoading && setPendingBulkAction(null)}
+          maxWidth="xs"
+          fullWidth
+          PaperProps={{
+            sx: {
+              backgroundColor: "background.paper",
+              backgroundImage: "none",
+              color: "text.primary",
+              border: 1,
+              borderColor: "divider",
+              borderRadius: 2,
+            },
+          }}
+        >
+          <DialogTitle
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1.5,
+              fontWeight: 600,
+              fontSize: "1.05rem",
+              pb: 1,
+            }}
+          >
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 38,
+                height: 38,
+                borderRadius: "50%",
+                backgroundColor:
+                  pendingBulkAction === "remove"
+                    ? "rgba(244, 67, 54, 0.12)"
+                    : "rgba(25, 118, 210, 0.12)",
+                color: pendingBulkAction === "remove" ? "#f44336" : "#1976d2",
+              }}
+            >
+              {pendingBulkAction === "remove" ? (
+                <DeleteOutlineIcon />
+              ) : (
+                <AddIcon />
+              )}
+            </Box>
+            {pendingBulkAction === "remove"
+              ? "Remove all favorites?"
+              : "Add all markets to favorites?"}
+          </DialogTitle>
+
+          <DialogContent sx={{ pb: 1 }}>
+            <Typography sx={{ color: "text.secondary", fontSize: "0.9rem" }}>
+              {pendingBulkAction === "remove" ? (
+                <>
+                  This will remove all <strong>{favoriteCount}</strong> coins
+                  from your favorites. Your alerts are not affected, and you can
+                  add coins back at any time.
+                </>
+              ) : (
+                <>
+                  This will add all <strong>{filteredData.length}</strong>{" "}
+                  market pairs currently listed to your favorites.
+                </>
+              )}
+            </Typography>
+          </DialogContent>
+
+          <DialogActions sx={{ px: 3, pb: 2.5, pt: 1, gap: 1 }}>
+            <Button
+              onClick={() => setPendingBulkAction(null)}
+              disabled={bulkOperationLoading}
+              sx={{
+                color: "text.secondary",
+                textTransform: "none",
+                fontWeight: 500,
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              disableElevation
+              disabled={bulkOperationLoading}
+              onClick={async () => {
+                const action = pendingBulkAction;
+                setPendingBulkAction(null);
+                if (action === "remove") {
+                  await handleClearAllFavorites();
+                } else {
+                  await handleAddAllFavorites();
+                }
+              }}
+              sx={{
+                textTransform: "none",
+                fontWeight: 600,
+                px: 2.5,
+                backgroundColor:
+                  pendingBulkAction === "remove" ? "#f44336" : "#1976d2",
+                "&:hover": {
+                  backgroundColor:
+                    pendingBulkAction === "remove" ? "#d32f2f" : "#1565c0",
+                },
+              }}
+            >
+              {pendingBulkAction === "remove" ? "Remove All" : "Add All"}
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Box>
     );
   }
