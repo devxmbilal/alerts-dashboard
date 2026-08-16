@@ -1403,12 +1403,14 @@ class RealTimeAlertProcessor {
       );
 
       // AND pipeline with one deliberate exception. Every active condition — Min
-      // Daily, Divergence, OI Change, RSI Range, Candle, Volume, MACD, Volume EMA
-      // — normally has to pass on its own. The exception is Independent-Trigger
-      // divergence, which the client specified as a supreme override: once it
-      // confirms, it fires the alert and every other selected filter is skipped.
+      // Daily, Divergence, OI Change, RSI Range, Candle, Volume, MACD, Volume EMA,
+      // CVD — normally has to pass on its own. The exception is Independent-
+      // Trigger divergence, which the client specified as a supreme override:
+      // once it confirms, it fires the alert and every other selected filter is
+      // skipped — with two named exceptions the client called out explicitly,
+      // Min Daily Volume and Alert Count, which the override still has to respect.
       // A veto still wins over the override, so the Conditional safety shield
-      // cannot be bypassed by it.
+      // cannot be bypassed by it either.
       const vetoed = conditionResults.find((r) => !r.passed && r.blocking);
       if (vetoed) {
         return false;
@@ -1416,8 +1418,17 @@ class RealTimeAlertProcessor {
 
       const override = conditionResults.find((r) => r.passed && r.bypassOthers);
       if (override) {
+        const alwaysRespected = ["Min Daily Volume", "Alert Count"];
+        const unmet = conditionResults.find((r, i) => {
+          const conditionCheck = activeConditions[i];
+          return !r.passed && alwaysRespected.includes(conditionCheck.name);
+        });
+        if (unmet) {
+          return false; // Override bypasses everything except these two
+        }
+
         console.log(
-          `⚡ ${alert.symbol}: ${override.reason} — remaining ${activeConditions.length - 1} filter(s) skipped`
+          `⚡ ${alert.symbol}: ${override.reason} — remaining ${activeConditions.length - 1} filter(s) skipped (Min Daily/Alert Count still respected)`
         );
         return true;
       }
@@ -1954,11 +1965,13 @@ class RealTimeAlertProcessor {
 
           // Independent is a supreme override: once the confirmation candle closes
           // in the right colour, the divergence alone fires the alert and every
-          // other selected filter — Min Daily included — is skipped. Previous
-          // still falls through to the normal all-conditions-must-pass check.
+          // other selected filter is skipped — except Min Daily Volume and Alert
+          // Count, which the aggregation loop still enforces even under this
+          // override. Previous still falls through to the normal
+          // all-conditions-must-pass check.
           if (triggerMode === "independent") {
             console.log(
-              `⚡ ${alert.symbol} Independent Divergence override — ${divMatch.label} on ${divMatch.timeframe}, bypassing all other filters`
+              `⚡ ${alert.symbol} Independent Divergence override — ${divMatch.label} on ${divMatch.timeframe}, bypassing all other filters except Min Daily/Alert Count`
             );
             return {
               passed: true,
