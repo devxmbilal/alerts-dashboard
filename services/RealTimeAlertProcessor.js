@@ -2052,6 +2052,62 @@ class RealTimeAlertProcessor {
       });
     }
 
+    // Priority 8.7: CVD (Cumulative Volume Delta)
+    if (this.isConditionSet(conditions.cvd?.timeframes)) {
+      activeConditions.push({
+        name: "CVD",
+        priority: 8.7,
+        check: async () => {
+          if (!conditions.cvd.timeframes || conditions.cvd.timeframes.length === 0) {
+            return { passed: false, reason: "No timeframes configured for CVD" };
+          }
+
+          const cvdMatch = await this.evaluateCVDConditions(
+            conditions.cvd,
+            alert.symbol
+          );
+
+          if (!cvdMatch || cvdMatch.found === undefined) {
+            return { passed: true, reason: "CVD data loading — skipped this tick" };
+          }
+
+          if (!cvdMatch.found) {
+            return { passed: false, reason: `No CVD signal (${conditions.cvd.mode || "surge"} mode)` };
+          }
+
+          // Fire once per setup. Surge/Absorption are keyed on the candle, so
+          // they cannot repeat within one bar; Divergence is keyed on its anchor
+          // so a setup that stays valid does not re-alert every bar.
+          const alertKey = alert._id?.toString();
+          if (!this.lastFiredCvd) this.lastFiredCvd = new Map();
+          if (cvdMatch.signature && this.lastFiredCvd.get(alertKey) === cvdMatch.signature) {
+            return {
+              passed: false,
+              reason: `CVD (${cvdMatch.type}) already alerted for this candle/pivot`,
+            };
+          }
+
+          triggerContext.cvd = {
+            mode: cvdMatch.mode,
+            type: cvdMatch.type,
+            label: cvdMatch.label,
+            timeframe: cvdMatch.timeframe,
+            delta: cvdMatch.delta,
+            deltaPct: cvdMatch.deltaPct,
+            barsBetween: cvdMatch.barsBetween,
+            pivot1: cvdMatch.pivot1,
+            pivot2: cvdMatch.pivot2,
+            signature: cvdMatch.signature,
+          };
+
+          return {
+            passed: true,
+            reason: `CVD ${cvdMatch.label} (${cvdMatch.timeframe})`,
+          };
+        },
+      });
+    }
+
     // Priority 9: Volume EMA Crossing (checks if volume bar crosses above EMA line)
     if (this.isConditionSet(conditions.volumeEma?.timeframes)) {
       activeConditions.push({
@@ -2241,6 +2297,12 @@ class RealTimeAlertProcessor {
           alert._id?.toString(),
           triggerContext.divergence.signature
         );
+      }
+
+      // Same idea for CVD, kept in its own map so the two never interfere.
+      if (triggerContext.cvd?.signature) {
+        if (!this.lastFiredCvd) this.lastFiredCvd = new Map();
+        this.lastFiredCvd.set(alert._id?.toString(), triggerContext.cvd.signature);
       }
 
       // Update alert with latest price and new baseline
@@ -3219,6 +3281,19 @@ class RealTimeAlertProcessor {
       );
     }
 
+    if (conditions.cvd) {
+      const mode = conditions.cvd.mode || "surge";
+      if (mode === "surge") {
+        parts.push(
+          `CVD Surge: ${conditions.cvd.direction} ${conditions.cvd.value}${conditions.cvd.type === "VALUE" ? " absolute" : "%"}`
+        );
+      } else if (mode === "absorption") {
+        parts.push("CVD: Smart Money Absorption");
+      } else {
+        parts.push("CVD Divergence");
+      }
+    }
+
     return parts.join(", ");
   }
 
@@ -3318,6 +3393,9 @@ class RealTimeAlertProcessor {
     const needsFresh =
       !historyEntry ||
       !historyEntry.highs ||
+      // Entries cached before CVD landed carry no volume arrays; force one
+      // refetch rather than handing CVD undefined until the next candle rolls.
+      !historyEntry.volumes ||
       historyEntry.candleStart !== currentCandleStart;
 
     if (needsFresh) {
@@ -3344,6 +3422,11 @@ class RealTimeAlertProcessor {
           opens: klines.map(k => parseFloat(k[1])),
           highs: klines.map(k => parseFloat(k[2])),
           lows: klines.map(k => parseFloat(k[3])),
+          // Volume delta comes free with this same kline payload: index 5 is the
+          // candle's total base volume and index 9 the part bought by takers, so
+          // sells are the remainder. CVD needs no extra request of its own.
+          volumes: klines.map(k => parseFloat(k[5])),
+          takerBuyVolumes: klines.map(k => parseFloat(k[9])),
           openTimes: klines.map(k => k[0]),
           candleStart: currentCandleStart,
           fetchedAt: Date.now(),
@@ -4565,6 +4648,602 @@ class RealTimeAlertProcessor {
     }
 
     return { found: false };
+  }
+
+  // ============================ CVD ============================
+  // Cumulative Volume Delta. Every kline already carries the two numbers this
+  // needs — total base volume and the taker-bought share — so the whole feature
+  // rides on the same cached klines RSI/Divergence already fetch. No extra
+  // endpoint, no extra polling loop, nothing new against the rate limit.
+  //
+  //   sellVolume = volume - takerBuyVolume
+  //   delta      = takerBuyVolume - sellVolume = 2*takerBuyVolume - volume
+  //
+  // Nothing in here touches RSI Divergence, OI Change or any other condition —
+  // it only reads the shared OHLC cache and keeps its own state.
+
+  resolveCvdTriggerMode(raw) {
+    return ["independent", "previous"].includes(raw) ? raw : "previous";
+  }
+
+  // Per-candle delta, and the running total measured from a reset anchor.
+  // The anchor only bites when it is actually shorter than the candle: asking
+  // for a daily reset on a Daily chart would restart the sum every bar and
+  // flatten CVD back into raw delta, so those fall through to rolling.
+  buildCvdSeries(volumes, takerBuyVolumes, openTimes, resetAnchor, timeframeMs) {
+    const deltas = [];
+    for (let i = 0; i < volumes.length; i++) {
+      const vol = volumes[i];
+      const buy = takerBuyVolumes[i];
+      deltas.push(isFinite(vol) && isFinite(buy) ? 2 * buy - vol : 0);
+    }
+
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const WEEK_MS = 7 * DAY_MS;
+    let periodMs = null;
+    if (resetAnchor === "daily" && timeframeMs < DAY_MS) periodMs = DAY_MS;
+    else if (resetAnchor === "weekly" && timeframeMs < WEEK_MS) periodMs = WEEK_MS;
+
+    const cvd = [];
+    let running = 0;
+    for (let i = 0; i < deltas.length; i++) {
+      if (periodMs && i > 0 && openTimes[i] && openTimes[i - 1]) {
+        const curBucket = Math.floor(openTimes[i] / periodMs);
+        const prevBucket = Math.floor(openTimes[i - 1] / periodMs);
+        if (curBucket !== prevBucket) running = 0; // new session, start over
+      }
+      running += deltas[i];
+      cvd.push(running);
+    }
+
+    return { deltas, cvd };
+  }
+
+  async evaluateCVDConditions(condition, symbol) {
+    if (!condition || !condition.timeframes || condition.timeframes.length === 0) {
+      return { found: false };
+    }
+
+    const mode = ["surge", "absorption", "divergence"].includes(condition.mode)
+      ? condition.mode
+      : "surge";
+    const resetAnchor = ["daily", "weekly", "rolling"].includes(condition.resetAnchor)
+      ? condition.resetAnchor
+      : "daily";
+
+    // Same three symbols the divergence diagnostics use, so the client can watch
+    // both engines explain themselves side by side on the same coins.
+    const isDiagSymbol =
+      symbol === "BTCUSDT" || symbol === "ETHUSDT" || symbol === "XAUTUSDT";
+
+    const triggerMode = this.resolveCvdTriggerMode(condition.condition);
+    // Independent holds one extra closed bar back to confirm the signal.
+    // There is no live-volume feed anywhere in the service, so a "conditional"
+    // (forming candle) mode would read a near-empty candle — it is deliberately
+    // not offered for CVD.
+    const CONFIRM_BARS = mode === "divergence" && triggerMode === "independent" ? 1 : 0;
+
+    for (const timeframe of condition.timeframes) {
+      const ohlc = await this.getHistoricalOHLC(symbol, timeframe, 14);
+      if (
+        !ohlc ||
+        !ohlc.closes ||
+        !ohlc.opens ||
+        !ohlc.highs ||
+        !ohlc.lows ||
+        !ohlc.volumes ||
+        !ohlc.takerBuyVolumes
+      ) {
+        continue;
+      }
+
+      const closes = [...ohlc.closes];
+      const opens = [...ohlc.opens];
+      const highs = [...ohlc.highs];
+      const lows = [...ohlc.lows];
+      const volumes = [...ohlc.volumes];
+      const takerBuyVolumes = [...ohlc.takerBuyVolumes];
+      const openTimes = ohlc.openTimes || [];
+
+      // Always drop the still-forming candle: its volume is only whatever had
+      // traded at the instant the klines were fetched, so acting on it would
+      // consistently under-read the delta.
+      closes.pop();
+      opens.pop();
+      highs.pop();
+      lows.pop();
+      volumes.pop();
+      takerBuyVolumes.pop();
+
+      if (closes.length < 30) continue;
+
+      const timeframeMs = this.getTimeframeMs(timeframe);
+      const { deltas, cvd } = this.buildCvdSeries(
+        volumes,
+        takerBuyVolumes,
+        openTimes,
+        resetAnchor,
+        timeframeMs
+      );
+
+      const lastIndex = closes.length - 1 - CONFIRM_BARS;
+      if (lastIndex < 0) continue;
+
+      // ---------------- Mode 1: Delta Surge ----------------
+      if (mode === "surge") {
+        const hit = this.checkCvdSurge(
+          { delta: deltas[lastIndex], volume: volumes[lastIndex] },
+          condition,
+          symbol,
+          timeframe,
+          isDiagSymbol
+        );
+        if (hit) {
+          console.log(
+            `📊 CVD Surge on ${symbol} ${timeframe} — delta ${hit.delta.toFixed(2)} (${hit.deltaPct.toFixed(2)}% of volume, ${hit.side})`
+          );
+          return {
+            found: true,
+            mode,
+            timeframe,
+            ...hit,
+            time: openTimes[lastIndex] || null,
+            signature: `${timeframe}:surge:${openTimes[lastIndex]}`,
+          };
+        }
+        continue;
+      }
+
+      // ---------------- Mode 2: Smart Money Absorption ----------------
+      if (mode === "absorption") {
+        const hit = this.checkCvdAbsorption(
+          {
+            open: opens[lastIndex],
+            close: closes[lastIndex],
+            delta: deltas[lastIndex],
+            volume: volumes[lastIndex],
+          },
+          condition,
+          symbol,
+          timeframe,
+          isDiagSymbol
+        );
+        if (hit) {
+          console.log(
+            `🧊 CVD ${hit.label} on ${symbol} ${timeframe} — ${hit.candleColor} candle with ${hit.delta > 0 ? "positive" : "negative"} delta ${hit.delta.toFixed(2)} (${hit.deltaPct.toFixed(2)}% of volume)`
+          );
+          return {
+            found: true,
+            mode,
+            timeframe,
+            ...hit,
+            time: openTimes[lastIndex] || null,
+            signature: `${timeframe}:absorption:${hit.type}:${openTimes[lastIndex]}`,
+          };
+        }
+        continue;
+      }
+
+      // ---------------- Mode 3: CVD Divergence ----------------
+      const hit = this.checkCvdDivergence({
+        condition,
+        symbol,
+        timeframe,
+        closes,
+        opens,
+        highs,
+        lows,
+        cvd,
+        deltas,
+        openTimes,
+        lastIndex,
+        CONFIRM_BARS,
+        isDiagSymbol,
+      });
+
+      if (hit) {
+        console.log(
+          `🔷 CVD ${hit.label} on ${symbol} ${timeframe} — price ${hit.pivot2.price} → ${hit.pivot1.price}, CVD ${hit.pivot2.cvd.toFixed(2)} → ${hit.pivot1.cvd.toFixed(2)} (${hit.barsBetween} bars apart)`
+        );
+        return {
+          found: true,
+          mode,
+          timeframe,
+          trigger: triggerMode,
+          ...hit,
+          // Keyed on the anchor only, so one setup does not re-alert every bar
+          // it stays valid — same convention RSI Divergence uses.
+          signature: `${timeframe}:cvd:${hit.type}:${hit.pivot2.time}`,
+        };
+      }
+    }
+
+    return { found: false };
+  }
+
+  // Delta on a single closed candle, measured against the user's threshold.
+  // Percentage mode compares against that same candle's own volume, which keeps
+  // one threshold meaningful across coins of wildly different size — the flat-
+  // number problem the divergence ATR filter exists to solve.
+  checkCvdSurge(candle, condition, symbol, timeframe, isDiagSymbol) {
+    const { delta, volume } = candle;
+    if (!isFinite(delta) || !isFinite(volume) || volume <= 0) return null;
+
+    const threshold = parseFloat(condition.value);
+    if (!isFinite(threshold) || threshold <= 0) return null;
+
+    const useValueMode = condition.type === "VALUE";
+    const direction = ["increase", "decrease", "both"].includes(condition.direction)
+      ? condition.direction
+      : "increase";
+
+    const deltaPct = (delta / volume) * 100;
+    const metric = useValueMode ? Math.abs(delta) : Math.abs(deltaPct);
+
+    if (metric < threshold) {
+      if (isDiagSymbol) {
+        console.log(
+          `🔷 ${symbol} ${timeframe} CVD Surge rejected: ${metric.toFixed(2)}${useValueMode ? "" : "%"} is below the ${threshold}${useValueMode ? "" : "%"} threshold`
+        );
+      }
+      return null;
+    }
+
+    const side = delta >= 0 ? "buy-dominant" : "sell-dominant";
+    if (direction === "increase" && delta <= 0) {
+      if (isDiagSymbol) {
+        console.log(
+          `🔷 ${symbol} ${timeframe} CVD Surge rejected: delta is sell-dominant but the alert asks for buy-dominant`
+        );
+      }
+      return null;
+    }
+    if (direction === "decrease" && delta >= 0) {
+      if (isDiagSymbol) {
+        console.log(
+          `🔷 ${symbol} ${timeframe} CVD Surge rejected: delta is buy-dominant but the alert asks for sell-dominant`
+        );
+      }
+      return null;
+    }
+
+    return {
+      type: "surge",
+      label: "CVD Surge",
+      delta,
+      deltaPct,
+      volume,
+      side,
+      threshold,
+      thresholdType: useValueMode ? "VALUE" : "PERCENTAGE",
+    };
+  }
+
+  // Candle direction and delta polarity disagreeing: price closed down while
+  // buyers were the aggressors, or closed up while sellers were. The floor stops
+  // a delta of near-zero on a doji from reading as absorption.
+  checkCvdAbsorption(candle, condition, symbol, timeframe, isDiagSymbol) {
+    const { open, close, delta, volume } = candle;
+    if (![open, close, delta, volume].every(isFinite) || volume <= 0) return null;
+
+    const MIN_ABSORPTION_PCT = 5; // delta must be >= 5% of the candle's volume
+
+    const wantBullish = condition.bullishAbsorption === true;
+    const wantBearish = condition.bearishAbsorption === true;
+    if (!wantBullish && !wantBearish) return null;
+
+    const deltaPct = (delta / volume) * 100;
+    const isRed = close < open;
+    const isGreen = close > open;
+
+    if (Math.abs(deltaPct) < MIN_ABSORPTION_PCT) {
+      if (isDiagSymbol) {
+        console.log(
+          `🔷 ${symbol} ${timeframe} CVD Absorption rejected: delta is only ${deltaPct.toFixed(2)}% of volume (needs ${MIN_ABSORPTION_PCT}%)`
+        );
+      }
+      return null;
+    }
+
+    // Red candle but buyers were the aggressors — someone is absorbing the sell-off
+    if (wantBullish && isRed && delta > 0) {
+      return {
+        type: "bullishAbsorption",
+        label: "Bullish Absorption",
+        isBearish: false,
+        candleColor: "red",
+        delta,
+        deltaPct,
+        volume,
+        open,
+        close,
+      };
+    }
+
+    // Green candle but sellers were the aggressors — someone is selling into strength
+    if (wantBearish && isGreen && delta < 0) {
+      return {
+        type: "bearishAbsorption",
+        label: "Bearish Absorption",
+        isBearish: true,
+        candleColor: "green",
+        delta,
+        deltaPct,
+        volume,
+        open,
+        close,
+      };
+    }
+
+    if (isDiagSymbol) {
+      console.log(
+        `🔷 ${symbol} ${timeframe} CVD Absorption rejected: ${isRed ? "red" : isGreen ? "green" : "flat"} candle with ${delta > 0 ? "positive" : "negative"} delta does not contradict`
+      );
+    }
+    return null;
+  }
+
+  // Price vs the cumulative delta line, run through the same shape of gates the
+  // RSI divergence uses — bar-gap window, ATR-normalised price move, and a
+  // trendline that no intermediate bar may pierce on either series.
+  //
+  // CVD is unbounded and its scale is entirely coin-specific, so there is no
+  // fixed oversold/overbought zone and no fixed "points" threshold to apply.
+  // Both are normalised against the average absolute per-candle delta, which is
+  // CVD's own equivalent of ATR.
+  checkCvdDivergence(ctx) {
+    const {
+      condition, symbol, timeframe,
+      closes, opens, highs, lows, cvd, deltas, openTimes,
+      lastIndex, CONFIRM_BARS, isDiagSymbol,
+    } = ctx;
+
+    if (!condition.bullish && !condition.bullishHidden && !condition.bearish && !condition.bearishHidden) {
+      return null;
+    }
+
+    const LB_LEFT = 5;
+    const LB_RIGHT_ANCHOR = 5;
+    const RANGE_LOWER = 14;
+    const RANGE_UPPER = 90;
+
+    const MIN_CVD_DIFF_CANDLES = 1.0; // pivots must differ by >= 1 typical candle of delta
+    const MIN_MOVE_ATR = 0.5;
+    const FALLBACK_PRICE_DIFF_PCT = 0.3;
+    const ABSOLUTE_MIN_PRICE_PCT = 0.05;
+    const MIN_STRENGTH = 1.0; // normalised CVD diff x price move
+    const LINE_PRICE_TOL = 0.0002;
+    const LINE_CVD_TOL_CANDLES = 0.5; // in units of avg |delta|
+
+    // CVD's yardstick: how big a typical candle's delta is on this pair.
+    let avgAbsDelta = 0;
+    let counted = 0;
+    for (let i = Math.max(0, lastIndex - 99); i <= lastIndex; i++) {
+      if (isFinite(deltas[i])) {
+        avgAbsDelta += Math.abs(deltas[i]);
+        counted++;
+      }
+    }
+    avgAbsDelta = counted > 0 ? avgAbsDelta / counted : 0;
+    if (avgAbsDelta <= 0) {
+      if (isDiagSymbol) {
+        console.log(`🔷 ${symbol} ${timeframe} CVD Divergence rejected: no usable volume delta on this pair`);
+      }
+      return null;
+    }
+    const lineCvdTol = LINE_CVD_TOL_CANDLES * avgAbsDelta;
+
+    // Price ATR%, same 14-bar true-range average the RSI divergence uses.
+    const ATR_BARS = 14;
+    let atrPct = null;
+    if (lastIndex >= ATR_BARS) {
+      let sum = 0;
+      let usable = true;
+      for (let i = lastIndex - ATR_BARS + 1; i <= lastIndex; i++) {
+        const prevClose = closes[i - 1];
+        if (!isFinite(highs[i]) || !isFinite(lows[i]) || !isFinite(prevClose) || !closes[i]) {
+          usable = false;
+          break;
+        }
+        sum += Math.max(
+          highs[i] - lows[i],
+          Math.abs(highs[i] - prevClose),
+          Math.abs(lows[i] - prevClose)
+        ) / closes[i];
+      }
+      if (usable) atrPct = (sum / ATR_BARS) * 100;
+    }
+
+    const evaluate = (pivotsAnchor, priceSeries, checks, isBearishSide) => {
+      if (!pivotsAnchor.length) return null;
+
+      const p1 = {
+        index: lastIndex,
+        price: priceSeries[lastIndex],
+        cvd: cvd[lastIndex],
+      };
+      if (!isFinite(p1.price) || !isFinite(p1.cvd)) return null;
+
+      // Independent trigger: the bar after the signal has to close in the
+      // confirming colour — green under a bullish call, red under a bearish one.
+      if (CONFIRM_BARS > 0) {
+        const confirmOpen = opens[lastIndex + 1];
+        const confirmClose = closes[lastIndex + 1];
+        if (!isFinite(confirmOpen) || !isFinite(confirmClose)) return null;
+        const held = isBearishSide ? confirmClose < confirmOpen : confirmClose > confirmOpen;
+        if (!held) {
+          if (isDiagSymbol) {
+            console.log(
+              `🔷 ${symbol} ${timeframe} CVD Divergence rejected: confirmation candle did not close ${isBearishSide ? "Red" : "Green"} (open ${confirmOpen}, close ${confirmClose})`
+            );
+          }
+          return null;
+        }
+      }
+
+      for (let j = pivotsAnchor.length - 1; j >= 0; j--) {
+        const anchorPivot = pivotsAnchor[j];
+        if (anchorPivot.index >= p1.index) continue;
+
+        const barsBetween = p1.index - anchorPivot.index;
+        if (barsBetween < RANGE_LOWER) continue;
+        if (barsBetween > RANGE_UPPER) break;
+
+        const p2 = {
+          index: anchorPivot.index,
+          price: priceSeries[anchorPivot.index],
+          cvd: anchorPivot.value,
+        };
+        if (!isFinite(p2.price) || !isFinite(p2.cvd)) continue;
+
+        const cvdDiffCandles = Math.abs(p1.cvd - p2.cvd) / avgAbsDelta;
+        const priceDiffPct = p2.price !== 0 ? Math.abs((p1.price - p2.price) / p2.price) * 100 : 0;
+        const hasAtr = atrPct !== null && atrPct > 0;
+        const move = hasAtr ? priceDiffPct / atrPct : priceDiffPct;
+        const minMove = hasAtr ? MIN_MOVE_ATR : FALLBACK_PRICE_DIFF_PCT;
+
+        if (priceDiffPct < ABSOLUTE_MIN_PRICE_PCT) {
+          if (isDiagSymbol) {
+            console.log(
+              `🔷 ${symbol} ${timeframe} CVD Divergence rejected (gap ${barsBetween}b): price diff ${priceDiffPct.toFixed(4)}% is below the ${ABSOLUTE_MIN_PRICE_PCT}% floor`
+            );
+          }
+          continue;
+        }
+        if (cvdDiffCandles < MIN_CVD_DIFF_CANDLES) {
+          if (isDiagSymbol) {
+            console.log(
+              `🔷 ${symbol} ${timeframe} CVD Divergence rejected (gap ${barsBetween}b): CVD legs differ by only ${cvdDiffCandles.toFixed(2)} typical candles (needs ${MIN_CVD_DIFF_CANDLES})`
+            );
+          }
+          continue;
+        }
+        if (move < minMove) {
+          if (isDiagSymbol) {
+            console.log(
+              `🔷 ${symbol} ${timeframe} CVD Divergence rejected (gap ${barsBetween}b): price moved ${move.toFixed(2)}${hasAtr ? " ATR" : "%"}, needed ${minMove}`
+            );
+          }
+          continue;
+        }
+        if (cvdDiffCandles * move < MIN_STRENGTH) {
+          if (isDiagSymbol) {
+            console.log(
+              `🔷 ${symbol} ${timeframe} CVD Divergence rejected (gap ${barsBetween}b): strength ${(cvdDiffCandles * move).toFixed(2)} is below the required ${MIN_STRENGTH}`
+            );
+          }
+          continue;
+        }
+
+        // Both lines have to survive every bar in between, or the divergence is
+        // not something a trader could actually draw on the chart.
+        const span = p1.index - p2.index;
+        let lineIntact = true;
+        for (let i = p2.index + 1; i < p1.index; i++) {
+          const f = (i - p2.index) / span;
+          const priceLine = p2.price + (p1.price - p2.price) * f;
+          const cvdLine = p2.cvd + (p1.cvd - p2.cvd) * f;
+          const barPrice = priceSeries[i];
+          const barCvd = cvd[i];
+          if (!isFinite(barPrice) || !isFinite(barCvd)) continue;
+
+          if (isBearishSide) {
+            if (barPrice > priceLine * (1 + LINE_PRICE_TOL) || barCvd > cvdLine + lineCvdTol) {
+              lineIntact = false;
+              break;
+            }
+          } else {
+            if (barPrice < priceLine * (1 - LINE_PRICE_TOL) || barCvd < cvdLine - lineCvdTol) {
+              lineIntact = false;
+              break;
+            }
+          }
+        }
+        if (!lineIntact) {
+          if (isDiagSymbol) {
+            console.log(
+              `🔷 ${symbol} ${timeframe} CVD Divergence rejected (gap ${barsBetween}b): trendline broken by an intermediate candle`
+            );
+          }
+          continue;
+        }
+
+        for (const check of checks) {
+          if (!check.enabled) continue;
+          if (!check.test(p1.price, p2.price, p1.cvd, p2.cvd)) continue;
+
+          return {
+            type: check.type,
+            isBearish: check.isBearish,
+            label: check.label,
+            barsBetween,
+            cvdDiffCandles,
+            priceMoveAtr: move,
+            pivot1: { price: p1.price, cvd: p1.cvd, time: openTimes[p1.index] || null },
+            pivot2: { price: p2.price, cvd: p2.cvd, time: openTimes[p2.index] || null },
+          };
+        }
+      }
+      return null;
+    };
+
+    let hit = null;
+
+    // Bullish → swing LOWS on the CVD line, price read at the candle low
+    if (condition.bullish || condition.bullishHidden) {
+      hit = evaluate(
+        this.findSwings(cvd, "low", LB_LEFT, LB_RIGHT_ANCHOR),
+        lows,
+        [
+          {
+            enabled: condition.bullish,
+            type: "bullish",
+            isBearish: false,
+            label: "Regular Bullish CVD Divergence",
+            // Price Lower Low + CVD Higher Low — selling pressure is drying up
+            test: (price1, price2, c1, c2) => price1 < price2 && c1 > c2,
+          },
+          {
+            enabled: condition.bullishHidden,
+            type: "bullishHidden",
+            isBearish: false,
+            label: "Hidden Bullish CVD Divergence",
+            // Price Higher Low + CVD Lower Low
+            test: (price1, price2, c1, c2) => price1 > price2 && c1 < c2,
+          },
+        ],
+        false
+      );
+    }
+
+    // Bearish → swing HIGHS on the CVD line, price read at the candle high
+    if (!hit && (condition.bearish || condition.bearishHidden)) {
+      hit = evaluate(
+        this.findSwings(cvd, "high", LB_LEFT, LB_RIGHT_ANCHOR),
+        highs,
+        [
+          {
+            enabled: condition.bearish,
+            type: "bearish",
+            isBearish: true,
+            label: "Regular Bearish CVD Divergence",
+            // Price Higher High + CVD Lower High — the rally is running on less buying
+            test: (price1, price2, c1, c2) => price1 > price2 && c1 < c2,
+          },
+          {
+            enabled: condition.bearishHidden,
+            type: "bearishHidden",
+            isBearish: true,
+            label: "Hidden Bearish CVD Divergence",
+            // Price Lower High + CVD Higher High
+            test: (price1, price2, c1, c2) => price1 < price2 && c1 > c2,
+          },
+        ],
+        true
+      );
+    }
+
+    return hit;
   }
 
   async evaluateRSIConditions(rsiConditions, priceData, symbol = null) {

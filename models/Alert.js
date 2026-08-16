@@ -127,6 +127,45 @@ const alertSchema = new mongoose.Schema(
           default: "increase",
         },
       },
+      // Cumulative Volume Delta. Same nesting rule as oiChange above — "type"
+      // has to be declared as a sub-object or Mongoose reads it as this field's
+      // own type. Every key the UI can send must be declared here: strict mode
+      // silently drops anything undeclared on save, which is exactly how the
+      // oiChange condition went missing before.
+      cvd: {
+        timeframes: [String],
+        mode: {
+          type: String,
+          enum: ["surge", "absorption", "divergence"],
+          default: "surge",
+        },
+        resetAnchor: {
+          type: String,
+          enum: ["daily", "weekly", "rolling"],
+          default: "daily",
+        },
+        // Surge
+        type: {
+          type: String,
+          enum: ["PERCENTAGE", "VALUE"],
+          default: "PERCENTAGE",
+        },
+        value: { type: String },
+        direction: {
+          type: String,
+          enum: ["increase", "decrease", "both"],
+          default: "increase",
+        },
+        // Absorption
+        bullishAbsorption: { type: Boolean, default: false },
+        bearishAbsorption: { type: Boolean, default: false },
+        // Divergence
+        bullish: { type: Boolean, default: false },
+        bullishHidden: { type: Boolean, default: false },
+        bearish: { type: Boolean, default: false },
+        bearishHidden: { type: Boolean, default: false },
+        condition: { type: String, default: "previous" },
+      },
     },
     status: {
       type: String,

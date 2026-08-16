@@ -399,6 +399,32 @@ const FilterSidebar = forwardRef(
       const hasRsiDivergence = rsiDivHasTimeframe && rsiDivHasType;
       const hasOiChange = filters.oiChange && Object.values(filters.oiChange).some((value) => value === true) && filters.oiChange.value;
 
+      // CVD needs a timeframe plus whatever its selected mode requires: a
+      // threshold for Surge, at least one box ticked for the other two.
+      const cvdNonTimeframeKeys = [
+        "mode", "resetAnchor", "type", "value", "direction", "condition",
+        "bullishAbsorption", "bearishAbsorption",
+        "bullish", "bullishHidden", "bearish", "bearishHidden",
+      ];
+      const cvdHasTimeframe =
+        filters.cvd &&
+        Object.keys(filters.cvd).some(
+          (key) => !cvdNonTimeframeKeys.includes(key) && filters.cvd[key] === true
+        );
+      const cvdMode = filters.cvd?.mode || "surge";
+      const cvdHasSetup =
+        cvdMode === "surge"
+          ? !!filters.cvd?.value
+          : cvdMode === "absorption"
+            ? !!(filters.cvd?.bullishAbsorption || filters.cvd?.bearishAbsorption)
+            : !!(
+              filters.cvd?.bullish ||
+              filters.cvd?.bullishHidden ||
+              filters.cvd?.bearish ||
+              filters.cvd?.bearishHidden
+            );
+      const hasCvd = cvdHasTimeframe && cvdHasSetup;
+
       // Validation 1: Min Daily is always required
       if (!hasMinDaily) {
         setErrorMessage("Please set: Daily min Volume");
@@ -407,8 +433,8 @@ const FilterSidebar = forwardRef(
       }
 
       // Validation 2: At least one other condition must be set
-      if (!hasChangePercent && !hasAlertCount && !hasCandle && !hasRsiRange && !hasMacd && !hasVolume && !hasVolumeEma && !hasRsiDivergence && !hasOiChange) {
-        setErrorMessage("Please set at least one condition (Price Change, RSI, RSI Divergence, etc.)");
+      if (!hasChangePercent && !hasAlertCount && !hasCandle && !hasRsiRange && !hasMacd && !hasVolume && !hasVolumeEma && !hasRsiDivergence && !hasOiChange && !hasCvd) {
+        setErrorMessage("Please set at least one condition (Price Change, RSI, RSI Divergence, CVD, etc.)");
         setIsCreating(false);
         return;
       }
@@ -565,6 +591,34 @@ const FilterSidebar = forwardRef(
             value: filters.oiChange.value,
             direction: filters.oiChange.direction || "increase",
           };
+        }
+
+        if (hasCvd) {
+          const cvdTimeframes = Object.keys(filters.cvd).filter(
+            (key) => !cvdNonTimeframeKeys.includes(key) && filters.cvd[key] === true
+          );
+          // Only send the fields the chosen mode actually uses, so an unrelated
+          // leftover from a mode the user tried and switched away from cannot
+          // reach the engine.
+          alertConditions.cvd = {
+            timeframes: cvdTimeframes,
+            mode: cvdMode,
+            resetAnchor: filters.cvd.resetAnchor || "daily",
+          };
+          if (cvdMode === "surge") {
+            alertConditions.cvd.type = filters.cvd.type || "PERCENTAGE";
+            alertConditions.cvd.value = filters.cvd.value;
+            alertConditions.cvd.direction = filters.cvd.direction || "increase";
+          } else if (cvdMode === "absorption") {
+            alertConditions.cvd.bullishAbsorption = filters.cvd.bullishAbsorption || false;
+            alertConditions.cvd.bearishAbsorption = filters.cvd.bearishAbsorption || false;
+          } else {
+            alertConditions.cvd.bullish = filters.cvd.bullish || false;
+            alertConditions.cvd.bullishHidden = filters.cvd.bullishHidden || false;
+            alertConditions.cvd.bearish = filters.cvd.bearish || false;
+            alertConditions.cvd.bearishHidden = filters.cvd.bearishHidden || false;
+            alertConditions.cvd.condition = filters.cvd.condition || "previous";
+          }
         }
 
         // Remove undefined conditions

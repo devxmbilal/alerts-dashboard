@@ -74,11 +74,12 @@ export async function POST(request) {
     const hasOpenInterest = conditions.openInterest?.timeframes?.length > 0;
     const hasOiChange = conditions.oiChange?.timeframes?.length > 0;
     const hasRSIDivergence = conditions.rsiDivergence?.timeframes?.length > 0;
+    const hasCvd = conditions.cvd?.timeframes?.length > 0;
 
-    if (!hasChangePercent && !hasMACD && !hasVolume && !hasRSI && !hasCandle && !hasAlertCount && !hasOpenInterest && !hasOiChange && !hasRSIDivergence) {
+    if (!hasChangePercent && !hasMACD && !hasVolume && !hasRSI && !hasCandle && !hasAlertCount && !hasOpenInterest && !hasOiChange && !hasRSIDivergence && !hasCvd) {
       return NextResponse.json(
         {
-          error: "At least one filter condition (Price Change, MACD, Volume, RSI, RSI Divergence, OI Change, etc.) is required along with Daily min Volume",
+          error: "At least one filter condition (Price Change, MACD, Volume, RSI, RSI Divergence, OI Change, CVD, etc.) is required along with Daily min Volume",
         },
         { status: 400 }
       );
