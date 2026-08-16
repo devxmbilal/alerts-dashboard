@@ -1402,9 +1402,26 @@ class RealTimeAlertProcessor {
         })
       );
 
-      // Strict AND pipeline: every active condition — Min Daily, Divergence, OI
-      // Change, RSI Range, Candle, Volume, MACD, Volume EMA — must independently
-      // pass. Nothing here is allowed to short-circuit another selected filter.
+      // AND pipeline with one deliberate exception. Every active condition — Min
+      // Daily, Divergence, OI Change, RSI Range, Candle, Volume, MACD, Volume EMA
+      // — normally has to pass on its own. The exception is Independent-Trigger
+      // divergence, which the client specified as a supreme override: once it
+      // confirms, it fires the alert and every other selected filter is skipped.
+      // A veto still wins over the override, so the Conditional safety shield
+      // cannot be bypassed by it.
+      const vetoed = conditionResults.find((r) => !r.passed && r.blocking);
+      if (vetoed) {
+        return false;
+      }
+
+      const override = conditionResults.find((r) => r.passed && r.bypassOthers);
+      if (override) {
+        console.log(
+          `⚡ ${alert.symbol}: ${override.reason} — remaining ${activeConditions.length - 1} filter(s) skipped`
+        );
+        return true;
+      }
+
       // Check if all conditions passed
       for (let i = 0; i < conditionResults.length; i++) {
         const result = conditionResults[i];
@@ -1846,6 +1863,44 @@ class RealTimeAlertProcessor {
             conditions.rsiDivergence.condition
           );
 
+          // Conditional is a safety shield, not a trigger. It looks for a bearish
+          // divergence (regular or hidden) on the candle still forming, and if it
+          // finds one it vetoes the alert no matter what every other filter says.
+          // Finding nothing is a pass, so the remaining conditions decide on their
+          // own — which also means Conditional on its own can never fire an alert,
+          // it only ever takes one away.
+          if (triggerMode === "conditional") {
+            const shieldMatch = await this.evaluateRSIDivergence(
+              {
+                ...conditions.rsiDivergence,
+                bullish: false,
+                bullishHidden: false,
+                bearish: true,
+                bearishHidden: true,
+              },
+              alert.symbol,
+              14,
+              "conditional"
+            );
+
+            if (shieldMatch?.found) {
+              console.log(
+                `🛡️ ${alert.symbol} BLOCKED by Conditional shield — ${shieldMatch.label} on ${shieldMatch.timeframe}`
+              );
+              return {
+                passed: false,
+                // A veto, not an ordinary failure: no override may skip past it.
+                blocking: true,
+                reason: `Blocked: ${shieldMatch.label} on the current ${shieldMatch.timeframe} candle`,
+              };
+            }
+
+            return {
+              passed: true,
+              reason: "Safety shield clear — no bearish divergence on the current candle",
+            };
+          }
+
           const divMatch = await this.evaluateRSIDivergence(
             conditions.rsiDivergence,
             alert.symbol,
@@ -1897,11 +1952,21 @@ class RealTimeAlertProcessor {
             };
           }
 
-          // Every mode fires on the divergence alone; they differ only in which
-          // candle was measured, which evaluateRSIDivergence has already applied.
-          // Falls through to the normal all-conditions-must-pass check below, so
-          // any other filter selected alongside Divergence (OI Change, RSI Range,
-          // Candle, ...) still has to pass in its own right.
+          // Independent is a supreme override: once the confirmation candle closes
+          // in the right colour, the divergence alone fires the alert and every
+          // other selected filter — Min Daily included — is skipped. Previous
+          // still falls through to the normal all-conditions-must-pass check.
+          if (triggerMode === "independent") {
+            console.log(
+              `⚡ ${alert.symbol} Independent Divergence override — ${divMatch.label} on ${divMatch.timeframe}, bypassing all other filters`
+            );
+            return {
+              passed: true,
+              bypassOthers: true,
+              reason: `RSI Divergence (${divMatch.type}) — Independent trigger, other filters bypassed`,
+            };
+          }
+
           return {
             passed: true,
             reason: `RSI Divergence (${divMatch.type}) — ${triggerMode} trigger`,

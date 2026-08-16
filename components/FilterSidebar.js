@@ -1499,8 +1499,9 @@ const FilterSidebar = forwardRef(
                           Independent Trigger
                         </Typography>
                         <Typography variant="caption" sx={{ display: "block", mb: 1.5 }}>
-                          Independent: Wait for the next candle to close Green (for
-                          Bullish) or Red (for Bearish).
+                          Bypass Mode: If any selected divergence forms, the alert fires
+                          immediately, completely bypassing and ignoring any other filters
+                          you have set.
                         </Typography>
                         <Typography variant="body2" sx={{ fontWeight: "bold", mb: 0.5 }}>
                           Previous Candle
@@ -1513,8 +1514,9 @@ const FilterSidebar = forwardRef(
                           Conditional Trigger
                         </Typography>
                         <Typography variant="caption" sx={{ display: "block" }}>
-                          Alerts trigger in real-time on the current active candle before
-                          it closes.
+                          Safety Shield: If a Bearish Divergence is detected on the current
+                          candle, it blocks the alert from firing, saving you from bad
+                          trades, even if other conditions are met.
                         </Typography>
                       </Box>
                     }
