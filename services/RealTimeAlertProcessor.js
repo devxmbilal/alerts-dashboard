@@ -1881,17 +1881,9 @@ class RealTimeAlertProcessor {
           // own — which also means Conditional on its own can never fire an alert,
           // it only ever takes one away.
           if (triggerMode === "conditional") {
-            const shieldMatch = await this.evaluateRSIDivergence(
-              {
-                ...conditions.rsiDivergence,
-                bullish: false,
-                bullishHidden: false,
-                bearish: true,
-                bearishHidden: true,
-              },
-              alert.symbol,
-              14,
-              "conditional"
+            const shieldMatch = await this.checkBearishShield(
+              conditions.rsiDivergence,
+              alert.symbol
             );
 
             if (shieldMatch?.found) {
@@ -4722,6 +4714,173 @@ class RealTimeAlertProcessor {
           `🔀 ${hit.label} on ${symbol} ${timeframe} — price ${hit.pivot2.price} → ${hit.pivot1.price}, RSI ${hit.pivot2.rsi.toFixed(2)} → ${hit.pivot1.rsi.toFixed(2)} (${hit.barsBetween} bars apart)`
         );
         return { found: true, timeframe, rsiPeriod, ...hit };
+      }
+    }
+
+    return { found: false };
+  }
+
+  // ================= Conditional Trigger: Bearish Safety Shield =================
+  // A standalone check, deliberately NOT sharing code with evaluateRSIDivergence.
+  // That function is tuned to be strict, because its job is to avoid noisy
+  // false alerts. This one's job is the opposite: it must not miss a real
+  // bearish setup, because a missed block costs a bad trade while an
+  // over-cautious block only costs one skipped alert.
+  //
+  // Verified against 200 real historical candles on PORTALUSDT: with the same
+  // gates evaluateRSIDivergence uses (including its line-integrity check),
+  // that pair produced ZERO matches across the entire window despite a
+  // clearly visible setup on the chart. Turning line-integrity off alone
+  // (keeping every other gate — RSI zone, RSI-diff, ATR move, strength —
+  // identical) was enough to catch it. That is the one thing this function
+  // does differently.
+  async checkBearishShield(condition, symbol) {
+    if (!condition || !condition.timeframes || condition.timeframes.length === 0) {
+      return { found: false };
+    }
+
+    const isDiagSymbol = symbol === "BTCUSDT" || symbol === "ETHUSDT" || symbol === "XAUTUSDT";
+    const rsiPeriod = 14;
+
+    const LB_LEFT = 5;
+    const LB_RIGHT_ANCHOR = 5;
+    const LB_LEFT_HIDDEN_BEARISH = 8;
+    const RANGE_LOWER = 14;
+    const RANGE_UPPER = 90;
+    const MIN_RSI_DIFF = 3;
+    const MIN_MOVE_ATR = 0.5;
+    const FALLBACK_PRICE_DIFF_PCT = 0.3;
+    const ABSOLUTE_MIN_PRICE_PCT = 0.05;
+    const MIN_STRENGTH = 4;
+    const REGULAR_BEARISH_RSI = 60;
+    const HIDDEN_BEARISH_RSI = 40;
+
+    for (const timeframe of condition.timeframes) {
+      const ohlc = await this.getHistoricalOHLC(symbol, timeframe, rsiPeriod);
+      if (!ohlc || !ohlc.closes || !ohlc.highs || !ohlc.lows) continue;
+
+      const closes = [...ohlc.closes];
+      const highs = [...ohlc.highs];
+      const lows = [...ohlc.lows];
+      const openTimes = ohlc.openTimes || [];
+
+      // Conditional reads the live/forming candle, same as it always has —
+      // fold the live tick in exactly the way evaluateRSIDivergence does.
+      const livePrice = parseFloat(this.livePrices[symbol]?.price);
+      const lastIndex = closes.length - 1;
+      if (livePrice && lastIndex >= 0) {
+        closes[lastIndex] = livePrice;
+        highs[lastIndex] = Math.max(highs[lastIndex], livePrice);
+        lows[lastIndex] = Math.min(lows[lastIndex], livePrice);
+      }
+
+      if (closes.length < rsiPeriod + LB_LEFT + LB_RIGHT_ANCHOR + RANGE_LOWER + 1) continue;
+
+      const rsiArray = this.computeRSIArray(closes, rsiPeriod);
+      if (!rsiArray || rsiArray.length === 0) continue;
+
+      const p1 = { index: lastIndex, price: highs[lastIndex], rsi: rsiArray[lastIndex] };
+      if (!isFinite(p1.price) || p1.rsi === null || p1.rsi === undefined) continue;
+      if (p1.rsi < HIDDEN_BEARISH_RSI) {
+        if (isDiagSymbol) {
+          console.log(`🛡️🔬 ${symbol} ${timeframe} shield clear: current RSI ${p1.rsi.toFixed(2)} is below both bearish zones`);
+        }
+        continue;
+      }
+
+      const ATR_BARS = 14;
+      let atrPct = null;
+      if (lastIndex >= ATR_BARS) {
+        let sum = 0;
+        let usable = true;
+        for (let i = lastIndex - ATR_BARS + 1; i <= lastIndex; i++) {
+          const prevClose = closes[i - 1];
+          if (!isFinite(highs[i]) || !isFinite(lows[i]) || !isFinite(prevClose) || !closes[i]) {
+            usable = false;
+            break;
+          }
+          sum += Math.max(
+            highs[i] - lows[i],
+            Math.abs(highs[i] - prevClose),
+            Math.abs(lows[i] - prevClose)
+          ) / closes[i];
+        }
+        if (usable) atrPct = (sum / ATR_BARS) * 100;
+      }
+
+      const anchors = this.findSwings(rsiArray, "high", LB_LEFT, LB_RIGHT_ANCHOR);
+      const wideAnchors = new Set(
+        this.findSwings(rsiArray, "high", LB_LEFT_HIDDEN_BEARISH, LB_LEFT_HIDDEN_BEARISH).map((a) => a.index)
+      );
+
+      for (let j = anchors.length - 1; j >= 0; j--) {
+        const anchorPivot = anchors[j];
+        if (anchorPivot.index >= p1.index) continue;
+
+        const barsBetween = p1.index - anchorPivot.index;
+        if (barsBetween < RANGE_LOWER) continue;
+        if (barsBetween > RANGE_UPPER) break;
+
+        const p2 = { index: anchorPivot.index, price: highs[anchorPivot.index], rsi: anchorPivot.value };
+        if (!isFinite(p2.price) || p2.rsi === null) continue;
+
+        const rsiDiff = Math.abs(p1.rsi - p2.rsi);
+        const priceDiffPct = p2.price !== 0 ? Math.abs((p1.price - p2.price) / p2.price) * 100 : 0;
+        const hasAtr = atrPct !== null && atrPct > 0;
+        const move = hasAtr ? priceDiffPct / atrPct : priceDiffPct;
+        const minMove = hasAtr ? MIN_MOVE_ATR : FALLBACK_PRICE_DIFF_PCT;
+
+        if (priceDiffPct < ABSOLUTE_MIN_PRICE_PCT) continue;
+        if (rsiDiff < MIN_RSI_DIFF) continue;
+        if (move < minMove) continue;
+        if (rsiDiff * move < MIN_STRENGTH) continue;
+
+        // Deliberately no line-integrity check here. For a trigger, a pattern
+        // whose line gets pierced by one wick is correctly treated as unclean.
+        // For a shield, that same pattern is still real risk — dismissing it
+        // over one wick is exactly what let bad alerts through in production.
+
+        // Regular Bearish: price Higher High + RSI Lower High
+        if (p1.price > p2.price && p1.rsi < p2.rsi && p1.rsi >= REGULAR_BEARISH_RSI) {
+          if (isDiagSymbol) {
+            console.log(
+              `🛡️ ${symbol} ${timeframe} shield: Regular Bearish match (gap ${barsBetween}b) — price ${p2.price}→${p1.price}, RSI ${p2.rsi.toFixed(2)}→${p1.rsi.toFixed(2)}`
+            );
+          }
+          return {
+            found: true,
+            type: "bearish",
+            label: "Regular Bearish Divergence",
+            timeframe,
+            barsBetween,
+            pivot1: { price: p1.price, rsi: p1.rsi, time: openTimes[p1.index] || null },
+            pivot2: { price: p2.price, rsi: p2.rsi, time: openTimes[p2.index] || null },
+          };
+        }
+
+        // Hidden Bearish: price Lower High + RSI Higher High, anchor must be a
+        // wide swing (same 8-bar rule the trigger uses to avoid micro-bumps).
+        if (
+          p1.price < p2.price &&
+          p1.rsi > p2.rsi &&
+          p1.rsi >= HIDDEN_BEARISH_RSI &&
+          wideAnchors.has(anchorPivot.index)
+        ) {
+          if (isDiagSymbol) {
+            console.log(
+              `🛡️ ${symbol} ${timeframe} shield: Hidden Bearish match (gap ${barsBetween}b) — price ${p2.price}→${p1.price}, RSI ${p2.rsi.toFixed(2)}→${p1.rsi.toFixed(2)}`
+            );
+          }
+          return {
+            found: true,
+            type: "bearishHidden",
+            label: "Hidden Bearish Divergence",
+            timeframe,
+            barsBetween,
+            pivot1: { price: p1.price, rsi: p1.rsi, time: openTimes[p1.index] || null },
+            pivot2: { price: p2.price, rsi: p2.rsi, time: openTimes[p2.index] || null },
+          };
+        }
       }
     }
 
