@@ -53,7 +53,16 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
       targetValue:
         alertData.targetValue ||
         alertData.conditions?.changePercent?.percentage,
-      actualValue: alertData.actualValue || alertData.triggeredChange,
+      // A real 0% change (baseline just reset to the current price, e.g. right
+      // after an Independent divergence fire) is a legitimate number, not a
+      // missing one -- || treats 0 as falsy and was substituting the 24h
+      // change in its place, which is why "Actual Change (5MIN)" kept matching
+      // "24h Change" exactly on alerts where the two have nothing to do with
+      // each other.
+      actualValue:
+        typeof alertData.actualValue === "number" && !isNaN(alertData.actualValue)
+          ? alertData.actualValue
+          : alertData.triggeredChange,
       timeframe:
         alertData.timeframe ||
         alertData.conditions?.changePercent?.timeframe ||
@@ -281,7 +290,13 @@ const RealTimeNotifications = ({ token, onAlertTrigger }) => {
           id: alert._id,
           symbol: alert.symbol,
           targetValue: alert.alertConditions?.changePercent?.percentage,
-          actualValue: alert.triggerData?.priceChangePercent,
+          // This was reading triggerData.priceChangePercent -- the 24h ticker
+          // change -- instead of the actual 5-min-vs-baseline move the alert
+          // fired on. baselineData.changeFromBaselinePercent (already computed
+          // correctly server-side, see triggerAlertWithLiveData) is the real
+          // "Actual Change (5MIN)" value; the panel was just reading the wrong
+          // field, on every historical alert, not only when it happened to be 0.
+          actualValue: alert.baselineData?.changeFromBaselinePercent,
           timeframe: alert.alertConditions?.changePercent?.timeframe || "5MIN",
           direction:
             alert.alertConditions?.changePercent?.direction || "increase",
