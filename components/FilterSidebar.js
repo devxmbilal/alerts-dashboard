@@ -123,6 +123,8 @@ const CustomTextField = styled(TextField)(({ theme }) => ({
 
 // TradingView CEX-Screener style dropdown for timeframe selection (checkbox list in a popover)
 const TimeframeDropdown = ({ options, selected, onToggle, placeholder = "Select timeframe(s)" }) => {
+  const theme = useTheme();
+  const isDark = theme.palette.mode === "dark";
   const [anchorEl, setAnchorEl] = useState(null);
   const open = Boolean(anchorEl);
 
@@ -132,7 +134,7 @@ const TimeframeDropdown = ({ options, selected, onToggle, placeholder = "Select 
       ? placeholder
       : selectedLabels.length <= 2
       ? selectedLabels.join(", ")
-      : `${selectedLabels.length} timeframes selected`;
+      : `${selectedLabels.length} selected`;
 
   return (
     <>
@@ -143,14 +145,14 @@ const TimeframeDropdown = ({ options, selected, onToggle, placeholder = "Select 
           alignItems: "center",
           justifyContent: "space-between",
           border: "1px solid",
-          borderColor: open ? "primary.main" : "#434651",
+          borderColor: open ? "primary.main" : isDark ? "#444" : "#ccc",
           borderRadius: "4px",
           px: 1.5,
           py: 1,
           cursor: "pointer",
-          backgroundColor: "#2a2e39",
+          backgroundColor: isDark ? "#2a2a2a" : "#f5f5f5",
           transition: "border-color 0.15s",
-          "&:hover": { borderColor: "#6b6f78" },
+          "&:hover": { borderColor: isDark ? "#666" : "#999" },
         }}
       >
         <Typography
@@ -181,8 +183,9 @@ const TimeframeDropdown = ({ options, selected, onToggle, placeholder = "Select 
         transformOrigin={{ vertical: "top", horizontal: "left" }}
         PaperProps={{
           sx: {
-            backgroundColor: "#1e222d",
-            border: "1px solid #363a45",
+            backgroundColor: isDark ? "#1e222d" : "#ffffff",
+            border: "1px solid",
+            borderColor: isDark ? "#363a45" : "#ddd",
             borderRadius: "6px",
             mt: 0.5,
             maxHeight: 320,
@@ -204,7 +207,11 @@ const TimeframeDropdown = ({ options, selected, onToggle, placeholder = "Select 
                 justifyContent: "space-between",
                 py: 0.9,
                 px: 1.5,
-                "&:hover": { backgroundColor: "rgba(255,255,255,0.06)" },
+                "&:hover": {
+                  backgroundColor: isDark
+                    ? "rgba(255,255,255,0.06)"
+                    : "rgba(0,0,0,0.04)",
+                },
               }}
             >
               <Typography
@@ -1444,64 +1451,25 @@ const FilterSidebar = forwardRef(
               <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
                 Divergence Types:
               </Typography>
-              <Grid container spacing={1} sx={{ mb: 2 }}>
-                <Grid item xs={12}>
-                  <FormControlLabel
-                    control={
-                      <CustomCheckbox
-                        checked={filters?.rsiDivergence?.bullish || false}
-                        onChange={(e) =>
-                          handleInputChange("rsiDivergence", "bullish", e.target.checked)
-                        }
-                      />
-                    }
-                    label="Bullish Divergence"
-                    sx={{ color: "text.primary" }}
-                  />
-                </Grid>
-                <Grid item xs={12}>
-                  <FormControlLabel
-                    control={
-                      <CustomCheckbox
-                        checked={filters?.rsiDivergence?.bullishHidden || false}
-                        onChange={(e) =>
-                          handleInputChange("rsiDivergence", "bullishHidden", e.target.checked)
-                        }
-                      />
-                    }
-                    label="Bullish Hidden Divergence"
-                    sx={{ color: "text.primary" }}
-                  />
-                </Grid>
-                <Grid item xs={12}>
-                  <FormControlLabel
-                    control={
-                      <CustomCheckbox
-                        checked={filters?.rsiDivergence?.bearish || false}
-                        onChange={(e) =>
-                          handleInputChange("rsiDivergence", "bearish", e.target.checked)
-                        }
-                      />
-                    }
-                    label="Bearish Divergence"
-                    sx={{ color: "text.primary" }}
-                  />
-                </Grid>
-                <Grid item xs={12}>
-                  <FormControlLabel
-                    control={
-                      <CustomCheckbox
-                        checked={filters?.rsiDivergence?.bearishHidden || false}
-                        onChange={(e) =>
-                          handleInputChange("rsiDivergence", "bearishHidden", e.target.checked)
-                        }
-                      />
-                    }
-                    label="Bearish Hidden Divergence"
-                    sx={{ color: "text.primary" }}
-                  />
-                </Grid>
-              </Grid>
+              <Box sx={{ mb: 2 }}>
+                <TimeframeDropdown
+                  options={[
+                    { value: "bullish", label: "Bullish Divergence" },
+                    { value: "bullishHidden", label: "Bullish Hidden Divergence" },
+                    { value: "bearish", label: "Bearish Divergence" },
+                    { value: "bearishHidden", label: "Bearish Hidden Divergence" },
+                  ]}
+                  selected={filters?.rsiDivergence}
+                  onToggle={(value) =>
+                    handleInputChange(
+                      "rsiDivergence",
+                      value,
+                      !filters?.rsiDivergence?.[value]
+                    )
+                  }
+                  placeholder="Select divergence type(s)"
+                />
+              </Box>
 
               {/* Divergence Condition: label + info tooltip, dropdown below */}
               <Box sx={{ mt: 2, mb: 1 }}>
@@ -1838,64 +1806,21 @@ const FilterSidebar = forwardRef(
                   <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
                     Divergence Types:
                   </Typography>
-                  <Grid container spacing={1} sx={{ mb: 2 }}>
-                    <Grid item xs={12}>
-                      <FormControlLabel
-                        control={
-                          <CustomCheckbox
-                            checked={filters?.cvd?.bullish || false}
-                            onChange={(e) =>
-                              handleInputChange("cvd", "bullish", e.target.checked)
-                            }
-                          />
-                        }
-                        label="Regular Bullish"
-                        sx={{ color: "text.primary" }}
-                      />
-                    </Grid>
-                    <Grid item xs={12}>
-                      <FormControlLabel
-                        control={
-                          <CustomCheckbox
-                            checked={filters?.cvd?.bullishHidden || false}
-                            onChange={(e) =>
-                              handleInputChange("cvd", "bullishHidden", e.target.checked)
-                            }
-                          />
-                        }
-                        label="Hidden Bullish"
-                        sx={{ color: "text.primary" }}
-                      />
-                    </Grid>
-                    <Grid item xs={12}>
-                      <FormControlLabel
-                        control={
-                          <CustomCheckbox
-                            checked={filters?.cvd?.bearish || false}
-                            onChange={(e) =>
-                              handleInputChange("cvd", "bearish", e.target.checked)
-                            }
-                          />
-                        }
-                        label="Regular Bearish"
-                        sx={{ color: "text.primary" }}
-                      />
-                    </Grid>
-                    <Grid item xs={12}>
-                      <FormControlLabel
-                        control={
-                          <CustomCheckbox
-                            checked={filters?.cvd?.bearishHidden || false}
-                            onChange={(e) =>
-                              handleInputChange("cvd", "bearishHidden", e.target.checked)
-                            }
-                          />
-                        }
-                        label="Hidden Bearish"
-                        sx={{ color: "text.primary" }}
-                      />
-                    </Grid>
-                  </Grid>
+                  <Box sx={{ mb: 2 }}>
+                    <TimeframeDropdown
+                      options={[
+                        { value: "bullish", label: "Regular Bullish" },
+                        { value: "bullishHidden", label: "Hidden Bullish" },
+                        { value: "bearish", label: "Regular Bearish" },
+                        { value: "bearishHidden", label: "Hidden Bearish" },
+                      ]}
+                      selected={filters?.cvd}
+                      onToggle={(value) =>
+                        handleInputChange("cvd", value, !filters?.cvd?.[value])
+                      }
+                      placeholder="Select divergence type(s)"
+                    />
+                  </Box>
 
                   <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
                     Trigger Mode:
