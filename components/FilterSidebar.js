@@ -43,6 +43,7 @@ import {
   Select,
   Radio,
   Tooltip,
+  Menu,
 } from "@mui/material";
 import { styled } from "@mui/material/styles";
 import CheckIcon from "@mui/icons-material/Check";
@@ -119,6 +120,112 @@ const CustomTextField = styled(TextField)(({ theme }) => ({
     color: theme.palette.text.primary,
   },
 }));
+
+// TradingView CEX-Screener style dropdown for timeframe selection (checkbox list in a popover)
+const TimeframeDropdown = ({ options, selected, onToggle, placeholder = "Select timeframe(s)" }) => {
+  const [anchorEl, setAnchorEl] = useState(null);
+  const open = Boolean(anchorEl);
+
+  const selectedLabels = options.filter((o) => selected?.[o.value]).map((o) => o.label);
+  const summary =
+    selectedLabels.length === 0
+      ? placeholder
+      : selectedLabels.length <= 2
+      ? selectedLabels.join(", ")
+      : `${selectedLabels.length} timeframes selected`;
+
+  return (
+    <>
+      <Box
+        onClick={(e) => setAnchorEl(e.currentTarget)}
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          border: "1px solid",
+          borderColor: open ? "primary.main" : "#434651",
+          borderRadius: "4px",
+          px: 1.5,
+          py: 1,
+          cursor: "pointer",
+          backgroundColor: "#2a2e39",
+          transition: "border-color 0.15s",
+          "&:hover": { borderColor: "#6b6f78" },
+        }}
+      >
+        <Typography
+          noWrap
+          sx={{
+            fontSize: "14px",
+            color: selectedLabels.length ? "text.primary" : "text.secondary",
+          }}
+        >
+          {summary}
+        </Typography>
+        <ExpandMoreIcon
+          sx={{
+            fontSize: 20,
+            color: "text.secondary",
+            flexShrink: 0,
+            ml: 0.5,
+            transform: open ? "rotate(180deg)" : "none",
+            transition: "transform 0.15s",
+          }}
+        />
+      </Box>
+      <Menu
+        anchorEl={anchorEl}
+        open={open}
+        onClose={() => setAnchorEl(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+        PaperProps={{
+          sx: {
+            backgroundColor: "#1e222d",
+            border: "1px solid #363a45",
+            borderRadius: "6px",
+            mt: 0.5,
+            maxHeight: 320,
+            width: anchorEl ? anchorEl.offsetWidth : undefined,
+            "& .MuiList-root": { py: 0.5 },
+          },
+        }}
+      >
+        {options.map((option) => {
+          const isChecked = selected?.[option.value] || false;
+          return (
+            <MenuItem
+              key={option.value}
+              onClick={() => onToggle(option.value)}
+              disableRipple
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                py: 0.9,
+                px: 1.5,
+                "&:hover": { backgroundColor: "rgba(255,255,255,0.06)" },
+              }}
+            >
+              <Typography
+                sx={{
+                  fontSize: "14px",
+                  color: isChecked ? "primary.main" : "text.primary",
+                  fontWeight: isChecked ? 600 : 400,
+                }}
+              >
+                {option.label}
+              </Typography>
+              {isChecked && (
+                <CheckIcon sx={{ fontSize: 18, color: "primary.main" }} />
+              )}
+            </MenuItem>
+          );
+        })}
+      </Menu>
+    </>
+  );
+};
 
 const FilterSidebar = forwardRef(
   ({ selectedSymbol, onCreateAlert, onAlertsCreated, onClose, exchange, setExchange }, ref) => {
@@ -1083,29 +1190,14 @@ const FilterSidebar = forwardRef(
               </Box>
             </AccordionSummary>
             <AccordionDetails>
-              <Grid container spacing={1} sx={{ mb: 2 }}>
-                {changePercentOptions.map((option) => (
-                  <Grid item xs={6} key={option.value}>
-                    <FormControlLabel
-                      control={
-                        <CustomCheckbox
-                          checked={filters.changePercent[option.value] || false}
-                          onChange={() =>
-                            handleCheckboxChange("changePercent", option.value)
-                          }
-                        />
-                      }
-                      label={option.label}
-                      sx={{
-                        color: "text.primary",
-                        "& .MuiFormControlLabel-label": {
-                          fontSize: "14px",
-                        },
-                      }}
-                    />
-                  </Grid>
-                ))}
-              </Grid>
+              <Box sx={{ mb: 2 }}>
+                <TimeframeDropdown
+                  options={changePercentOptions}
+                  selected={filters.changePercent}
+                  onToggle={(value) => handleCheckboxChange("changePercent", value)}
+                  placeholder="Select timeframe"
+                />
+              </Box>
               <CustomTextField
                 fullWidth
                 size="small"
@@ -1193,29 +1285,12 @@ const FilterSidebar = forwardRef(
               </Box>
             </AccordionSummary>
             <AccordionDetails>
-              <Grid container spacing={1}>
-                {alertCountOptions.map((option) => (
-                  <Grid item xs={6} key={option.value}>
-                    <FormControlLabel
-                      control={
-                        <CustomCheckbox
-                          checked={filters.alertCount[option.value] || false}
-                          onChange={() =>
-                            handleCheckboxChange("alertCount", option.value)
-                          }
-                        />
-                      }
-                      label={option.label}
-                      sx={{
-                        color: "text.primary",
-                        "& .MuiFormControlLabel-label": {
-                          fontSize: "14px",
-                        },
-                      }}
-                    />
-                  </Grid>
-                ))}
-              </Grid>
+              <TimeframeDropdown
+                options={alertCountOptions}
+                selected={filters.alertCount}
+                onToggle={(value) => handleCheckboxChange("alertCount", value)}
+                placeholder="Select timeframe"
+              />
             </AccordionDetails>
           </DarkAccordion>
 
@@ -1230,30 +1305,15 @@ const FilterSidebar = forwardRef(
               </Box>
             </AccordionSummary>
             <AccordionDetails>
-              {/* Time options in two rows */}
-              <Grid container spacing={1} sx={{ mb: 2 }}>
-                {candleTimeOptions.map((option) => (
-                  <Grid item xs={3} key={option.value}>
-                    <FormControlLabel
-                      control={
-                        <CustomCheckbox
-                          checked={filters.candle[option.value] || false}
-                          onChange={() =>
-                            handleCheckboxChange("candle", option.value)
-                          }
-                        />
-                      }
-                      label={option.label}
-                      sx={{
-                        color: "text.primary",
-                        "& .MuiFormControlLabel-label": {
-                          fontSize: "14px",
-                        },
-                      }}
-                    />
-                  </Grid>
-                ))}
-              </Grid>
+              {/* Timeframes */}
+              <Box sx={{ mb: 2 }}>
+                <TimeframeDropdown
+                  options={candleTimeOptions}
+                  selected={filters.candle}
+                  onToggle={(value) => handleCheckboxChange("candle", value)}
+                  placeholder="Select timeframe(s)"
+                />
+              </Box>
 
               {/* Condition dropdown */}
               <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
@@ -1291,30 +1351,15 @@ const FilterSidebar = forwardRef(
               </Box>
             </AccordionSummary>
             <AccordionDetails>
-              {/* Timeframe checkboxes */}
-              <Grid container spacing={1} sx={{ mb: 2 }}>
-                {rsiTimeframeOptions.map((option) => (
-                  <Grid item xs={4} key={option.value}>
-                    <FormControlLabel
-                      control={
-                        <CustomCheckbox
-                          checked={filters.rsiRange[option.value] || false}
-                          onChange={() =>
-                            handleCheckboxChange("rsiRange", option.value)
-                          }
-                        />
-                      }
-                      label={option.label}
-                      sx={{
-                        color: "text.primary",
-                        "& .MuiFormControlLabel-label": {
-                          fontSize: "14px",
-                        },
-                      }}
-                    />
-                  </Grid>
-                ))}
-              </Grid>
+              {/* Timeframes */}
+              <Box sx={{ mb: 2 }}>
+                <TimeframeDropdown
+                  options={rsiTimeframeOptions}
+                  selected={filters.rsiRange}
+                  onToggle={(value) => handleCheckboxChange("rsiRange", value)}
+                  placeholder="Select timeframe(s)"
+                />
+              </Box>
 
               {/* Input fields */}
               <Grid container spacing={1} sx={{ mb: 2 }}>
@@ -1385,30 +1430,15 @@ const FilterSidebar = forwardRef(
               </Box>
             </AccordionSummary>
             <AccordionDetails>
-              {/* Timeframe checkboxes */}
-              <Grid container spacing={1} sx={{ mb: 2 }}>
-                {rsiTimeframeOptions.map((option) => (
-                  <Grid item xs={4} key={option.value}>
-                    <FormControlLabel
-                      control={
-                        <CustomCheckbox
-                          checked={filters?.rsiDivergence?.[option.value] || false}
-                          onChange={() =>
-                            handleCheckboxChange("rsiDivergence", option.value)
-                          }
-                        />
-                      }
-                      label={option.label}
-                      sx={{
-                        color: "text.primary",
-                        "& .MuiFormControlLabel-label": {
-                          fontSize: "14px",
-                        },
-                      }}
-                    />
-                  </Grid>
-                ))}
-              </Grid>
+              {/* Timeframes */}
+              <Box sx={{ mb: 2 }}>
+                <TimeframeDropdown
+                  options={rsiTimeframeOptions}
+                  selected={filters?.rsiDivergence}
+                  onToggle={(value) => handleCheckboxChange("rsiDivergence", value)}
+                  placeholder="Select timeframe(s)"
+                />
+              </Box>
 
               {/* Divergence Type checkboxes */}
               <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
@@ -1546,29 +1576,14 @@ const FilterSidebar = forwardRef(
             </AccordionSummary>
             <AccordionDetails>
               {/* Timeframes */}
-              <Grid container spacing={1} sx={{ mb: 2 }}>
-                {oiTimeframeOptions.map((option) => (
-                  <Grid item xs={4} key={option.value}>
-                    <FormControlLabel
-                      control={
-                        <CustomCheckbox
-                          checked={filters?.oiChange?.[option.value] || false}
-                          onChange={() =>
-                            handleCheckboxChange("oiChange", option.value)
-                          }
-                        />
-                      }
-                      label={option.label}
-                      sx={{
-                        color: "text.primary",
-                        "& .MuiFormControlLabel-label": {
-                          fontSize: "14px",
-                        },
-                      }}
-                    />
-                  </Grid>
-                ))}
-              </Grid>
+              <Box sx={{ mb: 2 }}>
+                <TimeframeDropdown
+                  options={oiTimeframeOptions}
+                  selected={filters?.oiChange}
+                  onToggle={(value) => handleCheckboxChange("oiChange", value)}
+                  placeholder="Select timeframe(s)"
+                />
+              </Box>
 
               {/* Scroll Down option: Percentage or Value */}
               <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
@@ -1672,29 +1687,14 @@ const FilterSidebar = forwardRef(
             </AccordionSummary>
             <AccordionDetails>
               {/* Step 1: Timeframes */}
-              <Grid container spacing={1} sx={{ mb: 2 }}>
-                {cvdTimeframeOptions.map((option) => (
-                  <Grid item xs={4} key={option.value}>
-                    <FormControlLabel
-                      control={
-                        <CustomCheckbox
-                          checked={filters?.cvd?.[option.value] || false}
-                          onChange={() =>
-                            handleCheckboxChange("cvd", option.value)
-                          }
-                        />
-                      }
-                      label={option.label}
-                      sx={{
-                        color: "text.primary",
-                        "& .MuiFormControlLabel-label": {
-                          fontSize: "14px",
-                        },
-                      }}
-                    />
-                  </Grid>
-                ))}
-              </Grid>
+              <Box sx={{ mb: 2 }}>
+                <TimeframeDropdown
+                  options={cvdTimeframeOptions}
+                  selected={filters?.cvd}
+                  onToggle={(value) => handleCheckboxChange("cvd", value)}
+                  placeholder="Select timeframe(s)"
+                />
+              </Box>
 
               {/* Step 2: Mode */}
               <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
