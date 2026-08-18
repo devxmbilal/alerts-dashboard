@@ -1424,6 +1424,9 @@ class RealTimeAlertProcessor {
           return !r.passed && alwaysRespected.includes(conditionCheck.name);
         });
         if (unmet) {
+          console.log(
+            `⏭️ ${alert.symbol}: Independent override blocked — ${unmet.reason}`
+          );
           return false; // Override bypasses everything except these two
         }
 
@@ -1439,6 +1442,16 @@ class RealTimeAlertProcessor {
         const conditionCheck = activeConditions[i];
 
         if (!result.passed) {
+          // The individual check()s already build a reason string with the
+          // real numbers (e.g. Change Percent's "2.804% < 1.5%"); it was being
+          // discarded here on every failure with no symbol attached anywhere,
+          // which is why a missed-alert investigation had to be reconstructed
+          // from raw market data after the fact instead of read straight off
+          // the log. This does not change what passes or fails — same result,
+          // same early exit — it only prints the reason that was already computed.
+          console.log(
+            `⏭️ ${alert.symbol}: ${conditionCheck.name} FAILED — ${result.reason}`
+          );
           return false; // Early exit (silent - hot path)
         }
         console.log(`✅ ${conditionCheck.name} PASSED: ${result.reason}`);
@@ -1810,11 +1823,18 @@ class RealTimeAlertProcessor {
             liveData,
             alert.symbol
           );
+          // evaluateCandleConditions returns a plain boolean (ALL listed
+          // timeframes must be above their own open) -- it can't say which
+          // one failed here, but naming the condition/timeframes is still a
+          // large improvement over the previous "not met" with zero context;
+          // the per-timeframe CANDLE_ABOVE_OPEN FAILED log lines it prints
+          // internally now need to be read alongside this line's symbol.
+          const candleDesc = `${conditions.candle.condition || "CANDLE_ABOVE_OPEN"} on ${conditions.candle.timeframes.join(",")}`;
           return {
             passed: candleMatch,
             reason: candleMatch
-              ? "Candle pattern met"
-              : "Candle pattern not met",
+              ? `Candle ${candleDesc}`
+              : `Candle not met (${candleDesc})`,
           };
         },
       });
@@ -1846,9 +1866,13 @@ class RealTimeAlertProcessor {
           if (rsiMatch === null) {
             return { passed: true, reason: "RSI data loading — skipped this tick" };
           }
+          // evaluateRSIConditions returns a plain boolean (ALL listed timeframes
+          // must pass), so this can't say which one failed -- but naming the
+          // condition itself beats the previous "not met" with zero context.
+          const rsiDesc = `${conditions.rsiRange.condition || "ABOVE"} ${conditions.rsiRange.level || 50} on ${conditions.rsiRange.timeframes.join(",")}`;
           return {
             passed: rsiMatch,
-            reason: rsiMatch ? "RSI condition met" : "RSI condition not met",
+            reason: rsiMatch ? `RSI ${rsiDesc}` : `RSI not met (${rsiDesc})`,
           };
         },
       });
