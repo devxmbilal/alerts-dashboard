@@ -1504,13 +1504,6 @@ const FilterSidebar = forwardRef(
                           you have set.
                         </Typography>
                         <Typography variant="body2" sx={{ fontWeight: "bold", mb: 0.5 }}>
-                          Previous Candle
-                        </Typography>
-                        <Typography variant="caption" sx={{ display: "block", mb: 1.5 }}>
-                          Alerts trigger immediately after the candle forming the
-                          divergence closes.
-                        </Typography>
-                        <Typography variant="body2" sx={{ fontWeight: "bold", mb: 0.5 }}>
                           Conditional Trigger
                         </Typography>
                         <Typography variant="caption" sx={{ display: "block" }}>
@@ -1535,7 +1528,6 @@ const FilterSidebar = forwardRef(
                   }
                 >
                   <MenuItem value="independent">Independent Trigger</MenuItem>
-                  <MenuItem value="previous">Previous Candle</MenuItem>
                   <MenuItem value="conditional">Conditional Trigger</MenuItem>
                 </CustomTextField>
               </Box>
