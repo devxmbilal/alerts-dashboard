@@ -99,11 +99,15 @@ const DarkAccordion = styled(Accordion)(({ theme }) => ({
   },
 }));
 
-// Same font everywhere -- Price Change's "Percentage %" box is the
-// reference. Height is intentionally NOT forced here: MUI's natural
-// size="small" box is already the correct slim height, forcing an explicit
-// height on top of it only made every box taller than the reference.
+// One explicit padding used everywhere, instead of relying on MUI's default
+// small-size padding -- that default actually varies slightly between a
+// plain text input, a select's rendered value, and a labeled field, which is
+// exactly why boxes looked mismatched. Pinning the same padding on all of
+// them (and on TimeframeDropdown's own Box, below) makes every box literally
+// the same pixel height, and a bit slimmer than MUI's default besides.
 const FIELD_FONT_SIZE = "14px";
+const FIELD_PADDING_V = "6px";
+const FIELD_PADDING_H = "12px";
 const FIELD_GAP = 2; // theme spacing units (16px) between stacked fields
 
 const CustomTextField = styled(TextField)(({ theme }) => ({
@@ -123,11 +127,14 @@ const CustomTextField = styled(TextField)(({ theme }) => ({
   },
   "& .MuiInputBase-input": {
     fontSize: FIELD_FONT_SIZE,
+    padding: `${FIELD_PADDING_V} ${FIELD_PADDING_H}`,
   },
-  "& .MuiSelect-select": {
+  "& .MuiSelect-select.MuiSelect-select": {
     fontSize: FIELD_FONT_SIZE,
     display: "flex",
     alignItems: "center",
+    padding: `${FIELD_PADDING_V} ${FIELD_PADDING_H}`,
+    paddingRight: "32px !important",
   },
   "& .MuiInputLabel-root": {
     color: theme.palette.text.secondary,
@@ -177,8 +184,8 @@ const TimeframeDropdown = ({ options, selected, onToggle, placeholder = "Select 
           border: "1px solid",
           borderColor: open ? "primary.main" : isDark ? "#444" : "#ccc",
           borderRadius: "4px",
-          px: "14px",
-          py: "8.5px",
+          px: FIELD_PADDING_H,
+          py: FIELD_PADDING_V,
           cursor: "pointer",
           backgroundColor: isDark ? "#2a2a2a" : "#f5f5f5",
           transition: "border-color 0.15s",
