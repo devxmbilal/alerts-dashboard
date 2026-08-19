@@ -99,10 +99,17 @@ const DarkAccordion = styled(Accordion)(({ theme }) => ({
   },
 }));
 
+// One field height/font used everywhere -- Price Change's "Percentage %" box
+// is the reference every other condition's boxes now match.
+const FIELD_HEIGHT = 40;
+const FIELD_FONT_SIZE = "14px";
+const FIELD_GAP = 2; // theme spacing units (16px) between stacked fields
+
 const CustomTextField = styled(TextField)(({ theme }) => ({
   "& .MuiOutlinedInput-root": {
     backgroundColor: theme.palette.mode === 'dark' ? "#2a2a2a" : "#f5f5f5",
     color: theme.palette.text.primary,
+    fontSize: FIELD_FONT_SIZE,
     "& fieldset": {
       borderColor: theme.palette.mode === 'dark' ? "#444" : "#ccc",
     },
@@ -113,13 +120,43 @@ const CustomTextField = styled(TextField)(({ theme }) => ({
       borderColor: theme.palette.primary.main,
     },
   },
+  "& .MuiInputBase-input": {
+    fontSize: FIELD_FONT_SIZE,
+  },
+  "& .MuiSelect-select": {
+    fontSize: FIELD_FONT_SIZE,
+    display: "flex",
+    alignItems: "center",
+  },
+  "& .MuiOutlinedInput-input": {
+    height: `${FIELD_HEIGHT}px`,
+    boxSizing: "border-box",
+    display: "flex",
+    alignItems: "center",
+    paddingTop: 0,
+    paddingBottom: 0,
+  },
   "& .MuiInputLabel-root": {
     color: theme.palette.text.secondary,
+    fontSize: FIELD_FONT_SIZE,
   },
   "& .MuiSelect-icon": {
     color: theme.palette.text.primary,
   },
 }));
+
+// Shared dropdown-list styling so every "select" CustomTextField opens a menu
+// with the same 14px font the closed box uses -- MUI's Menu portals outside
+// the styled component's DOM subtree, so this has to be passed explicitly.
+const FIELD_MENU_PROPS = {
+  PaperProps: {
+    sx: {
+      "& .MuiMenuItem-root": {
+        fontSize: FIELD_FONT_SIZE,
+      },
+    },
+  },
+};
 
 // TradingView CEX-Screener style dropdown for timeframe selection (checkbox list in a popover)
 const TimeframeDropdown = ({ options, selected, onToggle, placeholder = "Select timeframe(s)" }) => {
@@ -147,8 +184,9 @@ const TimeframeDropdown = ({ options, selected, onToggle, placeholder = "Select 
           border: "1px solid",
           borderColor: open ? "primary.main" : isDark ? "#444" : "#ccc",
           borderRadius: "4px",
-          px: 1.5,
-          py: 1,
+          px: "14px",
+          height: `${FIELD_HEIGHT}px`,
+          boxSizing: "border-box",
           cursor: "pointer",
           backgroundColor: isDark ? "#2a2a2a" : "#f5f5f5",
           transition: "border-color 0.15s",
@@ -158,7 +196,7 @@ const TimeframeDropdown = ({ options, selected, onToggle, placeholder = "Select 
         <Typography
           noWrap
           sx={{
-            fontSize: "14px",
+            fontSize: FIELD_FONT_SIZE,
             color: selectedLabels.length ? "text.primary" : "text.secondary",
           }}
         >
@@ -1160,29 +1198,12 @@ const FilterSidebar = forwardRef(
               </Box>
             </AccordionSummary>
             <AccordionDetails>
-              <Grid container spacing={1}>
-                {minDailyOptions.map((option, index) => (
-                  <Grid item xs={6} key={option.value}>
-                    <FormControlLabel
-                      control={
-                        <CustomCheckbox
-                          checked={filters.minDaily[option.value] || false}
-                          onChange={() =>
-                            handleCheckboxChange("minDaily", option.value)
-                          }
-                        />
-                      }
-                      label={option.label}
-                      sx={{
-                        color: "text.primary",
-                        "& .MuiFormControlLabel-label": {
-                          fontSize: "14px",
-                        },
-                      }}
-                    />
-                  </Grid>
-                ))}
-              </Grid>
+              <TimeframeDropdown
+                options={minDailyOptions}
+                selected={filters.minDaily}
+                onToggle={(value) => handleCheckboxChange("minDaily", value)}
+                placeholder="Select minimum volume"
+              />
             </AccordionDetails>
           </DarkAccordion>
 
@@ -1230,6 +1251,7 @@ const FilterSidebar = forwardRef(
                 select
                 size="small"
                 label="Direction"
+                SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
                 value={filters.changePercent.direction || "increase"}
                 onChange={(e) =>
                   handleInputChange(
@@ -1330,6 +1352,7 @@ const FilterSidebar = forwardRef(
                 select
                 fullWidth
                 size="small"
+                SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
                 value={filters.candle.condition || "CANDLE_ABOVE_OPEN"}
                 onChange={(e) =>
                   handleInputChange("candle", "condition", e.target.value)
@@ -1410,6 +1433,7 @@ const FilterSidebar = forwardRef(
                 select
                 fullWidth
                 size="small"
+                SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
                 value={filters.rsiRange.condition || "ABOVE"}
                 onChange={(e) =>
                   handleInputChange("rsiRange", "condition", e.target.value)
@@ -1520,6 +1544,7 @@ const FilterSidebar = forwardRef(
                   select
                   fullWidth
                   size="small"
+                  SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
                   value={filters?.rsiDivergence?.condition || "independent"}
                   onChange={(e) =>
                     handleInputChange("rsiDivergence", "condition", e.target.value)
@@ -1561,6 +1586,7 @@ const FilterSidebar = forwardRef(
                 select
                 fullWidth
                 size="small"
+                SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
                 value={filters?.oiChange?.type || "PERCENTAGE"}
                 onChange={(e) =>
                   handleInputChange("oiChange", "type", e.target.value)
@@ -1603,6 +1629,7 @@ const FilterSidebar = forwardRef(
                 select
                 fullWidth
                 size="small"
+                SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
                 value={filters?.oiChange?.direction || "increase"}
                 onChange={(e) =>
                   handleInputChange("oiChange", "direction", e.target.value)
@@ -1672,6 +1699,7 @@ const FilterSidebar = forwardRef(
                 select
                 fullWidth
                 size="small"
+                SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
                 value={filters?.cvd?.mode || "surge"}
                 onChange={(e) =>
                   handleInputChange("cvd", "mode", e.target.value)
@@ -1695,6 +1723,7 @@ const FilterSidebar = forwardRef(
                     select
                     fullWidth
                     size="small"
+                    SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
                     value={filters?.cvd?.type || "PERCENTAGE"}
                     onChange={(e) =>
                       handleInputChange("cvd", "type", e.target.value)
@@ -1735,6 +1764,7 @@ const FilterSidebar = forwardRef(
                     select
                     fullWidth
                     size="small"
+                    SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
                     value={filters?.cvd?.direction || "increase"}
                     onChange={(e) =>
                       handleInputChange("cvd", "direction", e.target.value)
@@ -1829,6 +1859,7 @@ const FilterSidebar = forwardRef(
                     select
                     fullWidth
                     size="small"
+                    SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
                     value={filters?.cvd?.condition || "previous"}
                     onChange={(e) =>
                       handleInputChange("cvd", "condition", e.target.value)
@@ -1852,6 +1883,7 @@ const FilterSidebar = forwardRef(
                 select
                 fullWidth
                 size="small"
+                SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
                 value={filters?.cvd?.resetAnchor || "daily"}
                 onChange={(e) =>
                   handleInputChange("cvd", "resetAnchor", e.target.value)
