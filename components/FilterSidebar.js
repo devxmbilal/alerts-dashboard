@@ -242,7 +242,9 @@ const TimeframeDropdown = ({ options, selected, onToggle, placeholder = "Select 
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
-                py: 0.9,
+                gap: 1,
+                minHeight: "38px",
+                py: 0,
                 px: 1.5,
                 "&:hover": {
                   backgroundColor: isDark
@@ -252,17 +254,24 @@ const TimeframeDropdown = ({ options, selected, onToggle, placeholder = "Select 
               }}
             >
               <Typography
+                noWrap
                 sx={{
-                  fontSize: "14px",
+                  fontSize: FIELD_FONT_SIZE,
                   color: isChecked ? "primary.main" : "text.primary",
                   fontWeight: isChecked ? 600 : 400,
                 }}
               >
                 {option.label}
               </Typography>
-              {isChecked && (
-                <CheckIcon sx={{ fontSize: 18, color: "primary.main" }} />
-              )}
+              <CustomCheckbox
+                checked={isChecked}
+                onChange={() => onToggle(option.value)}
+                onClick={(e) => e.stopPropagation()}
+                size="small"
+                tabIndex={-1}
+                disableRipple
+                sx={{ p: 0, flexShrink: 0 }}
+              />
             </MenuItem>
           );
         })}
