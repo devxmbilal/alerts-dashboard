@@ -4805,14 +4805,29 @@ class RealTimeAlertProcessor {
       const ohlc = await this.getHistoricalOHLC(symbol, timeframe, rsiPeriod);
       if (!ohlc || !ohlc.closes || !ohlc.highs || !ohlc.lows) continue;
 
-      // Closed candles only for pivot detection. The live tick is folded in
-      // further down, and only to decide which side of the pivot line price
-      // sits on right now — it must never be able to invent a pivot.
-      const closes = ohlc.closes;
-      const highs = ohlc.highs;
-      const lows = ohlc.lows;
+      // Copies, not references — the live tick gets folded into the last
+      // candle below, and this must never mutate the shared OHLC cache that
+      // other conditions on this same tick are also reading from.
+      const closes = [...ohlc.closes];
+      const highs = [...ohlc.highs];
+      const lows = [...ohlc.lows];
       const openTimes = ohlc.openTimes || [];
       const lastIndex = closes.length - 1;
+
+      // The pattern's STARTING pivot (point A) must always be a confirmed
+      // swing — that is the level the mitigation line is drawn from, and it
+      // has to be a real, settled point. But the RECENT pivot (point B) is
+      // exactly what a trader watches live: is price making a new high right
+      // now while RSI fails to confirm it. Folding today's live tick into the
+      // forming candle lets that count as B, which is what makes this shield
+      // catch a divergence the moment it forms instead of five bars later
+      // once a swing to its right closes.
+      const livePriceRaw = parseFloat(this.livePrices[symbol]?.price);
+      if (isFinite(livePriceRaw) && lastIndex >= 0) {
+        closes[lastIndex] = livePriceRaw;
+        highs[lastIndex] = Math.max(highs[lastIndex], livePriceRaw);
+        lows[lastIndex] = Math.min(lows[lastIndex], livePriceRaw);
+      }
 
       if (closes.length < rsiPeriod + LB_LEFT + LB_RIGHT + RANGE_LOWER + 1) continue;
 
@@ -4861,19 +4876,27 @@ class RealTimeAlertProcessor {
         return true;
       };
 
-      // Every confirmed divergence on this timeframe. Both pivots are real
-      // swings whose right-hand lookback has already closed, so neither can be
-      // the candle still forming.
+      // Every divergence on this timeframe. Point A (the starting pivot the
+      // mitigation line gets drawn from) is always a confirmed swing. Point B
+      // is either another confirmed swing, or the live/forming candle itself
+      // — a trader reads a divergence off the chart the moment price makes a
+      // new high against a fading RSI, without waiting five more candles for
+      // that high to become "official," and this has to see it the same way.
       const hits = [];
 
       const scan = (swings, wideSet, side) => {
-        for (let bi = swings.length - 1; bi >= 1; bi--) {
-          const B = swings[bi];
+        const liveB = { index: lastIndex, value: rsiArray[lastIndex] };
+        const bCandidates =
+          liveB.value === null || liveB.value === undefined ? swings : [...swings, liveB];
+
+        for (let bi = bCandidates.length - 1; bi >= 0; bi--) {
+          const B = bCandidates[bi];
           if (B.value === null || B.value === undefined) continue;
 
-          for (let ai = bi - 1; ai >= 0; ai--) {
+          for (let ai = swings.length - 1; ai >= 0; ai--) {
             const A = swings[ai];
             if (A.value === null || A.value === undefined) continue;
+            if (A.index >= B.index) continue;
 
             const gap = B.index - A.index;
             if (gap < RANGE_LOWER) continue;
@@ -5001,6 +5024,16 @@ class RealTimeAlertProcessor {
     // say at all and the alert must be allowed through.
     if (!beyond(lastIndex)) {
       return { blocks: false, reason: "price on safe side of pivot line — allowed" };
+    }
+
+    // The divergence's second pivot is the live candle itself — it is
+    // completing on this exact bar. There is no history after B to scan for a
+    // pullback-then-reset yet, because B is right now; the general loop below
+    // would find nothing after B and misread that as "ran away, mitigated,"
+    // which is backwards for a pattern that has not had a chance to be
+    // re-tested even once. This IS the first re-test, by construction.
+    if (div.B.index === lastIndex) {
+      return { blocks: true, reason: "divergence just completed on the live candle — first re-test — blocked" };
     }
 
     // Price is beyond the line. Whether that blocks depends on whether this is
