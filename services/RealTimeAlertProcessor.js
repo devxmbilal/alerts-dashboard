@@ -1898,33 +1898,34 @@ class RealTimeAlertProcessor {
             conditions.rsiDivergence.condition
           );
 
-          // Conditional is a safety shield, not a trigger. It looks for a bearish
-          // divergence (regular or hidden) on the candle still forming, and if it
-          // finds one it vetoes the alert no matter what every other filter says.
-          // Finding nothing is a pass, so the remaining conditions decide on their
-          // own — which also means Conditional on its own can never fire an alert,
+          // Conditional is a safety shield, not a trigger. It looks for a
+          // confirmed divergence of a selected type whose starting pivot is
+          // still unmitigated, and if price is testing that pivot right now it
+          // vetoes the alert no matter what every other filter says. Finding
+          // nothing is a pass, so the remaining conditions decide on their own
+          // — which also means Conditional on its own can never fire an alert,
           // it only ever takes one away.
           if (triggerMode === "conditional") {
-            const shieldMatch = await this.checkBearishShield(
+            const shieldMatch = await this.checkDivergenceShield(
               conditions.rsiDivergence,
               alert.symbol
             );
 
             if (shieldMatch?.found) {
               console.log(
-                `🛡️ ${alert.symbol} BLOCKED by Conditional shield — ${shieldMatch.label} on ${shieldMatch.timeframe}`
+                `🛡️ ${alert.symbol} BLOCKED by Conditional shield — ${shieldMatch.label} on ${shieldMatch.timeframe}, unmitigated pivot line ${shieldMatch.pivotLine}`
               );
               return {
                 passed: false,
                 // A veto, not an ordinary failure: no override may skip past it.
                 blocking: true,
-                reason: `Blocked: ${shieldMatch.label} on the current ${shieldMatch.timeframe} candle`,
+                reason: `Blocked: unmitigated ${shieldMatch.label} on ${shieldMatch.timeframe} (pivot ${shieldMatch.pivotLine})`,
               };
             }
 
             return {
               passed: true,
-              reason: "Safety shield clear — no bearish divergence on the current candle",
+              reason: "Safety shield clear — no unmitigated divergence pivot in the way",
             };
           }
 
@@ -4744,22 +4745,41 @@ class RealTimeAlertProcessor {
     return { found: false };
   }
 
-  // ================= Conditional Trigger: Bearish Safety Shield =================
-  // A standalone check, deliberately NOT sharing code with evaluateRSIDivergence.
-  // That function is tuned to be strict, because its job is to avoid noisy
-  // false alerts. This one's job is the opposite: it must not miss a real
-  // bearish setup, because a missed block costs a bad trade while an
-  // over-cautious block only costs one skipped alert.
+  // ================= Conditional Trigger: Divergence Safety Shield =================
+  // Standalone on purpose: it shares no code with evaluateRSIDivergence, whose
+  // Independent-trigger behaviour must not change.
   //
-  // Verified against 200 real historical candles on PORTALUSDT: with the same
-  // gates evaluateRSIDivergence uses (including its line-integrity check),
-  // that pair produced ZERO matches across the entire window despite a
-  // clearly visible setup on the chart. Turning line-integrity off alone
-  // (keeping every other gate — RSI zone, RSI-diff, ATR move, strength —
-  // identical) was enough to catch it. That is the one thing this function
-  // does differently.
-  async checkBearishShield(condition, symbol) {
+  // The client's rule, in their own words:
+  //   1. crossing or above the pivot point + other conditions met -> do NOT trigger
+  //   2. below the pivot point + other conditions met -> MUST trigger
+  //   3. next time (even next candle) price crosses the pivot -> MUST trigger
+  //
+  // In their trading terms: a divergence blocks exactly once, on the first
+  // re-test of its starting pivot. After that the level is "mitigated" and is
+  // never considered again — "unless new recent per div bani ha", i.e. unless a
+  // newer divergence forms on a more recent pivot, which then takes over.
+  //
+  // Two real bugs this replaces:
+  //   * Pivot 2 used to be the live forming candle rather than a confirmed
+  //     swing. That paired a genuine past pivot with whatever price happened to
+  //     be doing at that instant and called the result a divergence — which is
+  //     exactly why blocks kept landing on candles where the chart plainly
+  //     shows no divergence at all, and why the client could never find one.
+  //   * There was no mitigation concept whatsoever, so a single old pivot could
+  //     veto every alert for as long as it stayed inside the lookback window.
+  async checkDivergenceShield(condition, symbol) {
     if (!condition || !condition.timeframes || condition.timeframes.length === 0) {
+      return { found: false };
+    }
+
+    // Only the divergence types actually ticked in the UI take part.
+    const wanted = {
+      bearish: !!condition.bearish,
+      bearishHidden: !!condition.bearishHidden,
+      bullish: !!condition.bullish,
+      bullishHidden: !!condition.bullishHidden,
+    };
+    if (!wanted.bearish && !wanted.bearishHidden && !wanted.bullish && !wanted.bullishHidden) {
       return { found: false };
     }
 
@@ -4767,8 +4787,8 @@ class RealTimeAlertProcessor {
     const rsiPeriod = 14;
 
     const LB_LEFT = 5;
-    const LB_RIGHT_ANCHOR = 5;
-    const LB_LEFT_HIDDEN_BEARISH = 8;
+    const LB_RIGHT = 5;
+    const LB_WIDE = 8; // hidden patterns need a wider anchor, to skip micro-bumps
     const RANGE_LOWER = 14;
     const RANGE_UPPER = 90;
     const MIN_RSI_DIFF = 3;
@@ -4778,39 +4798,26 @@ class RealTimeAlertProcessor {
     const MIN_STRENGTH = 4;
     const REGULAR_BEARISH_RSI = 60;
     const HIDDEN_BEARISH_RSI = 40;
+    const REGULAR_BULLISH_RSI = 40;
+    const HIDDEN_BULLISH_RSI = 60;
 
     for (const timeframe of condition.timeframes) {
       const ohlc = await this.getHistoricalOHLC(symbol, timeframe, rsiPeriod);
       if (!ohlc || !ohlc.closes || !ohlc.highs || !ohlc.lows) continue;
 
-      const closes = [...ohlc.closes];
-      const highs = [...ohlc.highs];
-      const lows = [...ohlc.lows];
+      // Closed candles only for pivot detection. The live tick is folded in
+      // further down, and only to decide which side of the pivot line price
+      // sits on right now — it must never be able to invent a pivot.
+      const closes = ohlc.closes;
+      const highs = ohlc.highs;
+      const lows = ohlc.lows;
       const openTimes = ohlc.openTimes || [];
-
-      // Conditional reads the live/forming candle, same as it always has —
-      // fold the live tick in exactly the way evaluateRSIDivergence does.
-      const livePrice = parseFloat(this.livePrices[symbol]?.price);
       const lastIndex = closes.length - 1;
-      if (livePrice && lastIndex >= 0) {
-        closes[lastIndex] = livePrice;
-        highs[lastIndex] = Math.max(highs[lastIndex], livePrice);
-        lows[lastIndex] = Math.min(lows[lastIndex], livePrice);
-      }
 
-      if (closes.length < rsiPeriod + LB_LEFT + LB_RIGHT_ANCHOR + RANGE_LOWER + 1) continue;
+      if (closes.length < rsiPeriod + LB_LEFT + LB_RIGHT + RANGE_LOWER + 1) continue;
 
       const rsiArray = this.computeRSIArray(closes, rsiPeriod);
       if (!rsiArray || rsiArray.length === 0) continue;
-
-      const p1 = { index: lastIndex, price: highs[lastIndex], rsi: rsiArray[lastIndex] };
-      if (!isFinite(p1.price) || p1.rsi === null || p1.rsi === undefined) continue;
-      if (p1.rsi < HIDDEN_BEARISH_RSI) {
-        if (isDiagSymbol) {
-          console.log(`🛡️🔬 ${symbol} ${timeframe} shield clear: current RSI ${p1.rsi.toFixed(2)} is below both bearish zones`);
-        }
-        continue;
-      }
 
       const ATR_BARS = 14;
       let atrPct = null;
@@ -4832,83 +4839,215 @@ class RealTimeAlertProcessor {
         if (usable) atrPct = (sum / ATR_BARS) * 100;
       }
 
-      const anchors = this.findSwings(rsiArray, "high", LB_LEFT, LB_RIGHT_ANCHOR);
-      const wideAnchors = new Set(
-        this.findSwings(rsiArray, "high", LB_LEFT_HIDDEN_BEARISH, LB_LEFT_HIDDEN_BEARISH).map((a) => a.index)
+      const swingHighs = this.findSwings(rsiArray, "high", LB_LEFT, LB_RIGHT);
+      const swingLows = this.findSwings(rsiArray, "low", LB_LEFT, LB_RIGHT);
+      const wideHighs = new Set(
+        this.findSwings(rsiArray, "high", LB_WIDE, LB_WIDE).map((s) => s.index)
+      );
+      const wideLows = new Set(
+        this.findSwings(rsiArray, "low", LB_WIDE, LB_WIDE).map((s) => s.index)
       );
 
-      for (let j = anchors.length - 1; j >= 0; j--) {
-        const anchorPivot = anchors[j];
-        if (anchorPivot.index >= p1.index) continue;
-
-        const barsBetween = p1.index - anchorPivot.index;
-        if (barsBetween < RANGE_LOWER) continue;
-        if (barsBetween > RANGE_UPPER) break;
-
-        const p2 = { index: anchorPivot.index, price: highs[anchorPivot.index], rsi: anchorPivot.value };
-        if (!isFinite(p2.price) || p2.rsi === null) continue;
-
-        const rsiDiff = Math.abs(p1.rsi - p2.rsi);
-        const priceDiffPct = p2.price !== 0 ? Math.abs((p1.price - p2.price) / p2.price) * 100 : 0;
+      const passesQuality = (aRsi, bRsi, aPrice, bPrice) => {
+        const rsiDiff = Math.abs(bRsi - aRsi);
+        const priceDiffPct = aPrice !== 0 ? Math.abs((bPrice - aPrice) / aPrice) * 100 : 0;
         const hasAtr = atrPct !== null && atrPct > 0;
         const move = hasAtr ? priceDiffPct / atrPct : priceDiffPct;
         const minMove = hasAtr ? MIN_MOVE_ATR : FALLBACK_PRICE_DIFF_PCT;
+        if (priceDiffPct < ABSOLUTE_MIN_PRICE_PCT) return false;
+        if (rsiDiff < MIN_RSI_DIFF) return false;
+        if (move < minMove) return false;
+        if (rsiDiff * move < MIN_STRENGTH) return false;
+        return true;
+      };
 
-        if (priceDiffPct < ABSOLUTE_MIN_PRICE_PCT) continue;
-        if (rsiDiff < MIN_RSI_DIFF) continue;
-        if (move < minMove) continue;
-        if (rsiDiff * move < MIN_STRENGTH) continue;
+      // Every confirmed divergence on this timeframe. Both pivots are real
+      // swings whose right-hand lookback has already closed, so neither can be
+      // the candle still forming.
+      const hits = [];
 
-        // Deliberately no line-integrity check here. For a trigger, a pattern
-        // whose line gets pierced by one wick is correctly treated as unclean.
-        // For a shield, that same pattern is still real risk — dismissing it
-        // over one wick is exactly what let bad alerts through in production.
+      const scan = (swings, wideSet, side) => {
+        for (let bi = swings.length - 1; bi >= 1; bi--) {
+          const B = swings[bi];
+          if (B.value === null || B.value === undefined) continue;
 
-        // Regular Bearish: price Higher High + RSI Lower High
-        if (p1.price > p2.price && p1.rsi < p2.rsi && p1.rsi >= REGULAR_BEARISH_RSI) {
-          if (isDiagSymbol) {
-            console.log(
-              `🛡️ ${symbol} ${timeframe} shield: Regular Bearish match (gap ${barsBetween}b) — price ${p2.price}→${p1.price}, RSI ${p2.rsi.toFixed(2)}→${p1.rsi.toFixed(2)}`
-            );
+          for (let ai = bi - 1; ai >= 0; ai--) {
+            const A = swings[ai];
+            if (A.value === null || A.value === undefined) continue;
+
+            const gap = B.index - A.index;
+            if (gap < RANGE_LOWER) continue;
+            if (gap > RANGE_UPPER) break;
+
+            const aPrice = side === "high" ? highs[A.index] : lows[A.index];
+            const bPrice = side === "high" ? highs[B.index] : lows[B.index];
+            if (!isFinite(aPrice) || !isFinite(bPrice)) continue;
+            if (!passesQuality(A.value, B.value, aPrice, bPrice)) continue;
+
+            if (side === "high") {
+              // Regular bearish: price Higher High, RSI Lower High
+              if (
+                wanted.bearish &&
+                bPrice > aPrice &&
+                B.value < A.value &&
+                B.value >= REGULAR_BEARISH_RSI
+              ) {
+                hits.push({ type: "bearish", label: "Regular Bearish Divergence", side, A, B, aPrice, bPrice });
+              }
+              // Hidden bearish: price Lower High, RSI Higher High
+              else if (
+                wanted.bearishHidden &&
+                bPrice < aPrice &&
+                B.value > A.value &&
+                B.value >= HIDDEN_BEARISH_RSI &&
+                wideSet.has(A.index)
+              ) {
+                hits.push({ type: "bearishHidden", label: "Hidden Bearish Divergence", side, A, B, aPrice, bPrice });
+              }
+            } else {
+              // Regular bullish: price Lower Low, RSI Higher Low
+              if (
+                wanted.bullish &&
+                bPrice < aPrice &&
+                B.value > A.value &&
+                B.value <= REGULAR_BULLISH_RSI
+              ) {
+                hits.push({ type: "bullish", label: "Regular Bullish Divergence", side, A, B, aPrice, bPrice });
+              }
+              // Hidden bullish: price Higher Low, RSI Lower Low
+              else if (
+                wanted.bullishHidden &&
+                bPrice > aPrice &&
+                B.value < A.value &&
+                B.value <= HIDDEN_BULLISH_RSI &&
+                wideSet.has(A.index)
+              ) {
+                hits.push({ type: "bullishHidden", label: "Hidden Bullish Divergence", side, A, B, aPrice, bPrice });
+              }
+            }
           }
-          return {
-            found: true,
-            type: "bearish",
-            label: "Regular Bearish Divergence",
-            timeframe,
-            barsBetween,
-            pivot1: { price: p1.price, rsi: p1.rsi, time: openTimes[p1.index] || null },
-            pivot2: { price: p2.price, rsi: p2.rsi, time: openTimes[p2.index] || null },
-          };
         }
+      };
 
-        // Hidden Bearish: price Lower High + RSI Higher High, anchor must be a
-        // wide swing (same 8-bar rule the trigger uses to avoid micro-bumps).
-        if (
-          p1.price < p2.price &&
-          p1.rsi > p2.rsi &&
-          p1.rsi >= HIDDEN_BEARISH_RSI &&
-          wideAnchors.has(anchorPivot.index)
-        ) {
-          if (isDiagSymbol) {
-            console.log(
-              `🛡️ ${symbol} ${timeframe} shield: Hidden Bearish match (gap ${barsBetween}b) — price ${p2.price}→${p1.price}, RSI ${p2.rsi.toFixed(2)}→${p1.rsi.toFixed(2)}`
-            );
-          }
-          return {
-            found: true,
-            type: "bearishHidden",
-            label: "Hidden Bearish Divergence",
-            timeframe,
-            barsBetween,
-            pivot1: { price: p1.price, rsi: p1.rsi, time: openTimes[p1.index] || null },
-            pivot2: { price: p2.price, rsi: p2.rsi, time: openTimes[p2.index] || null },
-          };
-        }
+      if (wanted.bearish || wanted.bearishHidden) scan(swingHighs, wideHighs, "high");
+      if (wanted.bullish || wanted.bullishHidden) scan(swingLows, wideLows, "low");
+
+      if (hits.length === 0) continue;
+
+      // Only the newest divergence has a say. An older one stops counting the
+      // moment a newer one forms on a more recent pivot.
+      hits.sort((x, y) => y.B.index - x.B.index);
+      const div = hits[0];
+
+      const livePrice = parseFloat(this.livePrices[symbol]?.price);
+      const state = this.divergenceMitigationState(div, {
+        highs,
+        lows,
+        closes,
+        lastIndex,
+        livePrice,
+      });
+
+      if (isDiagSymbol) {
+        console.log(
+          `🛡️🔬 ${symbol} ${timeframe} ${div.label}: pivot line ${div.aPrice}, ${state.reason}`
+        );
       }
+
+      if (!state.blocks) continue;
+
+      return {
+        found: true,
+        type: div.type,
+        label: div.label,
+        timeframe,
+        pivotLine: div.aPrice,
+        barsBetween: div.B.index - div.A.index,
+        pivot1: { price: div.bPrice, rsi: div.B.value, time: openTimes[div.B.index] || null },
+        pivot2: { price: div.aPrice, rsi: div.A.value, time: openTimes[div.A.index] || null },
+      };
     }
 
     return { found: false };
+  }
+
+  // Decides whether a confirmed divergence still blocks, per the client's rule.
+  //
+  //   line   = price level of the divergence's STARTING pivot (pivot A)
+  //   beyond = above that line for a bearish setup, below it for a bullish one
+  //
+  //   * price on the safe side of the line       -> allow  (rule 2)
+  //   * first push beyond the line since reset   -> BLOCK  (rule 1)
+  //   * any later re-cross, already mitigated    -> allow  (rule 3)
+  //
+  // Crossing is tested on the wick (a touch is a touch), while "came back" is
+  // tested on the close, so a single wick poke does not count as a full return.
+  divergenceMitigationState(div, bars) {
+    const { highs, lows, closes, lastIndex, livePrice } = bars;
+    const isHighSide = div.side === "high";
+    const line = div.aPrice;
+
+    const beyond = (i) => {
+      if (i === lastIndex && isFinite(livePrice)) {
+        return isHighSide
+          ? Math.max(highs[i], livePrice) >= line
+          : Math.min(lows[i], livePrice) <= line;
+      }
+      return isHighSide ? highs[i] >= line : lows[i] <= line;
+    };
+    const onSafeSide = (i) => (isHighSide ? closes[i] < line : closes[i] > line);
+
+    // Rule 2 — price is on the safe side of the line, so this divergence has no
+    // say at all and the alert must be allowed through.
+    if (!beyond(lastIndex)) {
+      return { blocks: false, reason: "price on safe side of pivot line — allowed" };
+    }
+
+    // Price is beyond the line. Whether that blocks depends on whether this is
+    // the divergence's first re-test of its own pivot, or a later one.
+    //
+    // Start from the first bar at or after pivot B that sits on the safe side.
+    // For a regular pattern pivot B is itself beyond the line (that is what
+    // makes it a higher high), so this skips forward to the pullback; for a
+    // hidden pattern pivot B is already on the safe side and this lands on B.
+    let resetIdx = -1;
+    for (let k = div.B.index; k <= lastIndex; k++) {
+      if (onSafeSide(k)) {
+        resetIdx = k;
+        break;
+      }
+    }
+
+    // Price never came back to the safe side at all — it ran away from the
+    // pivot and never looked back, so the level is long spent. Blocking here is
+    // what made a coin that had already tripled stay vetoed forever, which is
+    // precisely the failure the client reported.
+    if (resetIdx === -1) {
+      return { blocks: false, reason: "pivot line left behind — mitigated, allowed" };
+    }
+
+    // From that pullback onward, the first bar to push back beyond the line is
+    // the one this shield exists to catch.
+    let firstCross = -1;
+    for (let k = resetIdx + 1; k <= lastIndex; k++) {
+      if (beyond(k)) {
+        firstCross = k;
+        break;
+      }
+    }
+
+    if (firstCross === -1) {
+      return { blocks: false, reason: "price on safe side of pivot line — allowed" };
+    }
+
+    // Rule 1 — the re-test is happening on this very bar.
+    if (firstCross === lastIndex) {
+      return { blocks: true, reason: "first re-test of pivot line — blocked" };
+    }
+
+    // Rule 3 — the re-test already happened on an earlier bar, so the level is
+    // mitigated and never blocks again.
+    return { blocks: false, reason: "pivot line already mitigated — allowed" };
   }
 
   // ============================ CVD ============================
