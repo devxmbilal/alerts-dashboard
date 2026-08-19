@@ -109,25 +109,36 @@ const DarkAccordion = styled(Accordion)(({ theme }) => ({
     fontWeight: "500",
     letterSpacing: "0.2px",
   },
-  // Laid out as a flex column with one gap, rather than letting each child
-  // bring its own margin. That is what makes the spacing identical in every
-  // section: the header-to-first-control gap is the top padding, and every
-  // control-to-control gap is the same flex gap.
-  "& .MuiAccordionDetails-root": {
-    display: "flex",
-    flexDirection: "column",
-    gap: theme.spacing(FIELD_GAP),
-    padding: `${theme.spacing(FIELD_GAP)} 8px ${theme.spacing(FIELD_GAP)}`,
-  },
-  // Any stray margin on a direct child would stack on top of the gap above
-  // and break the rhythm again, so neutralise it at the source. Grid
-  // containers are exempt: their negative margins are how MUI implements
-  // `spacing`, and zeroing those misaligns the columns inside them.
-  "& .MuiAccordionDetails-root > *:not(.MuiGrid-container)": {
-    marginTop: 0,
-    marginBottom: 0,
-  },
 }));
+
+// Applied directly via sx on every <AccordionDetails sx={ACCORDION_DETAILS_SX}> instead of targeting
+// MUI's internal class name from the parent styled(Accordion) -- that nested
+// selector never actually beat MUI's own default AccordionDetails padding in
+// practice, which is exactly why the header-to-first-control gap stayed
+// collapsed while the previous attempt looked correct on paper. An sx prop
+// on the element itself has the highest specificity there is, so there is no
+// selector to lose to.
+//
+// Laid out as a flex column with one gap, rather than letting each child
+// bring its own margin: the header-to-first-control gap is the top padding,
+// and every control-to-control gap below it is the same flex gap -- so both
+// are the same 16px by construction, not by remembering to type it twice.
+const ACCORDION_DETAILS_SX = {
+  display: "flex",
+  flexDirection: "column",
+  gap: FIELD_GAP,
+  pt: FIELD_GAP,
+  pb: FIELD_GAP,
+  px: 1,
+  // A stray margin on a direct child would stack on top of the gap above and
+  // break the rhythm again. Grid containers are exempt: their negative
+  // margins are how MUI implements `spacing`, and zeroing those misaligns
+  // the columns inside them.
+  "& > *:not(.MuiGrid-container)": {
+    mt: 0,
+    mb: 0,
+  },
+};
 
 const CustomTextField = styled(TextField)(({ theme }) => ({
   "& .MuiOutlinedInput-root": {
@@ -1240,7 +1251,7 @@ const FilterSidebar = forwardRef(
                 <Typography sx={{ color: "text.primary" }}>Daily min Volume</Typography>
               </Box>
             </AccordionSummary>
-            <AccordionDetails>
+            <AccordionDetails sx={ACCORDION_DETAILS_SX}>
               <TimeframeDropdown
                 options={minDailyOptions}
                 selected={filters.minDaily}
@@ -1260,7 +1271,7 @@ const FilterSidebar = forwardRef(
                 <Typography sx={{ color: "text.primary" }}>Price Change</Typography>
               </Box>
             </AccordionSummary>
-            <AccordionDetails>
+            <AccordionDetails sx={ACCORDION_DETAILS_SX}>
               <TimeframeDropdown
                 options={changePercentOptions}
                 selected={filters.changePercent}
@@ -1352,7 +1363,7 @@ const FilterSidebar = forwardRef(
                 <Typography sx={{ color: "text.primary" }}>Alert Count</Typography>
               </Box>
             </AccordionSummary>
-            <AccordionDetails>
+            <AccordionDetails sx={ACCORDION_DETAILS_SX}>
               <TimeframeDropdown
                 options={alertCountOptions}
                 selected={filters.alertCount}
@@ -1372,7 +1383,7 @@ const FilterSidebar = forwardRef(
                 <Typography sx={{ color: "text.primary" }}>Candle</Typography>
               </Box>
             </AccordionSummary>
-            <AccordionDetails>
+            <AccordionDetails sx={ACCORDION_DETAILS_SX}>
               {/* Timeframes */}
               <TimeframeDropdown
                 options={candleTimeOptions}
@@ -1415,7 +1426,7 @@ const FilterSidebar = forwardRef(
                 </Typography>
               </Box>
             </AccordionSummary>
-            <AccordionDetails>
+            <AccordionDetails sx={ACCORDION_DETAILS_SX}>
               {/* Timeframes */}
               <TimeframeDropdown
                 options={rsiTimeframeOptions}
@@ -1492,7 +1503,7 @@ const FilterSidebar = forwardRef(
                 </Typography>
               </Box>
             </AccordionSummary>
-            <AccordionDetails>
+            <AccordionDetails sx={ACCORDION_DETAILS_SX}>
               {/* Timeframes */}
               <TimeframeDropdown
                 options={rsiTimeframeOptions}
@@ -1594,7 +1605,7 @@ const FilterSidebar = forwardRef(
                 <Typography sx={{ color: "text.primary" }}>OI Change</Typography>
               </Box>
             </AccordionSummary>
-            <AccordionDetails>
+            <AccordionDetails sx={ACCORDION_DETAILS_SX}>
               {/* Timeframes */}
               <TimeframeDropdown
                 options={oiTimeframeOptions}
@@ -1702,7 +1713,7 @@ const FilterSidebar = forwardRef(
                 <Typography sx={{ color: "text.primary" }}>CVD</Typography>
               </Box>
             </AccordionSummary>
-            <AccordionDetails>
+            <AccordionDetails sx={ACCORDION_DETAILS_SX}>
               {/* Step 1: Timeframes */}
               <TimeframeDropdown
                 options={cvdTimeframeOptions}
@@ -1915,7 +1926,7 @@ const FilterSidebar = forwardRef(
                     <Typography sx={{ color: "text.primary" }}>MACD</Typography>
                   </Box>
                 </AccordionSummary>
-                <AccordionDetails>
+                <AccordionDetails sx={ACCORDION_DETAILS_SX}>
                   {/* Timeframe checkboxes */}
                   <Grid container spacing={1} sx={{ mb: 2 }}>
                     {macdTimeframeOptions.map((option) => (
