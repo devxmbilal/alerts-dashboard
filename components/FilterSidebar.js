@@ -99,9 +99,10 @@ const DarkAccordion = styled(Accordion)(({ theme }) => ({
   },
 }));
 
-// One field height/font used everywhere -- Price Change's "Percentage %" box
-// is the reference every other condition's boxes now match.
-const FIELD_HEIGHT = 40;
+// Same font everywhere -- Price Change's "Percentage %" box is the
+// reference. Height is intentionally NOT forced here: MUI's natural
+// size="small" box is already the correct slim height, forcing an explicit
+// height on top of it only made every box taller than the reference.
 const FIELD_FONT_SIZE = "14px";
 const FIELD_GAP = 2; // theme spacing units (16px) between stacked fields
 
@@ -127,14 +128,6 @@ const CustomTextField = styled(TextField)(({ theme }) => ({
     fontSize: FIELD_FONT_SIZE,
     display: "flex",
     alignItems: "center",
-  },
-  "& .MuiOutlinedInput-input": {
-    height: `${FIELD_HEIGHT}px`,
-    boxSizing: "border-box",
-    display: "flex",
-    alignItems: "center",
-    paddingTop: 0,
-    paddingBottom: 0,
   },
   "& .MuiInputLabel-root": {
     color: theme.palette.text.secondary,
@@ -185,8 +178,7 @@ const TimeframeDropdown = ({ options, selected, onToggle, placeholder = "Select 
           borderColor: open ? "primary.main" : isDark ? "#444" : "#ccc",
           borderRadius: "4px",
           px: "14px",
-          height: `${FIELD_HEIGHT}px`,
-          boxSizing: "border-box",
+          py: "8.5px",
           cursor: "pointer",
           backgroundColor: isDark ? "#2a2a2a" : "#f5f5f5",
           transition: "border-color 0.15s",
