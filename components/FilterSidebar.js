@@ -62,6 +62,21 @@ import { useAlert } from "../contexts/AlertContext";
 import { useSocket } from "../contexts/SocketContext";
 import { useFavorites } from "../contexts/FavoritesContext";
 
+// One explicit padding used everywhere, instead of relying on MUI's default
+// small-size padding -- that default actually varies slightly between a
+// plain text input, a select's rendered value, and a labeled field, which is
+// exactly why boxes looked mismatched. Pinning the same padding on all of
+// them (and on TimeframeDropdown's own Box, below) makes every box literally
+// the same pixel height, and a bit slimmer than MUI's default besides.
+const FIELD_FONT_SIZE = "14px";
+const FIELD_PADDING_V = "6px";
+const FIELD_PADDING_H = "12px";
+// The single vertical rhythm for the whole sidebar. Every gap between two
+// stacked controls -- and between a section header and its first control --
+// is this and nothing else. Previously each section carried its own ad-hoc
+// mt/mb, which is why the spacing drifted from section to section.
+const FIELD_GAP = 2; // theme spacing units (16px) between stacked fields
+
 // Custom styled components - exact same as client
 const CustomCheckbox = styled(Checkbox)(({ theme }) => ({
   color: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)',
@@ -94,21 +109,25 @@ const DarkAccordion = styled(Accordion)(({ theme }) => ({
     fontWeight: "500",
     letterSpacing: "0.2px",
   },
+  // Laid out as a flex column with one gap, rather than letting each child
+  // bring its own margin. That is what makes the spacing identical in every
+  // section: the header-to-first-control gap is the top padding, and every
+  // control-to-control gap is the same flex gap.
   "& .MuiAccordionDetails-root": {
-    padding: "0 8px 8px",
+    display: "flex",
+    flexDirection: "column",
+    gap: theme.spacing(FIELD_GAP),
+    padding: `${theme.spacing(FIELD_GAP)} 8px ${theme.spacing(FIELD_GAP)}`,
+  },
+  // Any stray margin on a direct child would stack on top of the gap above
+  // and break the rhythm again, so neutralise it at the source. Grid
+  // containers are exempt: their negative margins are how MUI implements
+  // `spacing`, and zeroing those misaligns the columns inside them.
+  "& .MuiAccordionDetails-root > *:not(.MuiGrid-container)": {
+    marginTop: 0,
+    marginBottom: 0,
   },
 }));
-
-// One explicit padding used everywhere, instead of relying on MUI's default
-// small-size padding -- that default actually varies slightly between a
-// plain text input, a select's rendered value, and a labeled field, which is
-// exactly why boxes looked mismatched. Pinning the same padding on all of
-// them (and on TimeframeDropdown's own Box, below) makes every box literally
-// the same pixel height, and a bit slimmer than MUI's default besides.
-const FIELD_FONT_SIZE = "14px";
-const FIELD_PADDING_V = "6px";
-const FIELD_PADDING_H = "12px";
-const FIELD_GAP = 2; // theme spacing units (16px) between stacked fields
 
 const CustomTextField = styled(TextField)(({ theme }) => ({
   "& .MuiOutlinedInput-root": {
@@ -157,6 +176,22 @@ const FIELD_MENU_PROPS = {
     },
   },
 };
+
+// A caption sitting directly above the control it names. The pair is wrapped
+// so the accordion's flex layout counts it as ONE child -- otherwise the
+// uniform gap would push a label away from its own field, which reads as a
+// spacing bug rather than a label.
+const LabelledField = ({ label, children }) => (
+  <Box>
+    <Typography
+      variant="body2"
+      sx={{ color: "text.secondary", fontSize: "12px", mb: 0.75 }}
+    >
+      {label}
+    </Typography>
+    {children}
+  </Box>
+);
 
 // TradingView CEX-Screener style dropdown for timeframe selection (checkbox list in a popover)
 const TimeframeDropdown = ({ options, selected, onToggle, placeholder = "Select timeframe(s)" }) => {
@@ -1226,14 +1261,12 @@ const FilterSidebar = forwardRef(
               </Box>
             </AccordionSummary>
             <AccordionDetails>
-              <Box sx={{ mb: 2 }}>
-                <TimeframeDropdown
-                  options={changePercentOptions}
-                  selected={filters.changePercent}
-                  onToggle={(value) => handleCheckboxChange("changePercent", value)}
-                  placeholder="Select timeframe"
-                />
-              </Box>
+              <TimeframeDropdown
+                options={changePercentOptions}
+                selected={filters.changePercent}
+                onToggle={(value) => handleCheckboxChange("changePercent", value)}
+                placeholder="Select timeframe"
+              />
               <CustomTextField
                 fullWidth
                 size="small"
@@ -1252,7 +1285,6 @@ const FilterSidebar = forwardRef(
                     <InputAdornment position="end">%</InputAdornment>
                   ),
                 }}
-                sx={{ mt: 2 }}
               />
               <CustomTextField
                 fullWidth
@@ -1268,7 +1300,6 @@ const FilterSidebar = forwardRef(
                     e.target.value
                   )
                 }
-                sx={{ mt: 2 }}
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
@@ -1343,36 +1374,32 @@ const FilterSidebar = forwardRef(
             </AccordionSummary>
             <AccordionDetails>
               {/* Timeframes */}
-              <Box sx={{ mb: 2 }}>
-                <TimeframeDropdown
-                  options={candleTimeOptions}
-                  selected={filters.candle}
-                  onToggle={(value) => handleCheckboxChange("candle", value)}
-                  placeholder="Select timeframe(s)"
-                />
-              </Box>
+              <TimeframeDropdown
+                options={candleTimeOptions}
+                selected={filters.candle}
+                onToggle={(value) => handleCheckboxChange("candle", value)}
+                placeholder="Select timeframe(s)"
+              />
 
               {/* Condition dropdown */}
-              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                Condition:
-              </Typography>
-              <CustomTextField
-                select
-                fullWidth
-                size="small"
-                SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
-                value={filters.candle.condition || "CANDLE_ABOVE_OPEN"}
-                onChange={(e) =>
-                  handleInputChange("candle", "condition", e.target.value)
-                }
-                sx={{ mb: 1 }}
-              >
-                {candleConditionOptions.map((option) => (
-                  <MenuItem key={option.value} value={option.value}>
-                    {option.label}
-                  </MenuItem>
-                ))}
-              </CustomTextField>
+              <LabelledField label="Condition:">
+                <CustomTextField
+                  select
+                  fullWidth
+                  size="small"
+                  SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
+                  value={filters.candle.condition || "CANDLE_ABOVE_OPEN"}
+                  onChange={(e) =>
+                    handleInputChange("candle", "condition", e.target.value)
+                  }
+                >
+                  {candleConditionOptions.map((option) => (
+                    <MenuItem key={option.value} value={option.value}>
+                      {option.label}
+                    </MenuItem>
+                  ))}
+                </CustomTextField>
+              </LabelledField>
             </AccordionDetails>
           </DarkAccordion>
 
@@ -1390,17 +1417,15 @@ const FilterSidebar = forwardRef(
             </AccordionSummary>
             <AccordionDetails>
               {/* Timeframes */}
-              <Box sx={{ mb: 2 }}>
-                <TimeframeDropdown
-                  options={rsiTimeframeOptions}
-                  selected={filters.rsiRange}
-                  onToggle={(value) => handleCheckboxChange("rsiRange", value)}
-                  placeholder="Select timeframe(s)"
-                />
-              </Box>
+              <TimeframeDropdown
+                options={rsiTimeframeOptions}
+                selected={filters.rsiRange}
+                onToggle={(value) => handleCheckboxChange("rsiRange", value)}
+                placeholder="Select timeframe(s)"
+              />
 
               {/* Input fields */}
-              <Grid container spacing={1} sx={{ mb: 2 }}>
+              <Grid container spacing={1}>
                 <Grid item xs={6}>
                   <CustomTextField
                     fullWidth
@@ -1434,25 +1459,24 @@ const FilterSidebar = forwardRef(
               </Grid>
 
               {/* Condition dropdown */}
-              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                Condition:
-              </Typography>
-              <CustomTextField
-                select
-                fullWidth
-                size="small"
-                SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
-                value={filters.rsiRange.condition || "ABOVE"}
-                onChange={(e) =>
-                  handleInputChange("rsiRange", "condition", e.target.value)
-                }
-              >
-                {rsiConditionOptions.map((option) => (
-                  <MenuItem key={option.value} value={option.value}>
-                    {option.label}
-                  </MenuItem>
-                ))}
-              </CustomTextField>
+              <LabelledField label="Condition:">
+                <CustomTextField
+                  select
+                  fullWidth
+                  size="small"
+                  SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
+                  value={filters.rsiRange.condition || "ABOVE"}
+                  onChange={(e) =>
+                    handleInputChange("rsiRange", "condition", e.target.value)
+                  }
+                >
+                  {rsiConditionOptions.map((option) => (
+                    <MenuItem key={option.value} value={option.value}>
+                      {option.label}
+                    </MenuItem>
+                  ))}
+                </CustomTextField>
+              </LabelledField>
             </AccordionDetails>
           </DarkAccordion>
 
@@ -1470,20 +1494,15 @@ const FilterSidebar = forwardRef(
             </AccordionSummary>
             <AccordionDetails>
               {/* Timeframes */}
-              <Box sx={{ mb: 2 }}>
-                <TimeframeDropdown
-                  options={rsiTimeframeOptions}
-                  selected={filters?.rsiDivergence}
-                  onToggle={(value) => handleCheckboxChange("rsiDivergence", value)}
-                  placeholder="Select timeframe(s)"
-                />
-              </Box>
+              <TimeframeDropdown
+                options={rsiTimeframeOptions}
+                selected={filters?.rsiDivergence}
+                onToggle={(value) => handleCheckboxChange("rsiDivergence", value)}
+                placeholder="Select timeframe(s)"
+              />
 
               {/* Divergence Type checkboxes */}
-              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                Divergence Types:
-              </Typography>
-              <Box sx={{ mb: 2 }}>
+              <LabelledField label="Divergence Types:">
                 <TimeframeDropdown
                   options={[
                     { value: "bullish", label: "Bullish Divergence" },
@@ -1501,11 +1520,11 @@ const FilterSidebar = forwardRef(
                   }
                   placeholder="Select divergence type(s)"
                 />
-              </Box>
+              </LabelledField>
 
               {/* Divergence Condition: label + info tooltip, dropdown below */}
-              <Box sx={{ mt: 2, mb: 1 }}>
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+              <Box>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.75 }}>
                   <Typography variant="body1" sx={{ color: "text.primary", fontWeight: 600 }}>
                     Divergence Condition
                   </Typography>
@@ -1577,62 +1596,56 @@ const FilterSidebar = forwardRef(
             </AccordionSummary>
             <AccordionDetails>
               {/* Timeframes */}
-              <Box sx={{ mb: 2 }}>
-                <TimeframeDropdown
-                  options={oiTimeframeOptions}
-                  selected={filters?.oiChange}
-                  onToggle={(value) => handleCheckboxChange("oiChange", value)}
-                  placeholder="Select timeframe(s)"
-                />
-              </Box>
-
-              {/* Scroll Down option: Percentage or Value */}
-              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                Type:
-              </Typography>
-              <CustomTextField
-                select
-                fullWidth
-                size="small"
-                SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
-                value={filters?.oiChange?.type || "PERCENTAGE"}
-                onChange={(e) =>
-                  handleInputChange("oiChange", "type", e.target.value)
-                }
-                sx={{ mb: 2 }}
-              >
-                {oiTypeOptions.map((option) => (
-                  <MenuItem key={option.value} value={option.value}>
-                    {option.label}
-                  </MenuItem>
-                ))}
-              </CustomTextField>
-
-              {/* Percentage (BOX) or Value (BOX) */}
-              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                {filters?.oiChange?.type === "PERCENTAGE" ? "Percentage %:" : "Value:"}
-              </Typography>
-              <CustomTextField
-                fullWidth
-                size="small"
-                type="number"
-                placeholder={filters?.oiChange?.type === "PERCENTAGE" ? "Enter %" : "Enter value"}
-                value={filters?.oiChange?.value || ""}
-                onChange={(e) =>
-                  handleInputChange("oiChange", "value", e.target.value)
-                }
-                InputProps={
-                  filters?.oiChange?.type === "PERCENTAGE"
-                    ? { endAdornment: <InputAdornment position="end">%</InputAdornment> }
-                    : undefined
-                }
-                sx={{ mb: 2 }}
+              <TimeframeDropdown
+                options={oiTimeframeOptions}
+                selected={filters?.oiChange}
+                onToggle={(value) => handleCheckboxChange("oiChange", value)}
+                placeholder="Select timeframe(s)"
               />
 
+              {/* Scroll Down option: Percentage or Value */}
+              <LabelledField label="Type:">
+                <CustomTextField
+                  select
+                  fullWidth
+                  size="small"
+                  SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
+                  value={filters?.oiChange?.type || "PERCENTAGE"}
+                  onChange={(e) =>
+                    handleInputChange("oiChange", "type", e.target.value)
+                  }
+                >
+                  {oiTypeOptions.map((option) => (
+                    <MenuItem key={option.value} value={option.value}>
+                      {option.label}
+                    </MenuItem>
+                  ))}
+                </CustomTextField>
+              </LabelledField>
+
+              {/* Percentage (BOX) or Value (BOX) */}
+              <LabelledField
+                label={filters?.oiChange?.type === "PERCENTAGE" ? "Percentage %:" : "Value:"}
+              >
+                <CustomTextField
+                  fullWidth
+                  size="small"
+                  type="number"
+                  placeholder={filters?.oiChange?.type === "PERCENTAGE" ? "Enter %" : "Enter value"}
+                  value={filters?.oiChange?.value || ""}
+                  onChange={(e) =>
+                    handleInputChange("oiChange", "value", e.target.value)
+                  }
+                  InputProps={
+                    filters?.oiChange?.type === "PERCENTAGE"
+                      ? { endAdornment: <InputAdornment position="end">%</InputAdornment> }
+                      : undefined
+                  }
+                />
+              </LabelledField>
+
               {/* Direction Dropdown */}
-              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                Direction:
-              </Typography>
+              <LabelledField label="Direction:">
               <CustomTextField
                 select
                 fullWidth
@@ -1675,6 +1688,7 @@ const FilterSidebar = forwardRef(
                   </Box>
                 </MenuItem>
               </CustomTextField>
+              </LabelledField>
             </AccordionDetails>
           </DarkAccordion>
 
@@ -1690,123 +1704,112 @@ const FilterSidebar = forwardRef(
             </AccordionSummary>
             <AccordionDetails>
               {/* Step 1: Timeframes */}
-              <Box sx={{ mb: 2 }}>
-                <TimeframeDropdown
-                  options={cvdTimeframeOptions}
-                  selected={filters?.cvd}
-                  onToggle={(value) => handleCheckboxChange("cvd", value)}
-                  placeholder="Select timeframe(s)"
-                />
-              </Box>
+              <TimeframeDropdown
+                options={cvdTimeframeOptions}
+                selected={filters?.cvd}
+                onToggle={(value) => handleCheckboxChange("cvd", value)}
+                placeholder="Select timeframe(s)"
+              />
 
               {/* Step 2: Mode */}
-              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                Mode:
-              </Typography>
-              <CustomTextField
-                select
-                fullWidth
-                size="small"
-                SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
-                value={filters?.cvd?.mode || "surge"}
-                onChange={(e) =>
-                  handleInputChange("cvd", "mode", e.target.value)
-                }
-                sx={{ mb: 2 }}
-              >
-                {cvdModeOptions.map((option) => (
-                  <MenuItem key={option.value} value={option.value}>
-                    {option.label}
-                  </MenuItem>
-                ))}
-              </CustomTextField>
+              <LabelledField label="Mode:">
+                <CustomTextField
+                  select
+                  fullWidth
+                  size="small"
+                  SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
+                  value={filters?.cvd?.mode || "surge"}
+                  onChange={(e) =>
+                    handleInputChange("cvd", "mode", e.target.value)
+                  }
+                >
+                  {cvdModeOptions.map((option) => (
+                    <MenuItem key={option.value} value={option.value}>
+                      {option.label}
+                    </MenuItem>
+                  ))}
+                </CustomTextField>
+              </LabelledField>
 
               {/* Step 3: Mode-specific fields */}
               {(filters?.cvd?.mode || "surge") === "surge" && (
                 <>
-                  <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                    Type:
-                  </Typography>
-                  <CustomTextField
-                    select
-                    fullWidth
-                    size="small"
-                    SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
-                    value={filters?.cvd?.type || "PERCENTAGE"}
-                    onChange={(e) =>
-                      handleInputChange("cvd", "type", e.target.value)
-                    }
-                    sx={{ mb: 2 }}
+                  <LabelledField label="Type:">
+                    <CustomTextField
+                      select
+                      fullWidth
+                      size="small"
+                      SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
+                      value={filters?.cvd?.type || "PERCENTAGE"}
+                      onChange={(e) =>
+                        handleInputChange("cvd", "type", e.target.value)
+                      }
+                    >
+                      {cvdSurgeTypeOptions.map((option) => (
+                        <MenuItem key={option.value} value={option.value}>
+                          {option.label}
+                        </MenuItem>
+                      ))}
+                    </CustomTextField>
+                  </LabelledField>
+
+                  <LabelledField
+                    label={filters?.cvd?.type === "VALUE" ? "Value:" : "Threshold %:"}
                   >
-                    {cvdSurgeTypeOptions.map((option) => (
-                      <MenuItem key={option.value} value={option.value}>
-                        {option.label}
+                    <CustomTextField
+                      fullWidth
+                      size="small"
+                      type="number"
+                      placeholder={filters?.cvd?.type === "VALUE" ? "Enter value" : "Enter %"}
+                      value={filters?.cvd?.value || ""}
+                      onChange={(e) =>
+                        handleInputChange("cvd", "value", e.target.value)
+                      }
+                      InputProps={
+                        filters?.cvd?.type !== "VALUE"
+                          ? { endAdornment: <InputAdornment position="end">%</InputAdornment> }
+                          : undefined
+                      }
+                    />
+                  </LabelledField>
+
+                  <LabelledField label="Direction:">
+                    <CustomTextField
+                      select
+                      fullWidth
+                      size="small"
+                      SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
+                      value={filters?.cvd?.direction || "increase"}
+                      onChange={(e) =>
+                        handleInputChange("cvd", "direction", e.target.value)
+                      }
+                    >
+                      <MenuItem value="increase">
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                          <TrendingUpIcon sx={{ fontSize: 18, color: "#4caf50" }} />
+                          Buy-Dominant
+                        </Box>
                       </MenuItem>
-                    ))}
-                  </CustomTextField>
-
-                  <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                    {filters?.cvd?.type === "VALUE" ? "Value:" : "Threshold %:"}
-                  </Typography>
-                  <CustomTextField
-                    fullWidth
-                    size="small"
-                    type="number"
-                    placeholder={filters?.cvd?.type === "VALUE" ? "Enter value" : "Enter %"}
-                    value={filters?.cvd?.value || ""}
-                    onChange={(e) =>
-                      handleInputChange("cvd", "value", e.target.value)
-                    }
-                    InputProps={
-                      filters?.cvd?.type !== "VALUE"
-                        ? { endAdornment: <InputAdornment position="end">%</InputAdornment> }
-                        : undefined
-                    }
-                    sx={{ mb: 2 }}
-                  />
-
-                  <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                    Direction:
-                  </Typography>
-                  <CustomTextField
-                    select
-                    fullWidth
-                    size="small"
-                    SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
-                    value={filters?.cvd?.direction || "increase"}
-                    onChange={(e) =>
-                      handleInputChange("cvd", "direction", e.target.value)
-                    }
-                    sx={{ mb: 2 }}
-                  >
-                    <MenuItem value="increase">
-                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                        <TrendingUpIcon sx={{ fontSize: 18, color: "#4caf50" }} />
-                        Buy-Dominant
-                      </Box>
-                    </MenuItem>
-                    <MenuItem value="decrease">
-                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                        <TrendingDownIcon sx={{ fontSize: 18, color: "#f44336" }} />
-                        Sell-Dominant
-                      </Box>
-                    </MenuItem>
-                    <MenuItem value="both">
-                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                        <ShowChartIcon sx={{ fontSize: 18, color: "#ff9800" }} />
-                        Both
-                      </Box>
-                    </MenuItem>
-                  </CustomTextField>
+                      <MenuItem value="decrease">
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                          <TrendingDownIcon sx={{ fontSize: 18, color: "#f44336" }} />
+                          Sell-Dominant
+                        </Box>
+                      </MenuItem>
+                      <MenuItem value="both">
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                          <ShowChartIcon sx={{ fontSize: 18, color: "#ff9800" }} />
+                          Both
+                        </Box>
+                      </MenuItem>
+                    </CustomTextField>
+                  </LabelledField>
                 </>
               )}
 
               {filters?.cvd?.mode === "absorption" && (
-                <>
-                  <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                    Absorption Types:
-                  </Typography>
-                  <Grid container spacing={1} sx={{ mb: 2 }}>
+                <LabelledField label="Absorption Types:">
+                  <Grid container spacing={1}>
                     <Grid item xs={12}>
                       <FormControlLabel
                         control={
@@ -1836,15 +1839,12 @@ const FilterSidebar = forwardRef(
                       />
                     </Grid>
                   </Grid>
-                </>
+                </LabelledField>
               )}
 
               {filters?.cvd?.mode === "divergence" && (
                 <>
-                  <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                    Divergence Types:
-                  </Typography>
-                  <Box sx={{ mb: 2 }}>
+                  <LabelledField label="Divergence Types:">
                     <TimeframeDropdown
                       options={[
                         { value: "bullish", label: "Regular Bullish" },
@@ -1858,51 +1858,48 @@ const FilterSidebar = forwardRef(
                       }
                       placeholder="Select divergence type(s)"
                     />
-                  </Box>
+                  </LabelledField>
 
-                  <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                    Trigger Mode:
-                  </Typography>
-                  <CustomTextField
-                    select
-                    fullWidth
-                    size="small"
-                    SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
-                    value={filters?.cvd?.condition || "previous"}
-                    onChange={(e) =>
-                      handleInputChange("cvd", "condition", e.target.value)
-                    }
-                    sx={{ mb: 2 }}
-                  >
-                    {cvdTriggerOptions.map((option) => (
-                      <MenuItem key={option.value} value={option.value}>
-                        {option.label}
-                      </MenuItem>
-                    ))}
-                  </CustomTextField>
+                  <LabelledField label="Trigger Mode:">
+                    <CustomTextField
+                      select
+                      fullWidth
+                      size="small"
+                      SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
+                      value={filters?.cvd?.condition || "previous"}
+                      onChange={(e) =>
+                        handleInputChange("cvd", "condition", e.target.value)
+                      }
+                    >
+                      {cvdTriggerOptions.map((option) => (
+                        <MenuItem key={option.value} value={option.value}>
+                          {option.label}
+                        </MenuItem>
+                      ))}
+                    </CustomTextField>
+                  </LabelledField>
                 </>
               )}
 
               {/* Step 4: Reset Anchor */}
-              <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-                Reset Anchor:
-              </Typography>
-              <CustomTextField
-                select
-                fullWidth
-                size="small"
-                SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
-                value={filters?.cvd?.resetAnchor || "daily"}
-                onChange={(e) =>
-                  handleInputChange("cvd", "resetAnchor", e.target.value)
-                }
-              >
-                {cvdResetAnchorOptions.map((option) => (
-                  <MenuItem key={option.value} value={option.value}>
-                    {option.label}
-                  </MenuItem>
-                ))}
-              </CustomTextField>
+              <LabelledField label="Reset Anchor:">
+                <CustomTextField
+                  select
+                  fullWidth
+                  size="small"
+                  SelectProps={{ MenuProps: FIELD_MENU_PROPS }}
+                  value={filters?.cvd?.resetAnchor || "daily"}
+                  onChange={(e) =>
+                    handleInputChange("cvd", "resetAnchor", e.target.value)
+                  }
+                >
+                  {cvdResetAnchorOptions.map((option) => (
+                    <MenuItem key={option.value} value={option.value}>
+                      {option.label}
+                    </MenuItem>
+                  ))}
+                </CustomTextField>
+              </LabelledField>
             </AccordionDetails>
           </DarkAccordion>
 
