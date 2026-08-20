@@ -6894,8 +6894,37 @@ class RealTimeAlertProcessor {
   }
 
   // Add to Candle Queue Logic
+  //
+  // Root cause of the Aug 20 rate-limit storm: every one of this function's
+  // six call sites is an error-recovery path inside a per-tick, per-symbol,
+  // per-timeframe condition check -- exactly the code that runs MORE often
+  // while the API is already banned/failing, not less. pendingCandleRequests
+  // was being written to but never READ here, so none of those call sites
+  // were actually deduplicated despite the Set's own "prevent duplicate
+  // requests" comment. During a ban, every tick for every affected
+  // symbol/timeframe kept stacking another identical entry into candleQueue
+  // for the whole 2-minute ban window; by the time the ban lifted, the queue
+  // had to burn through a huge pile of duplicates before reaching anything
+  // new, which produced more 429s and re-armed the ban -- a self-sustaining
+  // storm, not an isolated rate-limit blip.
   addCandleToQueue(symbol, timeframe) {
     const key = `${symbol}_${timeframe}`;
+    if (this.pendingCandleRequests.has(key)) return; // already queued, skip the duplicate
+
+    // Same safety net the RSI queue already has: cap growth instead of
+    // letting a bad stretch turn into an unbounded backlog. Length stays
+    // pinned at the cap while full (every call here returns before
+    // pushing), so a length-based modulo would fire on literally every
+    // dropped call instead of periodically -- throttle by time instead.
+    if (this.candleQueue.length >= 2000) {
+      const now = Date.now();
+      if (!this._lastCandleCapWarnAt || now - this._lastCandleCapWarnAt > 10000) {
+        this._lastCandleCapWarnAt = now;
+        console.warn(`⚠️ Candle queue at capacity (${this.candleQueue.length}), dropping fetch for ${key}`);
+      }
+      return;
+    }
+
     this.pendingCandleRequests.add(key);
     this.candleQueue.push({ symbol, timeframe, key });
     this.processCandleQueue();
