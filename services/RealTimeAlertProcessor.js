@@ -42,6 +42,13 @@ class RealTimeAlertProcessor {
     this.binanceWebSocket = null; // Binance WebSocket connection
     this.livePrices = {}; // Live prices cache: symbol -> { price, volume, etc. }
     this.isWebSocketRunning = false; // Track WebSocket status
+
+    // Kline WebSocket feed (feature-flagged: ENABLE_KLINE_WS=1). Writes into
+    // the same this.candleCache the REST candleQueue path already uses, so
+    // it's an additive data source, not a replacement -- see
+    // startBinanceKlineWebSocket() for the full rationale.
+    this.klineWebSockets = []; // Binance kline WebSocket connections (one per chunk)
+    this.isKlineWebSocketRunning = false; // Track kline WebSocket status
     this.redisClient = null; // Redis client for cache operations (get/set)
     this.redisSubscriber = null; // Redis client for pub/sub operations (separate connection)
     this.dbQueueClient = null; // Redis client for database queue operations
@@ -782,6 +789,208 @@ class RealTimeAlertProcessor {
     }
   }
 
+  // ============================================
+  // NEW: WebSocket-based Kline (Candle) Feed
+  // ============================================
+  //
+  // Feature-flagged (ENABLE_KLINE_WS=1, default off) replacement data path
+  // for the REST-polling candleQueue/fetchAndStoreCandleData flow, which is
+  // the root of the 429 rate-limit pressure documented above
+  // addCandleToQueue's dedup fix. Mirrors startWebSocketPriceFeed() exactly
+  // -- same chunking, generation-tagged reconnect, staleness watchdog -- but
+  // subscribes to <symbol>@kline_<interval> streams instead of @ticker, and
+  // writes into the SAME this.candleCache map, in the SAME shape
+  // fetchAndStoreCandleData already produces ({open, high, low, close,
+  // volume, quoteVolume, startTime, endTime, isComplete}), keyed identically
+  // (`${symbol}_${timeframe}`). Every existing reader -- getCandleDataOrQueue,
+  // the CANDLE_ABOVE_OPEN check, the HAMMER check -- needs zero changes:
+  // they just start getting fresher cache hits and stop needing to queue.
+  //
+  // Monthly (1M) intentionally stays on the REST/queue path -- no stream is
+  // subscribed for it here, so it keeps working exactly as it does today,
+  // untouched by this migration. If the kline feed is down, stale, or a
+  // symbol's chunk is mid-reconnect, getCandleDataOrQueue's existing
+  // cache-miss fallback queues a REST fetch exactly as it always has --
+  // this is a strictly additive data source, never a hard dependency.
+  startBinanceKlineWebSocket() {
+    if (this.isKlineWebSocketRunning) {
+      console.log("⚠️ Kline WebSocket already running");
+      return;
+    }
+
+    console.log("🚀 Starting Binance kline WebSocket feed...");
+
+    try {
+      const activeSymbols = Array.from(this.microBatchEngine.activeSymbolsSet);
+      if (activeSymbols.length === 0) {
+        console.log("⚠️ No active symbols for kline WS, retrying in 5 seconds...");
+        setTimeout(() => this.startBinanceKlineWebSocket(), 5000);
+        return;
+      }
+
+      // The 7 timeframes CANDLE_ABOVE_OPEN/HAMMER actually evaluate today
+      // (see the "Checking 7 timeframes" log line). Monthly excluded, see
+      // comment above.
+      const KLINE_WS_TIMEFRAMES = ["5MIN", "15MIN", "1HR", "4HR", "12HR", "D", "W"];
+      const KLINE_INTERVAL_TO_TF = {};
+      for (const tf of KLINE_WS_TIMEFRAMES) {
+        KLINE_INTERVAL_TO_TF[this.getBinanceInterval(tf)] = tf;
+      }
+
+      // One stream per (symbol, timeframe) pair -- flatten before chunking so
+      // a single connection's combined-stream count stays bounded the same
+      // way the ticker feed's is, regardless of how many timeframes exist.
+      const pairs = [];
+      for (const symbol of activeSymbols) {
+        for (const timeframe of KLINE_WS_TIMEFRAMES) {
+          pairs.push({ symbol, interval: this.getBinanceInterval(timeframe) });
+        }
+      }
+
+      const CHUNK_SIZE = 200;
+      const pairChunks = [];
+      for (let i = 0; i < pairs.length; i += CHUNK_SIZE) {
+        pairChunks.push(pairs.slice(i, i + CHUNK_SIZE));
+      }
+
+      console.log(`📊 Kline WS: subscribing to ${pairs.length} symbol/timeframe streams (${activeSymbols.length} symbols x ${KLINE_WS_TIMEFRAMES.length} timeframes) in ${pairChunks.length} connection(s)`);
+
+      this.klineWebSockets = this.klineWebSockets || [];
+      for (const ws of this.klineWebSockets) {
+        try { ws.close(); } catch (e) { /* ignore */ }
+      }
+      this.klineWebSockets = [];
+
+      // Same generation-tag pattern as the ticker feed -- see its comment.
+      this._klineWsGeneration = (this._klineWsGeneration || 0) + 1;
+      const generation = this._klineWsGeneration;
+
+      this.lastKlineWsMessageAt = Date.now();
+
+      let connectedCount = 0;
+      let initialConnectDone = false;
+      let msgCount = 0;
+
+      const connectChunk = (chunk, chunkIdx) => {
+        const streams = chunk.map(p => `${p.symbol.toLowerCase()}@kline_${p.interval}`).join('/');
+        const wsUrl = `wss://data-stream.binance.vision/stream?streams=${streams}`;
+
+        const ws = new WebSocket(wsUrl);
+        this.klineWebSockets.push(ws);
+
+        ws.on("open", () => {
+          console.log(`✅ Kline WS ${chunkIdx + 1}/${pairChunks.length} connected (${chunk.length} streams)`);
+          if (!initialConnectDone) {
+            connectedCount++;
+            if (connectedCount === pairChunks.length) {
+              initialConnectDone = true;
+              this.isKlineWebSocketRunning = true;
+              console.log(`🚀 All ${pairChunks.length} kline WebSocket connections established - LIVE`);
+            }
+          } else {
+            this.isKlineWebSocketRunning = true;
+          }
+        });
+
+        ws.on("message", (data) => {
+          try {
+            const parsed = JSON.parse(data.toString());
+            const payload = parsed.data || parsed;
+            if (!payload || payload.e !== "kline" || !payload.k || !payload.s) return;
+
+            const k = payload.k;
+            const timeframe = KLINE_INTERVAL_TO_TF[k.i];
+            if (!timeframe) return; // defensive: stream we didn't subscribe to
+
+            msgCount++;
+            this.lastKlineWsMessageAt = Date.now();
+
+            const candle = {
+              open: parseFloat(k.o),
+              high: parseFloat(k.h),
+              low: parseFloat(k.l),
+              close: parseFloat(k.c),
+              volume: parseFloat(k.v),
+              quoteVolume: parseFloat(k.q),
+              startTime: k.t,
+              endTime: k.T,
+              isComplete: !!k.x,
+            };
+
+            const key = `${payload.s}_${timeframe}`;
+            this.candleCache.set(key, candle);
+
+            if (msgCount % 5000 === 0) {
+              console.log(`📊 Kline WS: ${msgCount} messages processed`);
+            }
+          } catch (error) {
+            console.error("❌ Error parsing kline WS message:", error.message);
+          }
+        });
+
+        ws.on("error", (error) => {
+          console.error(`❌ Kline WS ${chunkIdx + 1} error:`, error.message);
+        });
+
+        ws.on("close", () => {
+          const idx = this.klineWebSockets.indexOf(ws);
+          if (idx > -1) this.klineWebSockets.splice(idx, 1);
+
+          if (generation !== this._klineWsGeneration) return;
+
+          console.log(`⚠️ Kline WS ${chunkIdx + 1} closed, reconnecting just this chunk in 3 seconds...`);
+          this.isKlineWebSocketRunning = false;
+          setTimeout(() => {
+            if (generation !== this._klineWsGeneration) return;
+            connectChunk(chunk, chunkIdx);
+          }, 3000);
+        });
+      };
+
+      for (let chunkIdx = 0; chunkIdx < pairChunks.length; chunkIdx++) {
+        connectChunk(pairChunks[chunkIdx], chunkIdx);
+      }
+
+      // Same silent-feed watchdog pattern as the ticker feed.
+      if (this._klineWsWatchdogInterval) clearInterval(this._klineWsWatchdogInterval);
+      this._klineWsWatchdogInterval = setInterval(() => {
+        const silentMs = Date.now() - (this.lastKlineWsMessageAt || 0);
+        if (silentMs > 45000) {
+          console.warn(`⚠️ Kline WS feed silent for ${Math.round(silentMs / 1000)}s — forcing full resubscribe`);
+          this._klineWsGeneration = (this._klineWsGeneration || 0) + 1;
+          for (const ws of this.klineWebSockets) {
+            try { ws.close(); } catch (e) { /* ignore */ }
+          }
+          this.klineWebSockets = [];
+          this.isKlineWebSocketRunning = false;
+          this.startBinanceKlineWebSocket();
+        }
+      }, 20000);
+    } catch (error) {
+      console.error("❌ Error starting kline WebSocket:", error);
+      this.isKlineWebSocketRunning = false;
+      setTimeout(() => this.startBinanceKlineWebSocket(), 3000);
+    }
+  }
+
+  // Stop the kline WebSocket feed. Purely additive to the REST candle path,
+  // so stopping it just means every read falls back to getCandleDataOrQueue's
+  // existing cache-miss-queues-a-fetch behavior -- nothing else changes.
+  async stopBinanceKlineWebSocket() {
+    console.log("🛑 Stopping Binance kline WebSocket(s)...");
+    if (this._klineWsWatchdogInterval) {
+      clearInterval(this._klineWsWatchdogInterval);
+      this._klineWsWatchdogInterval = null;
+    }
+    if (this.klineWebSockets && this.klineWebSockets.length > 0) {
+      for (const ws of this.klineWebSockets) {
+        try { ws.close(); } catch (e) { /* ignore */ }
+      }
+      this.klineWebSockets = [];
+    }
+    this.isKlineWebSocketRunning = false;
+  }
+
   // Batch Redis updates (flush every 5 seconds instead of per-message)
   _scheduleRedisFlush() {
     if (this._redisFlushTimer) return;
@@ -908,6 +1117,15 @@ class RealTimeAlertProcessor {
     // Step 5: Start WebSocket connection (uses active symbols list)
     this.startWebSocketPriceFeed();
 
+    // Step 5.1: Start kline WebSocket feed, only if explicitly enabled.
+    // Default off -- deploys inert until flipped on after side-by-side
+    // verification against the REST candle path. See
+    // startBinanceKlineWebSocket()'s comment for what this does and does not
+    // change.
+    if (process.env.ENABLE_KLINE_WS === "1") {
+      this.startBinanceKlineWebSocket();
+    }
+
     // Step 5.5: Start OI polling for symbols with OI conditions
     this.startOIPolling();
 
@@ -1024,6 +1242,13 @@ class RealTimeAlertProcessor {
       if (this.isWebSocketRunning) {
         this.isWebSocketRunning = false;
         this.startWebSocketPriceFeed();
+      }
+
+      // Same reasoning as the ticker feed above, applied to the kline feed:
+      // only resubscribe if it's already running (flag on, past startup).
+      if (this.isKlineWebSocketRunning) {
+        this.isKlineWebSocketRunning = false;
+        this.startBinanceKlineWebSocket();
       }
     } catch (error) {
       console.error("❌ Error updating micro-batch active symbols:", error);
@@ -7553,6 +7778,12 @@ class RealTimeAlertProcessor {
         setTimeout(() => {
           this.startWebSocketPriceFeed();
         }, 3000);
+        if (process.env.ENABLE_KLINE_WS === "1") {
+          this.stopBinanceKlineWebSocket();
+          setTimeout(() => {
+            this.startBinanceKlineWebSocket();
+          }, 3000);
+        }
         break;
 
       case "emergency_cleanup":
