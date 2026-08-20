@@ -3993,7 +3993,7 @@ class RealTimeAlertProcessor {
 
           // Calculate expected candle start for this timeframe
           const timeframeMs = this.getTimeframeMs(timeframe);
-          const expectedCandleStart = Math.floor(now / timeframeMs) * timeframeMs;
+          const expectedCandleStart = this.getExpectedCandleStart(timeframe, now);
 
 
           // For D/W timeframes, allow timezone tolerance
@@ -4195,7 +4195,7 @@ class RealTimeAlertProcessor {
 
           // 🔥 CRITICAL FIX: Verify this is the CURRENT candle, not a stale one
           const timeframeMs = this.getTimeframeMs(timeframe);
-          const expectedCandleStart = Math.floor(hammerNow / timeframeMs) * timeframeMs;
+          const expectedCandleStart = this.getExpectedCandleStart(timeframe, hammerNow);
 
           if (candle.startTime < expectedCandleStart) {
             console.log(`⚠️ [${timeframe}] HAMMER: STALE candle detected! Forcing refresh...`);
@@ -6831,6 +6831,41 @@ class RealTimeAlertProcessor {
     };
 
     return timeframes[normalized] || timeframes["5MIN"]; // Default to 5 minutes
+  }
+
+  // The correct UTC boundary for the CURRENT candle of this timeframe, as of
+  // `now`. Math.floor(now/ms)*ms only works for timeframes that evenly tile
+  // a day from a midnight-UTC reference (intraday intervals, 12HR, Daily) --
+  // Unix epoch (Jan 1 1970) was a Thursday, so floor-dividing a 7-day span
+  // lands on Thursday boundaries, three days off from the Monday boundary
+  // Binance actually uses for weekly candles. Months run 28-31 days, so no
+  // fixed millisecond duration (getTimeframeMs uses a 30-day approximation)
+  // can ever line up with a calendar-month boundary either.
+  //
+  // This was silently producing "stale candle" false positives for W (and
+  // would for M too) wherever it fed the 1-hour staleness tolerance meant
+  // for ordinary boundary jitter -- a real Monday candle looked 3 days
+  // "early" against the wrong Thursday-based expectation. One other call
+  // site already worked around this by skipping the check outright for W/M;
+  // this computes the real boundary instead, so staleness detection still
+  // catches genuinely stale data on these timeframes rather than giving up
+  // on validating them.
+  getExpectedCandleStart(timeframe, now = Date.now()) {
+    const upper = (timeframe || "").toUpperCase();
+
+    if (["W", "1W", "WEEK", "WEEKLY"].includes(upper)) {
+      const d = new Date(now);
+      const daysSinceMonday = (d.getUTCDay() + 6) % 7; // Mon=0 ... Sun=6
+      return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - daysSinceMonday, 0, 0, 0, 0);
+    }
+
+    if (["M", "1MONTH", "MONTH", "MONTHLY"].includes(upper)) {
+      const d = new Date(now);
+      return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 0, 0, 0, 0);
+    }
+
+    const timeframeMs = this.getTimeframeMs(timeframe);
+    return Math.floor(now / timeframeMs) * timeframeMs;
   }
 
   // Get Binance interval from our timeframe format
