@@ -1324,7 +1324,9 @@ class RealTimeAlertProcessor {
     try {
       // 🔥 CRITICAL FIX: Save ORIGINAL baseline BEFORE any updates
       // This prevents race condition where baseline resets before condition check
-      const originalBaselinePrice = parseFloat(alert.baselinePrice) || 0;
+      // (let, not const: the baseline-integrity repair below may correct this
+      // to the real Binance candle open before any condition reads it.)
+      let originalBaselinePrice = parseFloat(alert.baselinePrice) || 0;
       const originalBaselineVolume = parseFloat(alert.baselineVolume) || 0;
 
       // 🛡️ SAFETY CHECK: If baseline is 0 or missing, set it to current price and skip this check
@@ -1550,6 +1552,75 @@ class RealTimeAlertProcessor {
       }
 
       // Alert not locked - proceed (silent)
+
+      // ═══ BASELINE INTEGRITY REPAIR ═══
+      // The baseline is set at a candle boundary from whatever price snapshot
+      // is available at that instant, which can be stale (thin symbol whose
+      // ticker hasn't ticked, or a WS chunk mid-reconnect). Once the real
+      // Binance candle open for that same boundary is in candleCache, adopt it
+      // -- it is by definition the correct reference for "change over this
+      // candle", and it is exactly the number the chart shows.
+      //
+      // Repaired ONCE per (alert, boundary): after that this is skipped, so the
+      // baseline stays fixed for the rest of the candle rather than being
+      // re-derived on every tick. And it rewrites alert.baselinePrice /
+      // originalBaselinePrice / effectiveBaseline together -- the single set of
+      // values every downstream consumer reads -- so the condition check and the
+      // recorded alert history can never disagree about what the baseline was.
+      if (alert.conditions?.changePercent?.timeframe && alert.baselineTimestamp) {
+        const cpTimeframe = alert.conditions.changePercent.timeframe;
+        const cpTimeframeMs = this.getTimeframeMs(cpTimeframe);
+        const baselineBoundary =
+          Math.floor(new Date(alert.baselineTimestamp).getTime() / cpTimeframeMs) * cpTimeframeMs;
+
+        this._baselineRepairedFor = this._baselineRepairedFor || new Map();
+        const alertKey = alert._id.toString();
+
+        if (this._baselineRepairedFor.get(alertKey) !== baselineBoundary) {
+          const cachedForBoundary = this.candleCache.get(`${alert.symbol}_${cpTimeframe}`);
+          if (
+            cachedForBoundary &&
+            cachedForBoundary.open !== null &&
+            isFinite(cachedForBoundary.open) &&
+            cachedForBoundary.open > 0 &&
+            cachedForBoundary.startTime === baselineBoundary
+          ) {
+            const trueOpen = cachedForBoundary.open;
+            const currentBaseline = parseFloat(alert.baselinePrice) || 0;
+
+            // Only rewrite on a meaningful difference -- an exact-match repair
+            // would be a no-op, and float noise should not trigger a DB write.
+            if (currentBaseline > 0 && Math.abs(trueOpen - currentBaseline) / currentBaseline > 0.0001) {
+              console.log(
+                `🔧 Baseline corrected for ${alert.symbol} (${cpTimeframe}): ${currentBaseline} → ${trueOpen} (real candle open @ ${new Date(baselineBoundary).toISOString()})`
+              );
+
+              alert.baselinePrice = trueOpen;
+              originalBaselinePrice = trueOpen;
+              if (typeof effectiveBaseline !== "undefined") effectiveBaseline = trueOpen;
+
+              const alertsForSymbolRepair = this.activeAlerts.get(alert.symbol);
+              if (alertsForSymbolRepair) {
+                const repairIdx = alertsForSymbolRepair.findIndex(
+                  (a) => a._id.toString() === alertKey
+                );
+                if (repairIdx !== -1) {
+                  alertsForSymbolRepair[repairIdx].baselinePrice = trueOpen;
+                }
+              }
+
+              Alert.findByIdAndUpdate(alert._id, { baselinePrice: trueOpen }).catch((error) => {
+                console.error(
+                  `❌ Error persisting corrected baseline for ${alert.symbol}:`,
+                  error.message
+                );
+              });
+            }
+
+            this._baselineRepairedFor.set(alertKey, baselineBoundary);
+          }
+        }
+      }
 
       // 🔥 CRITICAL FIX: Use ORIGINAL baseline for direction check
       // This ensures we compare against the baseline BEFORE it was updated
