@@ -5129,19 +5129,16 @@ class RealTimeAlertProcessor {
 
       // Every divergence on this timeframe. Point A (the starting pivot the
       // mitigation line gets drawn from) is always a confirmed swing. Point B
-      // is either another confirmed swing, or the live/forming candle itself
-      // — a trader reads a divergence off the chart the moment price makes a
-      // new high against a fading RSI, without waiting five more candles for
-      // that high to become "official," and this has to see it the same way.
+      // must be a confirmed swing too -- only ever block on a divergence once
+      // its pivot B is a confirmed, closed-candle swing, never a still-forming
+      // live candle. `swings` already is exactly that (findSwings only returns
+      // pivots with confirming bars closed on both sides), so this only has to
+      // scan `swings` for B -- no live-candle injection.
       const hits = [];
 
       const scan = (swings, wideSet, side) => {
-        const liveB = { index: lastIndex, value: rsiArray[lastIndex] };
-        const bCandidates =
-          liveB.value === null || liveB.value === undefined ? swings : [...swings, liveB];
-
-        for (let bi = bCandidates.length - 1; bi >= 0; bi--) {
-          const B = bCandidates[bi];
+        for (let bi = swings.length - 1; bi >= 0; bi--) {
+          const B = swings[bi];
           if (B.value === null || B.value === undefined) continue;
 
           for (let ai = swings.length - 1; ai >= 0; ai--) {
