@@ -4669,10 +4669,19 @@ class RealTimeAlertProcessor {
     // Logging only; no threshold or control flow below is touched by this flag.
     const isDiagSymbol = symbol === "BTCUSDT" || symbol === "ETHUSDT" || symbol === "XAUTUSDT";
 
-    // Conditional reads the candle that is still forming; the other two wait for
-    // a close. Independent additionally holds back one further bar, which then
-    // has to confirm the signal rather than contribute to it.
-    const useLiveCandle = triggerMode === "conditional";
+    // Every mode evaluates on CLOSED candles, Conditional included: the client's
+    // rule is "candle close hui, agar us pe div hai to block" — a divergence only
+    // counts once the bar it formed on has actually closed. Conditional used to
+    // read the still-forming candle, which let it veto on a shape the bar never
+    // closed with.
+    //
+    // Independent additionally holds back one further bar, which then has to
+    // confirm the signal rather than contribute to it. Conditional waits for no
+    // confirmation bar at all — that is the one place the two still differ.
+    //
+    // (The live-candle branch below is now unreachable. Left in place rather than
+    // ripped out, to keep this change to the behaviour being fixed.)
+    const useLiveCandle = false;
     const CONFIRM_BARS = triggerMode === "independent" ? 1 : 0;
 
     // If no specific divergence type is selected, return false
@@ -5112,6 +5121,33 @@ class RealTimeAlertProcessor {
     const match = await this.evaluateRSIDivergence(condition, symbol, 14, "conditional");
 
     if (!match || !match.found) return { found: false };
+
+    // A divergence vetoes exactly ONCE. After that its anchor pivot is spent:
+    // the client's rule is that the next candle is not blocked, because the
+    // reference has moved on to the nearer high. Keyed on the anchor's own
+    // timestamp (same shape as the Independent trigger's dedup signature), so
+    // a genuinely NEW divergence — different anchor, or a different type on the
+    // same anchor — still gets its own single veto.
+    //
+    // This is needed because a freshly-made high cannot become an anchor until
+    // 5 confirming bars have closed after it; without the ledger the same old
+    // pivot would keep matching, and keep vetoing, on every candle in between.
+    const signature = `${symbol}:${match.timeframe}:${match.type}:${match.pivot2?.time}`;
+
+    this._shieldSpentPivots = this._shieldSpentPivots || new Map();
+    if (this._shieldSpentPivots.has(signature)) {
+      return { found: false };
+    }
+    this._shieldSpentPivots.set(signature, Date.now());
+
+    // Bounded: drop anything older than a day once the ledger gets large, so a
+    // long-running worker cannot accumulate pivots indefinitely.
+    if (this._shieldSpentPivots.size > 5000) {
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      for (const [k, seenAt] of this._shieldSpentPivots) {
+        if (seenAt < cutoff) this._shieldSpentPivots.delete(k);
+      }
+    }
 
     return {
       found: true,
