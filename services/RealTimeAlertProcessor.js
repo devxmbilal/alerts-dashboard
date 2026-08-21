@@ -1387,7 +1387,15 @@ class RealTimeAlertProcessor {
             cachedCandleAtReset.startTime === currentCandleStart
               ? cachedCandleAtReset.open
               : null;
-          const freshBaselinePrice = realCandleOpenAtReset !== null ? realCandleOpenAtReset : liveData.price;
+          // liveData.price can itself be stale -- it's a snapshot from
+          // whenever this alert's item was queued, not whenever it actually
+          // got processed. this.livePrices is updated continuously by the
+          // ticker WS regardless of any single alert's own processing delay,
+          // so it's always at least as fresh, usually fresher, than a
+          // liveData snapshot that sat in a processing backlog.
+          const currentTickerPrice = parseFloat(this.livePrices[alert.symbol]?.price);
+          const mostCurrentLivePrice = isFinite(currentTickerPrice) ? currentTickerPrice : liveData.price;
+          const freshBaselinePrice = realCandleOpenAtReset !== null ? realCandleOpenAtReset : mostCurrentLivePrice;
 
           // Update baseline to the fresh (real-candle-open-preferred) price
           alert.baselinePrice = freshBaselinePrice;
