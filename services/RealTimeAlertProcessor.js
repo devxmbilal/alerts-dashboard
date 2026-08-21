@@ -1371,14 +1371,32 @@ class RealTimeAlertProcessor {
             `   Current candle:  ${new Date(currentCandleStart).toISOString()}`
           );
 
-          // Update baseline to current live price
-          alert.baselinePrice = liveData.price;
+          // Prefer the REAL Binance candle open for this exact boundary over
+          // the live ticker snapshot -- the ticker price can be several
+          // minutes stale if this alert's evaluation tick was delayed, but
+          // candleCache is fetched independently via REST/kline-WS and is
+          // never stale in that way. Falls back to the ticker price when the
+          // cache doesn't have this exact candle yet, so the reset is never
+          // blocked or delayed by this.
+          const candleCacheKey = `${alert.symbol}_${timeframe}`;
+          const cachedCandleAtReset = this.candleCache.get(candleCacheKey);
+          const realCandleOpenAtReset =
+            cachedCandleAtReset &&
+            cachedCandleAtReset.open !== null &&
+            isFinite(cachedCandleAtReset.open) &&
+            cachedCandleAtReset.startTime === currentCandleStart
+              ? cachedCandleAtReset.open
+              : null;
+          const freshBaselinePrice = realCandleOpenAtReset !== null ? realCandleOpenAtReset : liveData.price;
+
+          // Update baseline to the fresh (real-candle-open-preferred) price
+          alert.baselinePrice = freshBaselinePrice;
           alert.baselineTimestamp = new Date(currentCandleStart); // Set to candle start for accurate tracking
 
           // 🔥 CRITICAL FIX: Update originalBaselinePrice so we don't trigger
           // based on the previous candle's performance at the junction.
           // This ensures the 2% check is FRESH for the new candle.
-          const freshBaseline = parseFloat(liveData.price) || originalBaselinePrice;
+          const freshBaseline = parseFloat(freshBaselinePrice) || originalBaselinePrice;
 
           // Set effectiveBaseline so the change% check below uses the NEW (reset) baseline
           // This ensures the very first tick of a new candle starts at 0% change.
@@ -1407,7 +1425,7 @@ class RealTimeAlertProcessor {
 
           // Update in database (non-blocking)
           Alert.findByIdAndUpdate(alert._id, {
-            baselinePrice: liveData.price,
+            baselinePrice: freshBaselinePrice,
             baselineVolume: alert.baselineVolume,
             baselineTimestamp: new Date(currentCandleStart),
           }).catch((error) => {
@@ -1427,7 +1445,7 @@ class RealTimeAlertProcessor {
               // Update with new baseline AND preserve conditions (lock)
               alertsForSymbol[alertIndex] = {
                 ...alertsForSymbol[alertIndex],
-                baselinePrice: liveData.price,
+                baselinePrice: freshBaselinePrice,
                 baselineVolume: liveData.volume || liveData.volume24h,
                 baselineTimestamp: new Date(currentCandleStart),
                 conditions: alert.conditions, // Preserve lock
@@ -1438,7 +1456,7 @@ class RealTimeAlertProcessor {
           // OPTIMIZATION: Update Redis cache (non-blocking)
           this.updateAlertInCache({
             ...alert,
-            baselinePrice: liveData.price,
+            baselinePrice: freshBaselinePrice,
             baselineVolume: liveData.volume || liveData.volume24h,
             baselineTimestamp: new Date(currentCandleStart),
           }).catch((error) => {
