@@ -1322,6 +1322,29 @@ class RealTimeAlertProcessor {
   // Task 2: Process alert with live data - check baseline price comparison
   async processAlertWithLiveData(alert, liveData) {
     try {
+      // ═══ LIVE-PRICE INTEGRITY REPAIR ═══
+      // liveData.price is a snapshot from whenever this alert's item was
+      // queued into the micro-batch, not whenever it is actually processed --
+      // if that queue item sat in a backlog, this can be several minutes
+      // stale (confirmed on ROBOUSDT: a real 21:01 price used as "now" at
+      // 21:05, four minutes later, while the real price had since round-
+      // tripped and come back down). this.livePrices is the ticker WS cache,
+      // updated continuously regardless of any single alert's processing
+      // delay, so it is always at least as fresh, usually much fresher.
+      //
+      // Corrected once, by mutating liveData.price directly -- liveData is a
+      // fresh per-item object handed to this one call, not a shared cache, so
+      // this cannot affect any other alert's processing. Every downstream
+      // read (the change% check, every other condition, and
+      // triggerAlertWithLiveData's recorded triggerData.price) sees the same
+      // corrected value afterward -- there is no second copy to disagree
+      // with, which is the property that made the decision-vs-recording
+      // split in 909e0ed (reverted) unsafe.
+      const tickerPrice = parseFloat(this.livePrices[alert.symbol]?.price);
+      if (isFinite(tickerPrice) && tickerPrice > 0) {
+        liveData.price = tickerPrice;
+      }
+
       // 🔥 CRITICAL FIX: Save ORIGINAL baseline BEFORE any updates
       // This prevents race condition where baseline resets before condition check
       // (let, not const: the baseline-integrity repair below may correct this
