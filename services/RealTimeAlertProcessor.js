@@ -5076,251 +5076,60 @@ class RealTimeAlertProcessor {
   }
 
   // ================= Conditional Trigger: Divergence Safety Shield =================
-  // Standalone on purpose: it shares no code with evaluateRSIDivergence, whose
-  // Independent-trigger behaviour must not change.
+  // The exact mirror of the Independent Trigger: same detection, opposite
+  // outcome. Independent FIRES an alert when a divergence is found; Conditional
+  // VETOES the alert when one is found, and stays out of the way when none is.
   //
-  // The client's rule, in their own words:
-  //   1. crossing or above the pivot point + other conditions met -> do NOT trigger
-  //   2. below the pivot point + other conditions met -> MUST trigger
-  //   3. next time (even next candle) price crosses the pivot -> MUST trigger
+  // This delegates to evaluateRSIDivergence rather than detecting anything
+  // itself, which is the entire point of the rewrite. The previous version
+  // paired two confirmed swings and then ran a separate divergenceMitigationState
+  // ledger to decide whether that pivot still counted (block on first re-test,
+  // allow afterwards). That is not how the client reads a chart, and it is why
+  // blocks landed on candles showing no divergence while candles that plainly
+  // had one passed straight through.
   //
-  // In their trading terms: a divergence blocks exactly once, on the first
-  // re-test of its starting pivot. After that the level is "mitigated" and is
-  // never considered again — "unless new recent per div bani ha", i.e. unless a
-  // newer divergence forms on a more recent pivot, which then takes over.
+  // The client's rule:
+  //   price Higher High + RSI Lower High   -> bearish        -> veto
+  //   RSI  Higher High + price Lower High  -> hidden bearish -> veto
+  //   (inverse on the low side for bullish / hidden bullish)
   //
-  // Two real bugs this replaces:
-  //   * Pivot 2 used to be the live forming candle rather than a confirmed
-  //     swing. That paired a genuine past pivot with whatever price happened to
-  //     be doing at that instant and called the result a divergence — which is
-  //     exactly why blocks kept landing on candles where the chart plainly
-  //     shows no divergence at all, and why the client could never find one.
-  //   * There was no mitigation concept whatsoever, so a single old pivot could
-  //     veto every alert for as long as it stayed inside the lookback window.
+  // Two details that fall out of reusing the shared detector, rather than
+  // needing special handling here:
+  //   * "As soon as" price breaks the previous high — the forming candle counts,
+  //     not only closed ones. It has to: the % move that would fire the alert is
+  //     itself measured live, so waiting for a close would let the alert out the
+  //     door before the veto could land. triggerMode "conditional" selects
+  //     exactly that (live candle, no confirmation bar).
+  //   * "Next candle wont be block because now it will be taking nearest price
+  //     high or rsi high" — evaluateRSIDivergence scans anchors newest-first and
+  //     draws from the closest qualifying swing, so once a nearer pivot forms it
+  //     becomes the reference on its own. No mitigation ledger required.
+  //
+  // Independent Trigger behaviour is untouched: triggerMode only selects
+  // live-candle and confirm-bar handling inside evaluateRSIDivergence, and the
+  // "independent" path keeps its own confirmation bar exactly as before.
   async checkDivergenceShield(condition, symbol) {
-    if (!condition || !condition.timeframes || condition.timeframes.length === 0) {
-      return { found: false };
-    }
+    const match = await this.evaluateRSIDivergence(condition, symbol, 14, "conditional");
 
-    // Only the divergence types actually ticked in the UI take part.
-    const wanted = {
-      bearish: !!condition.bearish,
-      bearishHidden: !!condition.bearishHidden,
-      bullish: !!condition.bullish,
-      bullishHidden: !!condition.bullishHidden,
+    if (!match || !match.found) return { found: false };
+
+    return {
+      found: true,
+      type: match.type,
+      label: match.label,
+      timeframe: match.timeframe,
+      // The anchor pivot: the "previous high/low" the current candle broke.
+      // Reported so the veto message names the level actually being tested.
+      pivotLine: match.pivot2?.price,
+      barsBetween: match.barsBetween,
+      pivot1: match.pivot1,
+      pivot2: match.pivot2,
     };
-    if (!wanted.bearish && !wanted.bearishHidden && !wanted.bullish && !wanted.bullishHidden) {
-      return { found: false };
-    }
-
-    const isDiagSymbol = symbol === "BTCUSDT" || symbol === "ETHUSDT" || symbol === "XAUTUSDT";
-    const rsiPeriod = 14;
-
-    const LB_LEFT = 5;
-    const LB_RIGHT = 5;
-    const LB_WIDE = 8; // hidden patterns need a wider anchor, to skip micro-bumps
-    const RANGE_LOWER = 14;
-    const RANGE_UPPER = 90;
-    const MIN_RSI_DIFF = 3;
-    const MIN_MOVE_ATR = 0.5;
-    const FALLBACK_PRICE_DIFF_PCT = 0.3;
-    const ABSOLUTE_MIN_PRICE_PCT = 0.05;
-    const MIN_STRENGTH = 4;
-    const REGULAR_BEARISH_RSI = 60;
-    const HIDDEN_BEARISH_RSI = 40;
-    const REGULAR_BULLISH_RSI = 40;
-    const HIDDEN_BULLISH_RSI = 60;
-
-    for (const timeframe of condition.timeframes) {
-      const ohlc = await this.getHistoricalOHLC(symbol, timeframe, rsiPeriod);
-      if (!ohlc || !ohlc.closes || !ohlc.highs || !ohlc.lows) continue;
-
-      // Copies, not references — the live tick gets folded into the last
-      // candle below, and this must never mutate the shared OHLC cache that
-      // other conditions on this same tick are also reading from.
-      const closes = [...ohlc.closes];
-      const highs = [...ohlc.highs];
-      const lows = [...ohlc.lows];
-      const openTimes = ohlc.openTimes || [];
-      const lastIndex = closes.length - 1;
-
-      // The pattern's STARTING pivot (point A) must always be a confirmed
-      // swing — that is the level the mitigation line is drawn from, and it
-      // has to be a real, settled point. But the RECENT pivot (point B) is
-      // exactly what a trader watches live: is price making a new high right
-      // now while RSI fails to confirm it. Folding today's live tick into the
-      // forming candle lets that count as B, which is what makes this shield
-      // catch a divergence the moment it forms instead of five bars later
-      // once a swing to its right closes.
-      const livePriceRaw = parseFloat(this.livePrices[symbol]?.price);
-      if (isFinite(livePriceRaw) && lastIndex >= 0) {
-        closes[lastIndex] = livePriceRaw;
-        highs[lastIndex] = Math.max(highs[lastIndex], livePriceRaw);
-        lows[lastIndex] = Math.min(lows[lastIndex], livePriceRaw);
-      }
-
-      if (closes.length < rsiPeriod + LB_LEFT + LB_RIGHT + RANGE_LOWER + 1) continue;
-
-      const rsiArray = this.computeRSIArray(closes, rsiPeriod);
-      if (!rsiArray || rsiArray.length === 0) continue;
-
-      const ATR_BARS = 14;
-      let atrPct = null;
-      if (lastIndex >= ATR_BARS) {
-        let sum = 0;
-        let usable = true;
-        for (let i = lastIndex - ATR_BARS + 1; i <= lastIndex; i++) {
-          const prevClose = closes[i - 1];
-          if (!isFinite(highs[i]) || !isFinite(lows[i]) || !isFinite(prevClose) || !closes[i]) {
-            usable = false;
-            break;
-          }
-          sum += Math.max(
-            highs[i] - lows[i],
-            Math.abs(highs[i] - prevClose),
-            Math.abs(lows[i] - prevClose)
-          ) / closes[i];
-        }
-        if (usable) atrPct = (sum / ATR_BARS) * 100;
-      }
-
-      const swingHighs = this.findSwings(rsiArray, "high", LB_LEFT, LB_RIGHT);
-      const swingLows = this.findSwings(rsiArray, "low", LB_LEFT, LB_RIGHT);
-      const wideHighs = new Set(
-        this.findSwings(rsiArray, "high", LB_WIDE, LB_WIDE).map((s) => s.index)
-      );
-      const wideLows = new Set(
-        this.findSwings(rsiArray, "low", LB_WIDE, LB_WIDE).map((s) => s.index)
-      );
-
-      const passesQuality = (aRsi, bRsi, aPrice, bPrice) => {
-        const rsiDiff = Math.abs(bRsi - aRsi);
-        const priceDiffPct = aPrice !== 0 ? Math.abs((bPrice - aPrice) / aPrice) * 100 : 0;
-        const hasAtr = atrPct !== null && atrPct > 0;
-        const move = hasAtr ? priceDiffPct / atrPct : priceDiffPct;
-        const minMove = hasAtr ? MIN_MOVE_ATR : FALLBACK_PRICE_DIFF_PCT;
-        if (priceDiffPct < ABSOLUTE_MIN_PRICE_PCT) return false;
-        if (rsiDiff < MIN_RSI_DIFF) return false;
-        if (move < minMove) return false;
-        if (rsiDiff * move < MIN_STRENGTH) return false;
-        return true;
-      };
-
-      // Every divergence on this timeframe. Point A (the starting pivot the
-      // mitigation line gets drawn from) is always a confirmed swing. Point B
-      // must be a confirmed swing too -- only ever block on a divergence once
-      // its pivot B is a confirmed, closed-candle swing, never a still-forming
-      // live candle. `swings` already is exactly that (findSwings only returns
-      // pivots with confirming bars closed on both sides), so this only has to
-      // scan `swings` for B -- no live-candle injection.
-      const hits = [];
-
-      const scan = (swings, wideSet, side) => {
-        for (let bi = swings.length - 1; bi >= 0; bi--) {
-          const B = swings[bi];
-          if (B.value === null || B.value === undefined) continue;
-
-          for (let ai = swings.length - 1; ai >= 0; ai--) {
-            const A = swings[ai];
-            if (A.value === null || A.value === undefined) continue;
-            if (A.index >= B.index) continue;
-
-            const gap = B.index - A.index;
-            if (gap < RANGE_LOWER) continue;
-            if (gap > RANGE_UPPER) break;
-
-            const aPrice = side === "high" ? highs[A.index] : lows[A.index];
-            const bPrice = side === "high" ? highs[B.index] : lows[B.index];
-            if (!isFinite(aPrice) || !isFinite(bPrice)) continue;
-            if (!passesQuality(A.value, B.value, aPrice, bPrice)) continue;
-
-            if (side === "high") {
-              // Regular bearish: price Higher High, RSI Lower High
-              if (
-                wanted.bearish &&
-                bPrice > aPrice &&
-                B.value < A.value &&
-                B.value >= REGULAR_BEARISH_RSI
-              ) {
-                hits.push({ type: "bearish", label: "Regular Bearish Divergence", side, A, B, aPrice, bPrice });
-              }
-              // Hidden bearish: price Lower High, RSI Higher High
-              else if (
-                wanted.bearishHidden &&
-                bPrice < aPrice &&
-                B.value > A.value &&
-                B.value >= HIDDEN_BEARISH_RSI &&
-                wideSet.has(A.index)
-              ) {
-                hits.push({ type: "bearishHidden", label: "Hidden Bearish Divergence", side, A, B, aPrice, bPrice });
-              }
-            } else {
-              // Regular bullish: price Lower Low, RSI Higher Low
-              if (
-                wanted.bullish &&
-                bPrice < aPrice &&
-                B.value > A.value &&
-                B.value <= REGULAR_BULLISH_RSI
-              ) {
-                hits.push({ type: "bullish", label: "Regular Bullish Divergence", side, A, B, aPrice, bPrice });
-              }
-              // Hidden bullish: price Higher Low, RSI Lower Low
-              else if (
-                wanted.bullishHidden &&
-                bPrice > aPrice &&
-                B.value < A.value &&
-                B.value <= HIDDEN_BULLISH_RSI &&
-                wideSet.has(A.index)
-              ) {
-                hits.push({ type: "bullishHidden", label: "Hidden Bullish Divergence", side, A, B, aPrice, bPrice });
-              }
-            }
-          }
-        }
-      };
-
-      if (wanted.bearish || wanted.bearishHidden) scan(swingHighs, wideHighs, "high");
-      if (wanted.bullish || wanted.bullishHidden) scan(swingLows, wideLows, "low");
-
-      if (hits.length === 0) continue;
-
-      // Only the newest divergence has a say. An older one stops counting the
-      // moment a newer one forms on a more recent pivot.
-      hits.sort((x, y) => y.B.index - x.B.index);
-      const div = hits[0];
-
-      const livePrice = parseFloat(this.livePrices[symbol]?.price);
-      const state = this.divergenceMitigationState(div, {
-        highs,
-        lows,
-        closes,
-        lastIndex,
-        livePrice,
-      });
-
-      if (isDiagSymbol) {
-        console.log(
-          `🛡️🔬 ${symbol} ${timeframe} ${div.label}: pivot line ${div.aPrice}, ${state.reason}`
-        );
-      }
-
-      if (!state.blocks) continue;
-
-      return {
-        found: true,
-        type: div.type,
-        label: div.label,
-        timeframe,
-        pivotLine: div.aPrice,
-        barsBetween: div.B.index - div.A.index,
-        pivot1: { price: div.bPrice, rsi: div.B.value, time: openTimes[div.B.index] || null },
-        pivot2: { price: div.aPrice, rsi: div.A.value, time: openTimes[div.A.index] || null },
-      };
-    }
-
-    return { found: false };
   }
 
+  // NOTE: divergenceMitigationState below is no longer reached — the shield no
+  // longer uses a mitigation ledger (see above). Left in place rather than
+  // deleted to keep this change to the one behaviour being fixed.
   // Decides whether a confirmed divergence still blocks, per the client's rule.
   //
   //   line   = price level of the divergence's STARTING pivot (pivot A)
