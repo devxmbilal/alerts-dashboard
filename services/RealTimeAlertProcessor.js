@@ -1985,8 +1985,26 @@ class RealTimeAlertProcessor {
 
           // 🔥 CRITICAL FIX: Calculate change from ORIGINAL baseline price
           // This uses effectiveBaseline (passed from original) not alert.baselinePrice (possibly updated)
+          let baselineForChangeCheck = effectiveBaseline;
+
+          // Self-correct against the real Binance candle open if candleCache
+          // has caught up since the baseline was reset -- see comment above
+          // patch_stale_baseline_v3 for the full rationale (SAGAUSDT/BANKUSDT).
+          if (alert.baselineTimestamp) {
+            const boundaryMs = new Date(alert.baselineTimestamp).getTime();
+            const cachedCandleNow = this.candleCache.get(`${alert.symbol}_${conditions.changePercent.timeframe}`);
+            if (
+              cachedCandleNow &&
+              cachedCandleNow.open !== null &&
+              isFinite(cachedCandleNow.open) &&
+              cachedCandleNow.startTime === boundaryMs
+            ) {
+              baselineForChangeCheck = cachedCandleNow.open;
+            }
+          }
+
           const changeFromBaseline =
-            ((liveData.price - effectiveBaseline) / effectiveBaseline) *
+            ((liveData.price - baselineForChangeCheck) / baselineForChangeCheck) *
             100;
 
           // 🛡️ NaN Protection
