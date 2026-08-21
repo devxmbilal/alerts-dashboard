@@ -12,6 +12,14 @@ import pLimit from "p-limit";
 import dotenv from "dotenv";
 import WebSocket from "ws";
 dotenv.config();
+// Routine per-symbol, per-tick diagnostics are gated behind this. With ~280
+// symbols x 7 timeframes evaluated continuously they were producing 10-16MB
+// of log every 1-2 minutes (~1GB retained), which is real disk I/O pressure
+// on the box for lines nobody reads unless actively debugging. Errors,
+// warnings about genuine problems, alert triggers and shield decisions are
+// deliberately NOT gated -- only the routine chatter is.
+const ALERT_VERBOSE_LOGS = process.env.ALERT_VERBOSE_LOGS === "1";
+
 class RealTimeAlertProcessor {
   constructor() {
     this.activeAlerts = new Map(); // symbol -> alert data
@@ -4197,7 +4205,7 @@ class RealTimeAlertProcessor {
     const EPSILON = 1.0001; // 0.01% epsilon to avoid float equality issues
     const CANDLE_START_BUFFER_MS = 2000; // Wait 2s after candle starts
 
-    console.log(`🕯️ Candle Evaluation: ${condition}, Live Price: ${currentPrice}`);
+    ALERT_VERBOSE_LOGS && console.log(`🕯️ Candle Evaluation: ${condition}, Live Price: ${currentPrice}`);
 
     switch (condition) {
       case "CANDLE_ABOVE_OPEN":
@@ -4206,7 +4214,7 @@ class RealTimeAlertProcessor {
           return false;
         }
 
-        console.log(`🔍 CANDLE_ABOVE_OPEN: Checking ${timeframes.length} timeframes for ${symbol}`);
+        ALERT_VERBOSE_LOGS && console.log(`🔍 CANDLE_ABOVE_OPEN: Checking ${timeframes.length} timeframes for ${symbol}`);
 
         // 🚀 HYBRID APPROACH: Cache First (FAST) + API/Queue Refresh if Stale (ACCURATE)
         const CACHE_FRESH_TTL = 30000; // Cache is "fresh" for 30 seconds
@@ -4232,7 +4240,7 @@ class RealTimeAlertProcessor {
           if (cacheIsFresh) {
             // ⚡ FAST PATH: Use cached data
             const priceAboveOpen = currentPrice > (cachedCandle.open * EPSILON);
-            console.log(`   ⚡ [${timeframe}] CACHE HIT: Open=${cachedCandle.open.toFixed(6)}, Above=${priceAboveOpen ? '✅' : '❌'}`);
+            ALERT_VERBOSE_LOGS && console.log(`   ⚡ [${timeframe}] CACHE HIT: Open=${cachedCandle.open.toFixed(6)}, Above=${priceAboveOpen ? '✅' : '❌'}`);
             return {
               timeframe,
               success: true,
@@ -4302,7 +4310,7 @@ class RealTimeAlertProcessor {
             const isLargeTF = ['D', '1D', 'W', '1W', '12HR', '12H', 'M', 'MONTH', 'MONTHLY', '1MONTH'].includes(timeframe.toUpperCase());
             const staleTolerance = isLargeTF ? 3600000 : 5000; // 1hr for D/W, 5s for others
             if (candleStartTime < expectedCandleStart - staleTolerance) {
-              console.log(`   ⚠️ [${timeframe}] CANDLE_ABOVE_OPEN: API returned stale candle (start: ${new Date(candleStartTime).toISOString()}, expected: ${new Date(expectedCandleStart).toISOString()})`);
+              ALERT_VERBOSE_LOGS && console.log(`   ⚠️ [${timeframe}] CANDLE_ABOVE_OPEN: API returned stale candle (start: ${new Date(candleStartTime).toISOString()}, expected: ${new Date(expectedCandleStart).toISOString()})`);
               // Queue a fresh fetch via the safe queue system
               this.addCandleToQueue(symbol, timeframe);
               // Use stale cache if available, otherwise skip this tick
@@ -5909,7 +5917,7 @@ class RealTimeAlertProcessor {
     const targetLevel = parseFloat(level) || 50;
     const rsiPeriod = parseInt(period) || 14;
 
-    console.log(
+    ALERT_VERBOSE_LOGS && console.log(
       `📈 RSI Evaluation: ${condition} ${targetLevel} (Period: ${rsiPeriod})`
     );
 
@@ -5919,7 +5927,7 @@ class RealTimeAlertProcessor {
       return false;
     }
 
-    console.log(`   🔍 Checking ${timeframes.length} timeframes (ALL must pass)`);
+    ALERT_VERBOSE_LOGS && console.log(`   🔍 Checking ${timeframes.length} timeframes (ALL must pass)`);
 
     // ✅ PHASE 1: Pre-fetch ALL timeframes first (like Candle strategy)
     let allDataReady = true;
@@ -5943,7 +5951,7 @@ class RealTimeAlertProcessor {
     }
 
     // ✅ PHASE 3: All data ready - NOW check conditions
-    console.log(`   ✅ RSI: All ${timeframes.length} timeframes data ready, checking conditions...`);
+    ALERT_VERBOSE_LOGS && console.log(`   ✅ RSI: All ${timeframes.length} timeframes data ready, checking conditions...`);
 
     for (const timeframe of timeframes) {
       const rsiData = rsiValues.get(timeframe);
@@ -6174,7 +6182,7 @@ class RealTimeAlertProcessor {
     const currentPrice = priceData ? parseFloat(priceData.price || priceData.c || 0) : null;
 
     console.log(`📊 MACD Check: ${symbol} | Condition: ${condition} | Fast: ${fast} | Slow: ${slow} | Price: ${currentPrice}`);
-    console.log(`   🔍 Checking ${timeframes.length} timeframes (ALL must pass)`);
+    ALERT_VERBOSE_LOGS && console.log(`   🔍 Checking ${timeframes.length} timeframes (ALL must pass)`);
 
     let allDataReady = true;
     let pendingTimeframes = [];
@@ -7421,7 +7429,7 @@ class RealTimeAlertProcessor {
 
       // Check if current candle meets change requirement (immediate check)
       const currentChange = this.calculateCandleChange(candle);
-      console.log(
+      ALERT_VERBOSE_LOGS && console.log(
         `🕯️ Candle updated for ${symbol} (${timeframe}): High=${candle.high
         }, Low=${candle.low}, Close=${candle.close
         }, Current Change=${currentChange.toFixed(3)}%`
