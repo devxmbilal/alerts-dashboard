@@ -927,20 +927,55 @@ class RealTimeAlertProcessor {
             };
 
             const key = `${payload.s}_${timeframe}`;
+            const displaced = this.candleCache.get(key);
             this.candleCache.set(key, candle);
 
-            // Remembered separately from candleCache, which gets overwritten
-            // the instant the next candle starts forming. This is read only by
-            // the CHANGE_PERCENT_CONFIRM_ON_CLOSE branch below -- purely additive,
-            // nothing else reads it.
+            // closedCandleCache remembers the last CLOSED candle, which
+            // candleCache cannot: it is overwritten the instant the next candle
+            // starts forming. Read only by the CHANGE_PERCENT_CONFIRM_ON_CLOSE
+            // branch. Both writers below carry real Binance kline values.
+            this.closedCandleCache = this.closedCandleCache || new Map();
+
+            // Writer 1 -- the entry displaced by a new boundary is the previous
+            // candle in its final observed state. Survives a dropped k.x, which
+            // matters because this WS reconnects a chunk of symbols roughly every
+            // 5 minutes, i.e. right at candle boundaries. Does not overwrite an
+            // exact record already written by writer 2 for that same candle.
+            if (
+              displaced &&
+              isFinite(displaced.startTime) &&
+              isFinite(candle.startTime) &&
+              displaced.startTime < candle.startTime &&
+              displaced.open !== null &&
+              isFinite(displaced.open) &&
+              displaced.open > 0 &&
+              displaced.close !== null &&
+              isFinite(displaced.close) &&
+              displaced.close > 0
+            ) {
+              const already = this.closedCandleCache.get(key);
+              if (!already || already.startTime !== displaced.startTime) {
+                this.closedCandleCache.set(key, {
+                  open: displaced.open,
+                  close: displaced.close,
+                  startTime: displaced.startTime,
+                  endTime: displaced.endTime,
+                  receivedAt: Date.now(),
+                  exact: false,
+                });
+              }
+            }
+
+            // Writer 2 -- Binance's final message for the candle. Its close is
+            // the settled one, so it always wins.
             if (candle.isComplete) {
-              this.closedCandleCache = this.closedCandleCache || new Map();
               this.closedCandleCache.set(key, {
                 open: candle.open,
                 close: candle.close,
                 startTime: candle.startTime,
                 endTime: candle.endTime,
                 receivedAt: candle.receivedAt,
+                exact: true,
               });
             }
 
@@ -2193,6 +2228,19 @@ class RealTimeAlertProcessor {
               };
             }
 
+            // Hand the recording path the exact candle this passed on, so the
+            // stored history and the notification report the same move that
+            // fired rather than recomputing against the next, forming candle.
+            this._closeConfirmedMove = this._closeConfirmedMove || new Map();
+            this._closeConfirmedMove.set(alert._id.toString(), {
+              timeframe: ccTimeframe,
+              open: ccClosed.open,
+              close: ccClosed.close,
+              startTime: ccClosed.startTime,
+              percent: ccChange,
+              at: Date.now(),
+            });
+
             return {
               passed: true,
               reason: `${ccAbsChange.toFixed(
@@ -2821,16 +2869,39 @@ class RealTimeAlertProcessor {
     try {
       // 🔥 FIX: Use originalBaselinePrice if passed, else use current baseline
       // This preserves the correct change % before baseline was reset
-      const baselinePrice = originalBaselinePrice || parseFloat(alert.baselinePrice) || 0;
+      // When confirm-on-close decided this alert, it left behind the exact
+      // candle it passed on. Spend it here so the record and the notification
+      // describe that candle -- otherwise this recomputes against the next,
+      // still-forming candle and reports a completely different move (the
+      // "Actual Change (5MIN): -0.723%" on a 1% threshold that PEPEUSDT showed).
+      const confirmedMove = this._closeConfirmedMove?.get(alert._id.toString());
+      if (confirmedMove) {
+        this._closeConfirmedMove.delete(alert._id.toString());
+      }
+      const useConfirmed =
+        confirmedMove &&
+        confirmedMove.timeframe === alert.conditions?.changePercent?.timeframe &&
+        Date.now() - confirmedMove.at <= this.getTimeframeMs(confirmedMove.timeframe);
+
+      const baselinePrice = useConfirmed
+        ? confirmedMove.open
+        : originalBaselinePrice || parseFloat(alert.baselinePrice) || 0;
       const baselineVolume = parseFloat(alert.baselineVolume) || 0;
-      const baselineTimestamp = alert.baselineTimestamp || new Date();
+      const baselineTimestamp = useConfirmed
+        ? new Date(confirmedMove.startTime)
+        : alert.baselineTimestamp || new Date();
       const livePrice = parseFloat(liveData.price) || 0;
 
       // Calculate change from baseline with proper NaN handling
       let changeFromBaseline = 0;
       let changeFromBaselinePercent = 0;
 
-      if (baselinePrice > 0 && livePrice > 0) {
+      if (useConfirmed) {
+        changeFromBaseline = confirmedMove.close - confirmedMove.open;
+        changeFromBaselinePercent = confirmedMove.percent;
+        if (!isFinite(changeFromBaseline)) changeFromBaseline = 0;
+        if (!isFinite(changeFromBaselinePercent)) changeFromBaselinePercent = 0;
+      } else if (baselinePrice > 0 && livePrice > 0) {
         changeFromBaseline = livePrice - baselinePrice;
         changeFromBaselinePercent = (changeFromBaseline / baselinePrice) * 100;
 
@@ -7497,29 +7568,12 @@ class RealTimeAlertProcessor {
           )}%`
         );
 
-        // Feed CHANGE_PERCENT_CONFIRM_ON_CLOSE's closedCandleCache from here
-        // too -- this path detects completion from the wall clock on every
-        // tick, so unlike the kline WS's single k.x message it cannot be
-        // dropped by a reconnect. See patch_confirm_close_robust.cjs for why:
-        // a more reliable writer than the kline-WS-only path this cache
-        // started with.
-        if (
-          candle.open !== null &&
-          isFinite(candle.open) &&
-          candle.open > 0 &&
-          candle.close !== null &&
-          isFinite(candle.close) &&
-          candle.close > 0
-        ) {
-          this.closedCandleCache = this.closedCandleCache || new Map();
-          this.closedCandleCache.set(`${symbol}_${timeframe}`, {
-            open: candle.open,
-            close: candle.close,
-            startTime: candle.startTime,
-            endTime: candle.endTime,
-            receivedAt: Date.now(),
-          });
-        }
+        // Deliberately does NOT feed closedCandleCache. This candle's open is
+        // seeded from the live ticker at the boundary and only corrected later
+        // by an async best-effort REST fetch, and its close is the last ticker
+        // tick seen -- approximations. Wiring them into the confirm-on-close
+        // threshold made PEPEUSDT read +1.211% on a candle Binance closed at
+        // -0.480%. The kline WS handler captures the real values instead.
       }
 
       // CRITICAL FIX: WebSocket ticker OHLC is 24-hour data, NOT current candle data!
