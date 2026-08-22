@@ -2437,7 +2437,13 @@ class RealTimeAlertProcessor {
     }
 
     // Priority 6: Volume (medium-high cost)
-    if (this.isConditionSet(conditions.volume?.timeframes)) {
+    // DISABLED PER CLIENT REQUEST -- "volume ni chaiye" (Increasing/Decreasing
+    // Volume condition, not Daily min Volume, which is Priority 1 above and
+    // stays active). Gated to never match rather than deleted, so any stored
+    // alert that already has conditions.volume populated is silently ignored
+    // instead of erroring. evaluateVolumeConditions is untouched, just
+    // unreachable from here.
+    if (false && this.isConditionSet(conditions.volume?.timeframes)) {
       activeConditions.push({
         name: "Volume",
         priority: 6,
