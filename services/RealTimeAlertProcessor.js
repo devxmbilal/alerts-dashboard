@@ -2077,8 +2077,47 @@ class RealTimeAlertProcessor {
           );
           const direction = conditions.changePercent.direction || "increase";
 
-          // 🔥 CRITICAL FIX: Calculate change from ORIGINAL baseline price
-          // This uses effectiveBaseline (passed from original) not alert.baselinePrice (possibly updated)
+          // The comparison is only meaningful against the REAL Binance open of
+          // the candle we are currently inside. The baseline is set at the
+          // boundary from whatever price is on hand and repaired to the true
+          // open once the kline for that boundary arrives -- but an alert can
+          // fire in the seconds before it arrives, which is how REUSDT reported
+          // 1.758% on a real 0.354% move (baseline 0.5575 vs real open 0.5653).
+          //
+          // So: refuse to evaluate unless the true open for THIS boundary is
+          // known and the baseline already equals it. Not a second correction
+          // site -- it only declines, so the decision and the recorded history
+          // keep coming from the single repaired baseline.
+          const cpTimeframe = conditions.changePercent.timeframe;
+          const cpTimeframeMs = this.getTimeframeMs(cpTimeframe);
+          const cpBoundary = Math.floor(Date.now() / cpTimeframeMs) * cpTimeframeMs;
+          const cpCached = this.candleCache.get(`${alert.symbol}_${cpTimeframe}`);
+          const cpTrueOpen =
+            cpCached &&
+            cpCached.open !== null &&
+            isFinite(cpCached.open) &&
+            cpCached.open > 0 &&
+            cpCached.startTime === cpBoundary
+              ? cpCached.open
+              : null;
+
+          if (cpTrueOpen === null) {
+            return {
+              passed: false,
+              reason: `${cpTimeframe} candle open not confirmed yet`,
+            };
+          }
+
+          if (
+            !(effectiveBaseline > 0) ||
+            Math.abs(cpTrueOpen - effectiveBaseline) / cpTrueOpen > 0.0001
+          ) {
+            return {
+              passed: false,
+              reason: `baseline ${effectiveBaseline} does not match real ${cpTimeframe} candle open ${cpTrueOpen} — not firing on an unverified baseline`,
+            };
+          }
+
           const changeFromBaseline =
             ((liveData.price - effectiveBaseline) / effectiveBaseline) *
             100;
@@ -4698,14 +4737,17 @@ class RealTimeAlertProcessor {
     // read the still-forming candle, which let it veto on a shape the bar never
     // closed with.
     //
-    // Independent additionally holds back one further bar, which then has to
-    // confirm the signal rather than contribute to it. Conditional waits for no
-    // confirmation bar at all — that is the one place the two still differ.
+    // Independent and Conditional both hold back one further bar, which then
+    // has to confirm the signal rather than contribute to it — the client asked
+    // for Conditional to use the same logic as Independent end to end, with
+    // only the outcome inverted (Independent fires on a divergence, Conditional
+    // blocks on one). Detection is now identical between them.
     //
     // (The live-candle branch below is now unreachable. Left in place rather than
     // ripped out, to keep this change to the behaviour being fixed.)
     const useLiveCandle = false;
-    const CONFIRM_BARS = triggerMode === "independent" ? 1 : 0;
+    const CONFIRM_BARS =
+      triggerMode === "independent" || triggerMode === "conditional" ? 1 : 0;
 
     // If no specific divergence type is selected, return false
     if (!condition.bullish && !condition.bullishHidden && !condition.bearish && !condition.bearishHidden) {
