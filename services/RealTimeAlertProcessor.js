@@ -923,6 +923,7 @@ class RealTimeAlertProcessor {
               startTime: k.t,
               endTime: k.T,
               isComplete: !!k.x,
+              receivedAt: Date.now(),
             };
 
             const key = `${payload.s}_${timeframe}`;
@@ -1356,12 +1357,17 @@ class RealTimeAlertProcessor {
         const cpMs = this.getTimeframeMs(cpTf);
         const cpBoundaryNow = Math.floor(Date.now() / cpMs) * cpMs;
         const cached = this.candleCache.get(`${alert.symbol}_${cpTf}`);
+        const KLINE_FRESHNESS_MS = 20000; // 20s -- generous vs normal tick cadence,
+        // tight enough to catch a chunk stuck mid-reconnect (observed lasting
+        // multiple minutes on COTIUSDT, 2026-08-22 08:40-08:44 UTC).
         if (
           cached &&
           cached.close !== null &&
           isFinite(cached.close) &&
           cached.close > 0 &&
-          cached.startTime === cpBoundaryNow
+          cached.startTime === cpBoundaryNow &&
+          isFinite(cached.receivedAt) &&
+          Date.now() - cached.receivedAt <= KLINE_FRESHNESS_MS
         ) {
           sameKlineClose = cached.close;
         }
@@ -4532,6 +4538,7 @@ class RealTimeAlertProcessor {
               low: parseFloat(kline[3]),
               close: parseFloat(kline[4]),
               volume: parseFloat(kline[5]),
+              receivedAt: Date.now(),
               startTime: candleStartTime,
               endTime: parseInt(kline[6]),
               isComplete: false,
@@ -7351,6 +7358,7 @@ class RealTimeAlertProcessor {
         startTime: candleStartTime,
         endTime: parseInt(kline[6]),
         isComplete: false,
+        receivedAt: Date.now(),
       };
 
       // Store in Cache
