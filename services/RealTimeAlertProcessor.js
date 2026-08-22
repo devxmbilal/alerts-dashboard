@@ -1622,13 +1622,18 @@ class RealTimeAlertProcessor {
       if (alert.conditions?.changePercent?.timeframe && alert.baselineTimestamp) {
         const cpTimeframe = alert.conditions.changePercent.timeframe;
         const cpTimeframeMs = this.getTimeframeMs(cpTimeframe);
-        const baselineBoundary =
-          Math.floor(new Date(alert.baselineTimestamp).getTime() / cpTimeframeMs) * cpTimeframeMs;
-
-        this._baselineRepairedFor = this._baselineRepairedFor || new Map();
+        // Boundary from the clock, matching the gate's basis exactly so the two
+        // can never disagree about which candle is in progress.
+        const repairBoundaryNow =
+          Math.floor(Date.now() / cpTimeframeMs) * cpTimeframeMs;
+        const baselineBoundary = repairBoundaryNow;
         const alertKey = alert._id.toString();
 
-        if (this._baselineRepairedFor.get(alertKey) !== baselineBoundary) {
+        // No once-per-boundary marker: a candle's open is fixed for that
+        // candle's lifetime, so re-applying is idempotent and converges. The
+        // previous marker locked in whatever was cached at the first matching
+        // tick and never revisited it, which is why so few repairs ran.
+        {
           const cachedForBoundary = this.candleCache.get(`${alert.symbol}_${cpTimeframe}`);
           if (
             cachedForBoundary &&
@@ -1643,9 +1648,14 @@ class RealTimeAlertProcessor {
             // Only rewrite on a meaningful difference -- an exact-match repair
             // would be a no-op, and float noise should not trigger a DB write.
             if (currentBaseline > 0 && Math.abs(trueOpen - currentBaseline) / currentBaseline > 0.0001) {
-              console.log(
-                `🔧 Baseline corrected for ${alert.symbol} (${cpTimeframe}): ${currentBaseline} → ${trueOpen} (real candle open @ ${new Date(baselineBoundary).toISOString()})`
-              );
+              this._baselineRepairLogged = this._baselineRepairLogged || new Map();
+              const repairLogKey = `${alert.symbol}_${cpTimeframe}`;
+              if (this._baselineRepairLogged.get(repairLogKey) !== baselineBoundary) {
+                this._baselineRepairLogged.set(repairLogKey, baselineBoundary);
+                console.log(
+                  `🔧 Baseline corrected for ${alert.symbol} (${cpTimeframe}): ${currentBaseline} → ${trueOpen} (real candle open @ ${new Date(baselineBoundary).toISOString()})`
+                );
+              }
 
               alert.baselinePrice = trueOpen;
               originalBaselinePrice = trueOpen;
@@ -1669,7 +1679,7 @@ class RealTimeAlertProcessor {
               });
             }
 
-            this._baselineRepairedFor.set(alertKey, baselineBoundary);
+            // (no marker: repair is idempotent and re-checked every tick)
           }
         }
       }
