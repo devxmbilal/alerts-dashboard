@@ -1340,8 +1340,37 @@ class RealTimeAlertProcessor {
       // corrected value afterward -- there is no second copy to disagree
       // with, which is the property that made the decision-vs-recording
       // split in 909e0ed (reverted) unsafe.
+      // Preferred source: the close of the SAME kline the candle open comes
+      // from, for the timeframe changePercent is measured on. Pairing open and
+      // close from one kline message makes the computed change identical to the
+      // candle the chart draws, and the 5ad4a9f gate already refuses to fire
+      // unless this entry exists for the current boundary -- so wherever an
+      // alert can fire at all, this source is present and boundary-verified.
+      //
+      // The ticker cache is NOT always fresh: METUSDT (2026-08-22T08:05:23Z)
+      // had a correct baseline but a ticker price of 0.2405, a level that
+      // candle never reached (high 0.2382) and last real 3-4 minutes earlier.
+      let sameKlineClose = null;
+      const cpTf = alert.conditions?.changePercent?.timeframe;
+      if (cpTf) {
+        const cpMs = this.getTimeframeMs(cpTf);
+        const cpBoundaryNow = Math.floor(Date.now() / cpMs) * cpMs;
+        const cached = this.candleCache.get(`${alert.symbol}_${cpTf}`);
+        if (
+          cached &&
+          cached.close !== null &&
+          isFinite(cached.close) &&
+          cached.close > 0 &&
+          cached.startTime === cpBoundaryNow
+        ) {
+          sameKlineClose = cached.close;
+        }
+      }
+
       const tickerPrice = parseFloat(this.livePrices[alert.symbol]?.price);
-      if (isFinite(tickerPrice) && tickerPrice > 0) {
+      if (sameKlineClose !== null) {
+        liveData.price = sameKlineClose;
+      } else if (isFinite(tickerPrice) && tickerPrice > 0) {
         liveData.price = tickerPrice;
       }
 
