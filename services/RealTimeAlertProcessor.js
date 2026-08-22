@@ -929,6 +929,21 @@ class RealTimeAlertProcessor {
             const key = `${payload.s}_${timeframe}`;
             this.candleCache.set(key, candle);
 
+            // Remembered separately from candleCache, which gets overwritten
+            // the instant the next candle starts forming. This is read only by
+            // the CHANGE_PERCENT_CONFIRM_ON_CLOSE branch below -- purely additive,
+            // nothing else reads it.
+            if (candle.isComplete) {
+              this.closedCandleCache = this.closedCandleCache || new Map();
+              this.closedCandleCache.set(key, {
+                open: candle.open,
+                close: candle.close,
+                startTime: candle.startTime,
+                endTime: candle.endTime,
+                receivedAt: candle.receivedAt,
+              });
+            }
+
             if (msgCount % 5000 === 0) {
               console.log(`📊 Kline WS: ${msgCount} messages processed`);
             }
@@ -2121,6 +2136,70 @@ class RealTimeAlertProcessor {
             conditions.changePercent.percentage
           );
           const direction = conditions.changePercent.direction || "increase";
+
+          // OPTIONAL: judge the move on the last CLOSED candle instead of the
+          // live/forming price, so a mid-candle spike that reverses before the
+          // candle closes cannot fire an alert (client report: BIGTIMEUSDT spiked
+          // 1.5%+ intra-candle then closed red, alert had already fired on the
+          // spike). Off by default; toggle with env CHANGE_PERCENT_CONFIRM_ON_CLOSE=1
+          // -- revert is unsetting that env var and restarting, no code change.
+          if (process.env.CHANGE_PERCENT_CONFIRM_ON_CLOSE === "1") {
+            const ccTimeframe = conditions.changePercent.timeframe;
+            const ccTimeframeMs = this.getTimeframeMs(ccTimeframe);
+            const ccCurrentBoundary =
+              Math.floor(Date.now() / ccTimeframeMs) * ccTimeframeMs;
+            const ccPrevBoundary = ccCurrentBoundary - ccTimeframeMs;
+            const ccClosed = this.closedCandleCache?.get(
+              `${alert.symbol}_${ccTimeframe}`
+            );
+            const ccValid =
+              ccClosed &&
+              isFinite(ccClosed.open) &&
+              ccClosed.open > 0 &&
+              isFinite(ccClosed.close) &&
+              ccClosed.close > 0 &&
+              ccClosed.startTime === ccPrevBoundary;
+
+            if (!ccValid) {
+              return {
+                passed: false,
+                reason: `${ccTimeframe} candle not closed yet — waiting for close confirmation`,
+              };
+            }
+
+            const ccChange =
+              ((ccClosed.close - ccClosed.open) / ccClosed.open) * 100;
+            if (Number.isNaN(ccChange)) {
+              return { passed: false, reason: "Calculation error (NaN)" };
+            }
+            const ccAbsChange = Math.abs(ccChange);
+
+            if (direction === "increase" && ccChange < 0) {
+              return {
+                passed: false,
+                reason: `Price decreased but increase required`,
+              };
+            }
+            if (direction === "decrease" && ccChange > 0) {
+              return {
+                passed: false,
+                reason: `Price increased but decrease required`,
+              };
+            }
+            if (ccAbsChange < requiredChange) {
+              return {
+                passed: false,
+                reason: `${ccAbsChange.toFixed(3)}% < ${requiredChange}% (closed candle)`,
+              };
+            }
+
+            return {
+              passed: true,
+              reason: `${ccAbsChange.toFixed(
+                3
+              )}% >= ${requiredChange}% (${direction}, closed candle)`,
+            };
+          }
 
           // The comparison is only meaningful against the REAL Binance open of
           // the candle we are currently inside. The baseline is set at the
