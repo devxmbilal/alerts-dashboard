@@ -7496,6 +7496,30 @@ class RealTimeAlertProcessor {
             candle
           )}%`
         );
+
+        // Feed CHANGE_PERCENT_CONFIRM_ON_CLOSE's closedCandleCache from here
+        // too -- this path detects completion from the wall clock on every
+        // tick, so unlike the kline WS's single k.x message it cannot be
+        // dropped by a reconnect. See patch_confirm_close_robust.cjs for why:
+        // a more reliable writer than the kline-WS-only path this cache
+        // started with.
+        if (
+          candle.open !== null &&
+          isFinite(candle.open) &&
+          candle.open > 0 &&
+          candle.close !== null &&
+          isFinite(candle.close) &&
+          candle.close > 0
+        ) {
+          this.closedCandleCache = this.closedCandleCache || new Map();
+          this.closedCandleCache.set(`${symbol}_${timeframe}`, {
+            open: candle.open,
+            close: candle.close,
+            startTime: candle.startTime,
+            endTime: candle.endTime,
+            receivedAt: Date.now(),
+          });
+        }
       }
 
       // CRITICAL FIX: WebSocket ticker OHLC is 24-hour data, NOT current candle data!
